@@ -157,7 +157,7 @@ a {
     color: black;
     font-weight: bold;
     float: right;
-    margin-left: 5px;
+    margin-right: 15px;
 }
 .active:after {
     content: "\2212";
