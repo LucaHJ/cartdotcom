@@ -80,7 +80,7 @@ a {
 }
 
 .blogtitle {
-    font-size: 20px;
+    font-size: 25px;
     font-weight: bold;
     text-align: left;
     margin-top: 5px;
@@ -131,6 +131,7 @@ a {
     text-align: justify;
 }
 .blogtitle {
-    margin: 0px;
+    margin-bottom: 0px;
+    margin-top: 10px;
     height: 20px;
 }
