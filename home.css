@@ -2,7 +2,9 @@ p.para {
     margin: 10px;
     text-align: justify;
 }
-
+p {
+    color: black;
+}
 .container {
     width: 810px;
     margin: 0px auto 0px;
