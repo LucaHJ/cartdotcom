@@ -89,7 +89,7 @@ a {
 }
 
 .blogsubject {
-    font-size: 15px;
+    font-size: 20px;
     color: gray;
     font-weight: bold;
     text-align: left;
@@ -99,7 +99,7 @@ a {
 }
 
 .blogdate {
-    font-size: 13px;
+    font-size: 20px;
     font-weight: bold;
     text-align: left;
     margin-top: 10px;
@@ -108,7 +108,7 @@ a {
 }
 
 .blogwordcount {
-    font-size: 12px;
+    font-size: 20px;
     font-weight: bold;
     color: gray;
     text-align: left;
@@ -129,4 +129,5 @@ a {
 
 .blogbodytext {
     margin: 0px
+    text-align: justify;
 }
