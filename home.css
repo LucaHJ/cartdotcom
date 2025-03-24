@@ -37,6 +37,10 @@ nav {
     text-align: center;
     margin-bottom: 10px;
 }
+nav a:hover{
+    color: grey;
+    text-decoration: underline;
+}
 
 a {
     text-decoration: none;
