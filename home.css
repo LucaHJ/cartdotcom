@@ -118,8 +118,7 @@ a {
 }
 
 .titledisplay {
-    display: flex;
-    align-items: flex-end;
+    display: inline-flex;
 }
 
 .blogbody {
@@ -128,6 +127,10 @@ a {
 }
 
 .blogbodytext {
-    margin: 0px
+    margin: 0px;
     text-align: justify;
+}
+.blogtitle {
+    margin: 0px;
+    height: 20px;
 }
