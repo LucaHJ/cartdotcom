@@ -79,7 +79,7 @@ a {
     float: right;
     width: 78%;
     margin-top: 10px;
-    overflow: scroll;
+    overflow-y: scroll;
     height: 700px;
 }
 
