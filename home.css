@@ -165,14 +165,3 @@ a {
     font-size: 15px;
     background-color: white;
     margin-top: 10px;
-}
-.collapsible:after {
-    content: '\002B';
-    color: black;
-    font-weight: bold;
-    float: right;
-    margin-right: 15px;
-}
-.active:after {
-    content: "\2212";
-}
