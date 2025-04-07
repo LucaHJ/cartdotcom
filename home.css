@@ -137,7 +137,6 @@ a {
 
 .blogbody {
     margin: 0px 15px 10px 15px;
-    padding: 0 18px;
     max-height: 0;
     overflow: hidden;
     transition: max-height 0.2s ease-out;
