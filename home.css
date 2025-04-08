@@ -136,14 +136,14 @@ a {
 }
 
 .blogbody {
-    margin: 0px 15px 10px 15px;
+    margin: 0px 0px 10px 0px;
     max-height: 0;
     overflow: hidden;
     transition: max-height 0.2s ease-out;
 }
 
 .blogbodytext {
-    margin: 0px;
+    margin: 0px 15px;
     text-align: justify;
 }
 .blogtitle {
