@@ -79,7 +79,7 @@ a {
     float: right;
     width: 78%;
     margin-top: 10px;
-    height: 700px;
+    height:700px;
     overflow-y: scroll;
 }
 
@@ -119,6 +119,15 @@ a {
     margin-top: 10px;
     margin-bottom: 10px;
     margin-left: 10px;
+}
+
+.blogcategory {
+    border: 2px solid black;
+    text-align: center;
+    width: 96%;
+    margin-inline: 10px;
+    margin-bottom: 10px;
+    overflow-y: scroll;
 }
 
 .blogwordcount {
