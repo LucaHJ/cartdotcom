@@ -1,11 +1,11 @@
 # Remote Command Inbox Setup
 
-This site includes a remote command inbox UI on `prompting.html`, a mobile approval UI on `mobile-approval.html`, and Cloudflare Pages Functions for queue and passkey approval.
+This site includes a single prompt composer on `prompting.html`, a mobile approval UI on `mobile-approval.html`, and Cloudflare Pages Functions for authenticated queue delivery and passkey approval.
 
 The intended flow is:
 
 1. User opens the protected prompting page.
-2. User submits a structured Codex job.
+2. User enters a prompt and optional uploads.
 3. `/api/commands` validates the request.
 4. The function creates a GitHub Issue as the queue item.
 5. High-risk jobs are written to the mobile approval queue.
@@ -46,25 +46,16 @@ MOBILE_AUTH_KV
 
 This stores passkey metadata, short-lived WebAuthn challenges, and pending approval records. Cloudflare KV is eventually consistent, which is acceptable for this first single-user approval layer because approval is not a high-frequency write path.
 
-## Optional Development Variable
-
-```text
-ALLOW_UNAUTHENTICATED_COMMANDS=true
-ALLOW_UNAUTHENTICATED_MOBILE_AUTH=true
-MOBILE_AUTH_DEV_EMAIL=dev@local.test
-```
-
-Use this only for local testing. Do not set it in production.
-
 ## Security Defaults
 
-- Requests without Cloudflare Access identity are rejected unless explicitly allowed for local testing.
+- Requests without Cloudflare Access identity are rejected.
 - Cross-site submissions are blocked with Fetch Metadata checks.
 - Prompts with likely secrets are rejected.
 - The server recomputes the prompt hash and rejects mismatches.
+- The browser cannot set action class, approval gate, target, result channel, or permission level.
 - Jobs are queued as GitHub Issues; Codex app-server is not exposed.
 - Passkey approval requires WebAuthn user verification.
-- Approval challenges are bound to job id, prompt hash, action class, target, approval level, and decision.
+- Approval challenges are bound to job id, prompt hash, action class, target, approval gate, and decision.
 
 Labels are disabled by default so the first submission does not fail when repository labels have not been created. Set `ENABLE_COMMAND_LABELS=true` after creating these labels:
 

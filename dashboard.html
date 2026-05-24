@@ -38,9 +38,9 @@
                 <small>open checks</small>
             </article>
             <article class="metric">
-                <span class="metric-label">Remote Drafts</span>
-                <strong id="remoteJobCount">0</strong>
-                <small>on prompting page</small>
+                <span class="metric-label">Remote Prompting</span>
+                <strong>Access</strong>
+                <small>authenticated queue</small>
             </article>
         </section>
 
@@ -95,15 +95,15 @@
                 <div class="link-grid">
                     <a class="link-card" href="prompting.html">
                         <span>Codex prompts</span>
-                        <small>Build wiki, repo, handoff, and review prompts.</small>
+                        <small>Send one authenticated prompt with optional uploads.</small>
                     </a>
                     <a class="link-card" href="prompting.html#remote-command-inbox">
                         <span>Remote inbox</span>
-                        <small>Submit queue jobs with action class and approval metadata.</small>
+                        <small>Queue prompts through the fixed GitHub delivery path.</small>
                     </a>
                     <a class="link-card" href="prompting.html#prompt-history">
                         <span>Prompt history</span>
-                        <small>Reuse saved local prompt drafts.</small>
+                        <small>Open previous submissions from the settings dropdown.</small>
                     </a>
                     <a class="link-card" href="mobile-approval.html">
                         <span>Mobile approval</span>
@@ -165,23 +165,23 @@
                     <a class="text-button" href="prompting.html">Use prompts</a>
                 </div>
                 <div class="runbook-grid">
-                    <a class="runbook-card" href="prompting.html?template=ingest">
+                    <a class="runbook-card" href="prompting.html">
                         <span>Ingest</span>
                         <small>Capture source, update wiki, index, and log.</small>
                     </a>
-                    <a class="runbook-card" href="prompting.html?template=second-brain-addition">
+                    <a class="runbook-card" href="prompting.html">
                         <span>Add to brain</span>
                         <small>Research and write the wiki page before implementation.</small>
                     </a>
-                    <a class="runbook-card" href="prompting.html?template=query">
+                    <a class="runbook-card" href="prompting.html">
                         <span>Query</span>
                         <small>Answer from index and wiki before raw files.</small>
                     </a>
-                    <a class="runbook-card" href="prompting.html?template=lint">
+                    <a class="runbook-card" href="prompting.html">
                         <span>Lint</span>
                         <small>Check links, provenance, orphans, stale claims.</small>
                     </a>
-                    <a class="runbook-card" href="prompting.html?template=handoff">
+                    <a class="runbook-card" href="prompting.html">
                         <span>Handoff</span>
                         <small>Summarize current state for the next agent.</small>
                     </a>
@@ -193,8 +193,7 @@
     <script>
         const storageKeys = {
             tasks: "cartdotcom.agentTasks",
-            sources: "cartdotcom.rawSources",
-            commands: "cartdotcom.remoteCommands"
+            sources: "cartdotcom.rawSources"
         };
 
         const defaults = {
@@ -207,8 +206,7 @@
             sources: [
                 { title: "Karpathy LLM Wiki", url: "Vault/raw/articles/2026-04-04-karpathy-llm-wiki.md", type: "article", status: "ingested" },
                 { title: "AI second brain Instagram video", url: "Vault/raw/videos/2026-05-24-raycfu-ai-second-brain-instagram.md", type: "video", status: "ingested" }
-            ],
-            commands: []
+            ]
         };
 
         function load(key) {
@@ -237,7 +235,6 @@
 
         let tasks = load("tasks");
         let sources = load("sources");
-        const commands = load("commands");
 
         function renderTasks() {
             const list = document.getElementById("taskList");
@@ -298,9 +295,7 @@
                 });
                 row.querySelector("button").addEventListener("click", () => {
                     const params = new URLSearchParams({
-                        template: "ingest",
-                        source: source.url,
-                        objective: "Ingest " + source.title + " into the Codex-maintained second brain."
+                        prompt: "Ingest " + source.title + " into the Codex-maintained second brain. Source: " + source.url
                     });
                     window.location.href = "prompting.html?" + params.toString();
                 });
@@ -312,7 +307,6 @@
             document.getElementById("openTaskCount").textContent = tasks.filter(task => task.status !== "done").length;
             document.getElementById("rawCount").textContent = sources.filter(source => source.status !== "ingested").length;
             document.getElementById("wikiHealth").textContent = tasks.some(task => task.status === "blocked") ? "Blocked" : "Ready";
-            document.getElementById("remoteJobCount").textContent = commands.length;
         }
 
         document.getElementById("taskForm").addEventListener("submit", (event) => {

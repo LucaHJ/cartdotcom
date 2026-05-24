@@ -54,12 +54,6 @@ export function getKV(env) {
 
 export function getActor(request, env) {
     const email = normalizeString(request.headers.get(EMAIL_HEADER), 320).toLowerCase();
-    if (!email && env.ALLOW_UNAUTHENTICATED_MOBILE_AUTH === "true") {
-        return {
-            ok: true,
-            email: normalizeString(env.MOBILE_AUTH_DEV_EMAIL, 320).toLowerCase() || "dev@local.test"
-        };
-    }
     if (!email) {
         return { ok: false, error: "Cloudflare Access authentication is required." };
     }
@@ -198,6 +192,7 @@ export async function createPendingApproval(context, job, metadata = {}) {
         action_class: job.action_class,
         target: job.target,
         prompt: job.prompt,
+        attachments: job.attachments || [],
         prompt_hash: job.prompt_hash,
         success_criteria: job.success_criteria,
         risk_level: job.risk_level,
@@ -308,7 +303,7 @@ async function postGitHubComment(env, approval, decision, actorEmail) {
                 `- Job ID: \`${approval.job_id}\``,
                 `- Prompt hash: \`sha256:${approval.prompt_hash}\``,
                 `- Action class: \`${approval.action_class}\``,
-                `- Approval level: \`${approval.approval_level}\``
+                `- Approval gate: \`${approval.approval_level}\``
             ].join("\n")
         })
     });

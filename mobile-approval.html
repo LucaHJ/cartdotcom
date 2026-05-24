@@ -202,13 +202,25 @@
                     <dl>
                         <div><dt>Job</dt><dd>${escapeHtml(approval.job_id)}</dd></div>
                         <div><dt>Target</dt><dd>${escapeHtml(approval.target)}</dd></div>
-                        <div><dt>Approval</dt><dd>${escapeHtml(approval.approval_level.replaceAll("_", " "))}</dd></div>
+                        <div><dt>Approval gate</dt><dd>${escapeHtml(approval.approval_level.replaceAll("_", " "))}</dd></div>
                         <div><dt>Prompt hash</dt><dd>sha256:${escapeHtml(approval.prompt_hash)}</dd></div>
                     </dl>
                     <label class="wide-label">
                         Prompt
                         <textarea rows="5" readonly>${escapeHtml(approval.prompt)}</textarea>
                     </label>
+                    ${approval.attachments && approval.attachments.length ? `
+                        <div class="attachment-list">
+                            ${approval.attachments.map((attachment) => `
+                                <div class="attachment-chip">
+                                    <span>
+                                        <strong>${escapeHtml(attachment.name)}</strong>
+                                        <small>${escapeHtml(attachment.encoding)} - ${Math.ceil(Number(attachment.size || 0) / 1024)} KB${attachment.truncated ? " - truncated" : ""}</small>
+                                    </span>
+                                </div>
+                            `).join("")}
+                        </div>
+                    ` : ""}
                     <label class="wide-label">
                         Success criteria
                         <textarea rows="3" readonly>${escapeHtml(approval.success_criteria)}</textarea>

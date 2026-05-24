@@ -150,6 +150,128 @@ textarea {
     gap: 12px;
 }
 
+.prompt-shell {
+    max-width: 940px;
+    min-height: calc(100vh - 100px);
+    display: grid;
+    align-items: center;
+}
+
+.composer-panel {
+    border: 2px solid var(--line);
+    background: var(--panel);
+    padding: 14px;
+}
+
+.composer-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.composer-status span {
+    border: 2px solid var(--line);
+    background: var(--accent-soft);
+    padding: 7px 9px;
+    font-size: 12px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.composer-form {
+    display: grid;
+    gap: 10px;
+}
+
+.composer-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+}
+
+.composer-input {
+    min-height: 220px;
+    font-size: 18px;
+    line-height: 1.45;
+}
+
+.composer-actions {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+}
+
+.upload-button {
+    display: inline-grid;
+    place-items: center;
+    min-height: 40px;
+    border: 2px solid var(--line);
+    background: #ffffff;
+    color: var(--ink);
+    padding: 8px 12px;
+    cursor: pointer;
+    text-transform: none;
+}
+
+.upload-button input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.attachment-list {
+    display: grid;
+    gap: 8px;
+}
+
+.attachment-chip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    border: 2px solid var(--line);
+    background: #ffffff;
+    padding: 8px;
+}
+
+.attachment-chip span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.attachment-chip small {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.settings-menu {
+    margin-top: 12px;
+    border-top: 2px solid var(--line);
+    padding-top: 10px;
+}
+
+.settings-menu summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-weight: bold;
+}
+
+.settings-content {
+    margin-top: 12px;
+}
+
+.compact-head {
+    margin-bottom: 10px;
+}
+
 .panel {
     border: 2px solid var(--line);
     background: var(--panel);
@@ -605,12 +727,18 @@ label {
 
     .action-row,
     .approval-actions,
+    .composer-actions,
     .option-row {
         align-items: stretch;
+        display: flex;
         flex-direction: column;
     }
 
     .approval-card dl {
+        grid-template-columns: 1fr;
+    }
+
+    .attachment-chip {
         grid-template-columns: 1fr;
     }
 }
