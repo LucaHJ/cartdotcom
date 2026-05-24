@@ -151,7 +151,12 @@
                     ...(options && options.headers ? options.headers : {})
                 }
             });
-            const payload = await response.json().catch(() => ({}));
+            const contentType = response.headers.get("content-type") || "";
+            const redirectedToAccess = response.redirected && response.url.includes("cloudflareaccess.com");
+            const payload = contentType.includes("application/json") ? await response.json().catch(() => ({})) : {};
+            if (redirectedToAccess || (!contentType.includes("application/json") && response.url.includes("cloudflareaccess.com"))) {
+                throw new Error("Cloudflare Access API session missing. Reopen Mobile Approval, complete Access login, then try again.");
+            }
             if (!response.ok) throw new Error(payload.error || "Request failed");
             return payload;
         }
