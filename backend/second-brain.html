@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-icons">
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-preview">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -92,8 +92,7 @@
                     <label class="sr-only" for="pathInput">Path</label>
                     <input id="pathInput" type="text" placeholder="wiki/index.md" autocomplete="off" readonly disabled>
 
-                    <label class="sr-only" for="contentInput">Markdown</label>
-                    <textarea id="contentInput" class="inspector-textarea" rows="14" spellcheck="true" readonly disabled></textarea>
+                    <div id="contentPreview" class="markdown-preview inspector-textarea" tabindex="0" aria-label="Markdown preview"></div>
                 </div>
             </section>
         </section>
@@ -105,7 +104,7 @@
         const vaultSearch = document.getElementById("vaultSearch");
         const vaultTree = document.getElementById("vaultTree");
         const pathInput = document.getElementById("pathInput");
-        const contentInput = document.getElementById("contentInput");
+        const contentPreview = document.getElementById("contentPreview");
         const currentPath = document.getElementById("currentPath");
         const saveStatus = document.getElementById("saveStatus");
         const pageCount = document.getElementById("pageCount");
@@ -130,6 +129,21 @@
                 '"': "&quot;",
                 "'": "&#039;"
             }[char]));
+        }
+
+        function unescapeHtml(value) {
+            return String(value || "")
+                .replace(/&amp;/g, "&")
+                .replace(/&lt;/g, "<")
+                .replace(/&gt;/g, ">")
+                .replace(/&quot;/g, '"')
+                .replace(/&#039;/g, "'");
+        }
+
+        function safeHref(value) {
+            const href = String(value || "").trim();
+            if (/^(https?:|mailto:|\/|#)/i.test(href)) return href;
+            return "#";
         }
 
         function setSearchOpen(open) {
@@ -254,9 +268,55 @@
                 .trim()
                 .replace(/\\/g, "/")
                 .replace(/^Vault\//i, "")
+                .replace(/^\.\//, "")
                 .replace(/^\/+/, "")
                 .replace(/\.md$/i, "")
                 .toLowerCase();
+        }
+
+        function parseWikiReference(value) {
+            const [targetWithHeading, alias] = String(value || "").split("|");
+            const [target, heading] = targetWithHeading.split("#");
+            const cleanTarget = target.trim();
+            const fallbackLabel = cleanTarget.split("/").filter(Boolean).pop() || cleanTarget;
+            return {
+                target: cleanTarget,
+                heading: heading ? heading.trim() : "",
+                label: (alias || fallbackLabel).trim().replace(/\.md$/i, "")
+            };
+        }
+
+        function normalizePathSegments(value) {
+            const segments = [];
+            String(value || "").replace(/\\/g, "/").split("/").forEach((segment) => {
+                if (!segment || segment === ".") return;
+                if (segment === "..") {
+                    segments.pop();
+                    return;
+                }
+                segments.push(segment);
+            });
+            return segments.join("/");
+        }
+
+        function candidateLinkKeys(target, sourcePath = "") {
+            const cleanTarget = parseWikiReference(target).target;
+            const keys = new Set();
+            const add = (value) => {
+                const key = normalizeLinkKey(value);
+                if (key) keys.add(key);
+            };
+
+            add(cleanTarget);
+
+            const sourceParts = String(sourcePath || "").replace(/\\/g, "/").split("/");
+            sourceParts.pop();
+            const sourceDir = sourceParts.join("/");
+            if (sourceDir && (cleanTarget.startsWith(".") || cleanTarget.includes("../"))) {
+                add(normalizePathSegments(`${sourceDir}/${cleanTarget}`));
+            }
+
+            return Array.from(keys);
         }
 
         function createWikiResolver() {
@@ -277,9 +337,13 @@
 
             duplicateNames.forEach((key) => byName.delete(key));
 
-            return (target) => {
-                const key = normalizeLinkKey(target);
-                return byPath.get(key) || byName.get(key) || null;
+            return (target, sourcePath = "") => {
+                const keys = candidateLinkKeys(target, sourcePath);
+                for (const key of keys) {
+                    if (byPath.has(key)) return byPath.get(key);
+                    if (byName.has(key)) return byName.get(key);
+                }
+                return null;
             };
         }
 
@@ -291,6 +355,220 @@
                 targets.push(match[1].trim());
             }
             return targets;
+        }
+
+        function splitMarkdownRow(line) {
+            const cells = [];
+            let current = "";
+            let inWikiLink = false;
+            const text = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+
+            for (let index = 0; index < text.length; index += 1) {
+                const pair = text.slice(index, index + 2);
+                if (pair === "[[") {
+                    inWikiLink = true;
+                    current += pair;
+                    index += 1;
+                    continue;
+                }
+                if (pair === "]]") {
+                    inWikiLink = false;
+                    current += pair;
+                    index += 1;
+                    continue;
+                }
+                if (text[index] === "|" && !inWikiLink) {
+                    cells.push(current.trim());
+                    current = "";
+                    continue;
+                }
+                current += text[index];
+            }
+
+            cells.push(current.trim());
+            return cells;
+        }
+
+        function isTableSeparator(line) {
+            return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+        }
+
+        function renderInlineMarkdown(value, sourcePath = selectedPath) {
+            const resolver = createWikiResolver();
+            const codeTokens = [];
+            let html = escapeHtml(value).replace(/`([^`]+)`/g, (_, code) => {
+                const token = `@@CODE${codeTokens.length}@@`;
+                codeTokens.push(`<code>${code}</code>`);
+                return token;
+            });
+
+            html = html.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_, alt, url) => {
+                return `<span class="markdown-image">${escapeHtml(unescapeHtml(alt) || unescapeHtml(url))}</span>`;
+            });
+
+            html = html.replace(/\[\[([^\]]+)\]\]/g, (_, rawReference) => {
+                const reference = parseWikiReference(unescapeHtml(rawReference));
+                const resolved = resolver(reference.target, sourcePath);
+                const label = escapeHtml(reference.label || reference.target);
+                if (!resolved) return `<span class="wiki-link unresolved">${label}</span>`;
+                return `<a class="wiki-link" href="#${encodeURIComponent(resolved)}" data-wiki-path="${escapeHtml(resolved)}">${label}</a>`;
+            });
+
+            html = html.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_, label, url) => {
+                return `<a href="${escapeHtml(safeHref(unescapeHtml(url)))}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+            });
+
+            html = html
+                .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+                .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+                .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
+                .replace(/(^|[^_])_([^_]+)_/g, "$1<em>$2</em>");
+
+            codeTokens.forEach((code, index) => {
+                html = html.replace(`@@CODE${index}@@`, code);
+            });
+
+            return html;
+        }
+
+        function renderTable(lines, sourcePath) {
+            if (lines.length < 2) return "";
+            const header = splitMarkdownRow(lines[0]);
+            const rows = lines.slice(2).map(splitMarkdownRow);
+            return `
+                <table>
+                    <thead><tr>${header.map((cell) => `<th>${renderInlineMarkdown(cell, sourcePath)}</th>`).join("")}</tr></thead>
+                    <tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell, sourcePath)}</td>`).join("")}</tr>`).join("")}</tbody>
+                </table>
+            `;
+        }
+
+        function renderMarkdown(content, sourcePath = selectedPath) {
+            const lines = String(content || "").replace(/\r\n?/g, "\n").split("\n");
+            const output = [];
+            let paragraph = [];
+            let list = null;
+            let codeBlock = null;
+            let quote = [];
+
+            const flushParagraph = () => {
+                if (!paragraph.length) return;
+                output.push(`<p>${renderInlineMarkdown(paragraph.join(" "), sourcePath)}</p>`);
+                paragraph = [];
+            };
+
+            const flushList = () => {
+                if (!list) return;
+                const tag = list.ordered ? "ol" : "ul";
+                output.push(`<${tag} class="markdown-list">${list.items.map((item) => {
+                    const checkbox = item.checked === null ? "" : `<span class="task-marker">${item.checked ? "✓" : ""}</span>`;
+                    return `<li class="level-${item.level}${item.checked !== null ? " task-item" : ""}">${checkbox}<span>${renderInlineMarkdown(item.text, sourcePath)}</span></li>`;
+                }).join("")}</${tag}>`);
+                list = null;
+            };
+
+            const flushQuote = () => {
+                if (!quote.length) return;
+                output.push(`<blockquote>${quote.map((line) => `<p>${renderInlineMarkdown(line, sourcePath)}</p>`).join("")}</blockquote>`);
+                quote = [];
+            };
+
+            const flushBlocks = () => {
+                flushParagraph();
+                flushList();
+                flushQuote();
+            };
+
+            for (let index = 0; index < lines.length; index += 1) {
+                const line = lines[index];
+                const trimmed = line.trim();
+
+                if (codeBlock) {
+                    if (/^```/.test(trimmed)) {
+                        output.push(`<pre><code>${escapeHtml(codeBlock.join("\n"))}</code></pre>`);
+                        codeBlock = null;
+                    } else {
+                        codeBlock.push(line);
+                    }
+                    continue;
+                }
+
+                if (/^```/.test(trimmed)) {
+                    flushBlocks();
+                    codeBlock = [];
+                    continue;
+                }
+
+                if (!trimmed) {
+                    flushBlocks();
+                    continue;
+                }
+
+                if (line.includes("|") && isTableSeparator(lines[index + 1] || "")) {
+                    flushBlocks();
+                    const tableLines = [line, lines[index + 1]];
+                    index += 2;
+                    while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+                        tableLines.push(lines[index]);
+                        index += 1;
+                    }
+                    index -= 1;
+                    output.push(renderTable(tableLines, sourcePath));
+                    continue;
+                }
+
+                const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+                if (heading) {
+                    flushBlocks();
+                    const level = Math.min(6, heading[1].length);
+                    output.push(`<h${level}>${renderInlineMarkdown(heading[2], sourcePath)}</h${level}>`);
+                    continue;
+                }
+
+                if (/^[-*_]{3,}$/.test(trimmed)) {
+                    flushBlocks();
+                    output.push("<hr>");
+                    continue;
+                }
+
+                const quoteMatch = trimmed.match(/^>\s?(.*)$/);
+                if (quoteMatch) {
+                    flushParagraph();
+                    flushList();
+                    quote.push(quoteMatch[1]);
+                    continue;
+                }
+
+                const unordered = line.match(/^(\s*)[-*+]\s+(.+)$/);
+                const ordered = line.match(/^(\s*)\d+[.)]\s+(.+)$/);
+                const listMatch = unordered || ordered;
+                if (listMatch) {
+                    flushParagraph();
+                    flushQuote();
+                    const isOrdered = Boolean(ordered);
+                    if (!list || list.ordered !== isOrdered) flushList();
+                    if (!list) list = { ordered: isOrdered, items: [] };
+                    let text = listMatch[2].trim();
+                    let checked = null;
+                    const checkbox = text.match(/^\[([ xX])\]\s+(.+)$/);
+                    if (checkbox) {
+                        checked = checkbox[1].toLowerCase() === "x";
+                        text = checkbox[2];
+                    }
+                    list.items.push({
+                        level: Math.min(3, Math.floor(listMatch[1].replace(/\t/g, "    ").length / 2)),
+                        checked,
+                        text
+                    });
+                    continue;
+                }
+
+                paragraph.push(trimmed);
+            }
+
+            if (codeBlock) output.push(`<pre><code>${escapeHtml(codeBlock.join("\n"))}</code></pre>`);
+            flushBlocks();
+            return output.join("") || `<p class="empty">Empty page.</p>`;
         }
 
         function upsertNode(nodeMap, node) {
@@ -339,7 +617,7 @@
                 const sourceId = `file:${page.path}`;
                 const content = pageContentByPath.get(page.path) || "";
                 extractWikiTargets(content).forEach((target) => {
-                    const resolved = resolver(target);
+                    const resolved = resolver(target, page.path);
                     if (resolved) addEdge(edges, edgeKeys, sourceId, `file:${resolved}`, "wikilink");
                 });
             });
@@ -565,7 +843,6 @@
             graphStatus.textContent = "Ready";
             saveStatus.textContent = "Loaded";
             pathInput.disabled = false;
-            contentInput.disabled = false;
             pathInput.value = path;
             currentPath.textContent = path;
 
@@ -575,7 +852,7 @@
                 pageContentByPath.set(path, payload.page.content || "");
             }
 
-            contentInput.value = pageContentByPath.get(path) || "";
+            contentPreview.innerHTML = renderMarkdown(pageContentByPath.get(path) || "", path);
             editorDrawer.classList.add("has-page");
             renderTree();
             renderGraph();
@@ -584,9 +861,8 @@
         document.getElementById("closeEditor").addEventListener("click", () => {
             selectedPath = "";
             pathInput.value = "";
-            contentInput.value = "";
+            contentPreview.innerHTML = "";
             pathInput.disabled = true;
-            contentInput.disabled = true;
             currentPath.textContent = "Select a page";
             saveStatus.textContent = "";
             editorDrawer.classList.remove("has-page");
@@ -604,6 +880,12 @@
             buildGraph();
             renderGraph();
             graphStatus.textContent = "Rebuilt";
+        });
+        contentPreview.addEventListener("click", (event) => {
+            const link = event.target.closest("a[data-wiki-path]");
+            if (!link) return;
+            event.preventDefault();
+            loadPage(link.dataset.wikiPath);
         });
         searchToggle.addEventListener("click", () => setSearchOpen(!vaultSearch.classList.contains("is-open")));
         pageFilter.addEventListener("input", () => {
