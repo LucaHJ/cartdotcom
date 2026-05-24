@@ -3,358 +3,129 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Agent Maintenance Dashboard</title>
-    <link rel="stylesheet" href="dashboard.css?v=20260524-fixed">
+    <title>Small Notes</title>
+    <link rel="stylesheet" href="dashboard.css?v=20260525-small-notes">
 </head>
-<body>
-    <header class="topbar">
-        <div>
-            <p class="eyebrow">cartdotcom control surface</p>
-            <h1>Agent Maintenance Dashboard</h1>
-        </div>
+<body class="small-notes-dashboard">
+    <header class="topbar notes-topbar">
         <nav class="topnav" aria-label="Main navigation">
             <a href="home.html">Home</a>
             <a href="backend/prompting.html">Prompting</a>
             <a href="backend/second-brain.html">Second Brain</a>
             <a href="mobile-approval.html">Mobile Approval</a>
-            <a href="https://github.com/LucaHJ/cartdotcom">GitHub</a>
+            <button class="nav-button" id="refreshNotes" type="button">Refresh</button>
         </nav>
     </header>
 
-    <main class="shell">
-        <section class="status-strip" aria-label="System status">
-            <article class="metric">
-                <span class="metric-label">Wiki Layer</span>
-                <strong id="wikiHealth">Cloud</strong>
-                <small>KV mirror plus local vault</small>
-            </article>
-            <article class="metric">
-                <span class="metric-label">Raw Queue</span>
-                <strong id="rawCount">0</strong>
-                <small>sources waiting</small>
-            </article>
-            <article class="metric">
-                <span class="metric-label">Agent Tasks</span>
-                <strong id="openTaskCount">0</strong>
-                <small>open checks</small>
-            </article>
-            <article class="metric">
-                <span class="metric-label">Remote Prompting</span>
-                <strong>Access</strong>
-                <small>authenticated queue</small>
-            </article>
-        </section>
-
-        <section class="dashboard-grid">
-            <aside class="panel map-panel">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">operating model</p>
-                        <h2>Raw To Wiki Flow</h2>
-                    </div>
-                </div>
-                <svg class="flow-map" viewBox="0 0 520 300" role="img" aria-label="Raw source to wiki workflow">
-                    <defs>
-                        <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-                            <path d="M0,0 L0,6 L7,3 z"></path>
-                        </marker>
-                    </defs>
-                    <rect class="node" x="20" y="35" width="125" height="58" rx="4"></rect>
-                    <text x="82" y="62">raw</text>
-                    <text x="82" y="82">sources</text>
-                    <rect class="node" x="198" y="35" width="125" height="58" rx="4"></rect>
-                    <text x="260" y="62">source</text>
-                    <text x="260" y="82">summary</text>
-                    <rect class="node" x="374" y="35" width="125" height="58" rx="4"></rect>
-                    <text x="436" y="62">concepts</text>
-                    <text x="436" y="82">entities</text>
-                    <rect class="node accent" x="198" y="180" width="125" height="58" rx="4"></rect>
-                    <text x="260" y="207">index</text>
-                    <text x="260" y="227">and log</text>
-                    <rect class="node" x="374" y="180" width="125" height="58" rx="4"></rect>
-                    <text x="436" y="207">project</text>
-                    <text x="436" y="227">actions</text>
-                    <line class="edge" x1="145" y1="64" x2="198" y2="64"></line>
-                    <line class="edge" x1="323" y1="64" x2="374" y2="64"></line>
-                    <line class="edge" x1="260" y1="93" x2="260" y2="180"></line>
-                    <line class="edge" x1="323" y1="209" x2="374" y2="209"></line>
-                </svg>
-                <div class="flow-notes">
-                    <p><strong>Rule:</strong> raw files are evidence. Wiki pages are maintained by Codex.</p>
-                    <p><strong>Every ingest:</strong> update source summary, concepts, entities, index, and log.</p>
-                </div>
-            </aside>
-
-            <section class="panel">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">prompt operations</p>
-                        <h2>Prompting Surface</h2>
-                    </div>
-                    <a class="text-button" href="backend/prompting.html">Open</a>
-                </div>
-                <div class="link-grid">
-                    <a class="link-card" href="backend/prompting.html">
-                        <span>Codex prompts</span>
-                        <small>Send one authenticated prompt with optional uploads.</small>
-                    </a>
-                    <a class="link-card" href="backend/prompting.html#remote-command-inbox">
-                        <span>Remote inbox</span>
-                        <small>Queue prompts through the fixed GitHub delivery path.</small>
-                    </a>
-                    <a class="link-card" href="backend/prompting.html#prompt-history">
-                        <span>Prompt history</span>
-                        <small>Open previous submissions from the settings dropdown.</small>
-                    </a>
-                    <a class="link-card" href="mobile-approval.html">
-                        <span>Mobile approval</span>
-                        <small>Review queued jobs and approve them with a passkey.</small>
-                    </a>
-                    <a class="link-card" href="backend/second-brain.html">
-                        <span>Second brain</span>
-                        <small>Browse the cloud Markdown graph and edit pages.</small>
-                    </a>
-                </div>
-            </section>
-
-            <section class="panel">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">agent maintenance</p>
-                        <h2>Maintenance Board</h2>
-                    </div>
-                    <button class="text-button" id="clearDone" type="button">Clear done</button>
-                </div>
-                <form class="inline-form" id="taskForm">
-                    <input id="taskText" type="text" placeholder="Add maintenance task" autocomplete="off">
-                    <select id="taskStatus" aria-label="Task status">
-                        <option value="todo">todo</option>
-                        <option value="doing">doing</option>
-                        <option value="blocked">blocked</option>
-                        <option value="done">done</option>
-                    </select>
-                    <button type="submit">Add</button>
-                </form>
-                <div id="taskList" class="stack-list" aria-live="polite"></div>
-            </section>
-
-            <section class="panel">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">source capture</p>
-                        <h2>Raw Source Queue</h2>
-                    </div>
-                    <button class="text-button" id="clearSources" type="button">Clear ingested</button>
-                </div>
-                <form class="source-form" id="sourceForm">
-                    <input id="sourceTitle" type="text" placeholder="Source title" autocomplete="off">
-                    <input id="sourceUrl" type="text" placeholder="URL or local path" autocomplete="off">
-                    <select id="sourceType" aria-label="Source type">
-                        <option value="article">article</option>
-                        <option value="video">video</option>
-                        <option value="book">book</option>
-                        <option value="podcast">podcast</option>
-                        <option value="note">note</option>
-                    </select>
-                    <button type="submit">Queue</button>
-                </form>
-                <div id="sourceList" class="stack-list" aria-live="polite"></div>
-            </section>
-
-            <section class="panel runbooks">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">repeatable prompts</p>
-                        <h2>Codex Runbooks</h2>
-                    </div>
-                    <a class="text-button" href="backend/prompting.html">Use prompts</a>
-                </div>
-                <div class="runbook-grid">
-                    <a class="runbook-card" href="backend/prompting.html">
-                        <span>Ingest</span>
-                        <small>Capture source, update wiki, index, and log.</small>
-                    </a>
-                    <a class="runbook-card" href="backend/prompting.html">
-                        <span>Add to brain</span>
-                        <small>Research and write the wiki page before implementation.</small>
-                    </a>
-                    <a class="runbook-card" href="backend/prompting.html">
-                        <span>Query</span>
-                        <small>Answer from index and wiki before raw files.</small>
-                    </a>
-                    <a class="runbook-card" href="backend/prompting.html">
-                        <span>Lint</span>
-                        <small>Check links, provenance, orphans, stale claims.</small>
-                    </a>
-                    <a class="runbook-card" href="backend/prompting.html">
-                        <span>Handoff</span>
-                        <small>Summarize current state for the next agent.</small>
-                    </a>
-                </div>
-            </section>
+    <main class="notes-shell" aria-labelledby="notesTitle">
+        <section class="notes-stage">
+            <p class="eyebrow">second brain</p>
+            <h1 id="notesTitle">Small Notes</h1>
+            <p id="notesStatus" class="notes-status" aria-live="polite">Loading</p>
+            <ul id="smallNotes" class="small-notes-list" aria-live="polite"></ul>
         </section>
     </main>
 
     <script>
-        const storageKeys = {
-            tasks: "cartdotcom.agentTasks",
-            sources: "cartdotcom.rawSources"
-        };
+        const notesStatus = document.getElementById("notesStatus");
+        const smallNotes = document.getElementById("smallNotes");
+        const refreshNotes = document.getElementById("refreshNotes");
 
-        const defaults = {
-            tasks: [
-                { text: "Run weekly wiki lint", status: "todo" },
-                { text: "Review raw source queue", status: "todo" },
-                { text: "Update project registry after meaningful work", status: "todo" },
-                { text: "Flag contradictions instead of smoothing them over", status: "doing" }
-            ],
-            sources: [
-                { title: "Karpathy LLM Wiki", url: "Vault/raw/articles/2026-04-04-karpathy-llm-wiki.md", type: "article", status: "ingested" },
-                { title: "AI second brain Instagram video", url: "Vault/raw/videos/2026-05-24-raycfu-ai-second-brain-instagram.md", type: "video", status: "ingested" }
-            ]
-        };
+        function stripMarkdown(value) {
+            return String(value || "")
+                .replace(/\[\[[^\]|]+\|([^\]]+)\]\]/g, "$1")
+                .replace(/\[\[([^\]]+)\]\]/g, "$1")
+                .replace(/\*\*([^*]+)\*\*/g, "$1")
+                .replace(/\*([^*]+)\*/g, "$1")
+                .replace(/`([^`]+)`/g, "$1")
+                .trim();
+        }
 
-        function load(key) {
-            const saved = localStorage.getItem(storageKeys[key]);
-            if (!saved) return defaults[key];
+        function parseSmallNotes(markdown) {
+            const notes = [];
+            let inNotes = false;
+
+            for (const line of String(markdown || "").split(/\r?\n/)) {
+                const trimmed = line.trim();
+                if (/^##\s+Notes\s*$/i.test(trimmed)) {
+                    inNotes = true;
+                    continue;
+                }
+                if (inNotes && /^##\s+/.test(trimmed)) break;
+                if (!inNotes) continue;
+
+                const match = line.match(/^(\s*)-\s+(.+?)\s*$/);
+                if (!match) continue;
+
+                const indent = match[1].replace(/\t/g, "    ").length;
+                notes.push({
+                    level: Math.min(2, Math.floor(indent / 2)),
+                    text: stripMarkdown(match[2])
+                });
+            }
+
+            return notes.filter(note => note.text);
+        }
+
+        function renderNotes(notes) {
+            smallNotes.innerHTML = "";
+            if (!notes.length) {
+                notesStatus.textContent = "No small notes found";
+                return;
+            }
+
+            const fragment = document.createDocumentFragment();
+            for (const note of notes) {
+                const item = document.createElement("li");
+                item.className = "note-line level-" + note.level;
+                item.textContent = note.text;
+                fragment.appendChild(item);
+            }
+
+            smallNotes.appendChild(fragment);
+            notesStatus.textContent = notes.length === 1 ? "1 note" : notes.length + " notes";
+        }
+
+        async function api(path) {
+            const response = await fetch(path, {
+                credentials: "same-origin",
+                headers: { accept: "application/json" }
+            });
+            const contentType = response.headers.get("content-type") || "";
+            const text = await response.text();
+
+            if (!contentType.includes("application/json")) {
+                throw new Error("Backend login required");
+            }
+
+            let payload;
             try {
-                return JSON.parse(saved);
+                payload = JSON.parse(text);
             } catch (error) {
-                return defaults[key];
+                throw new Error("Small notes response was not valid JSON");
+            }
+
+            if (!response.ok || payload.error) {
+                throw new Error(payload.error || "Small notes could not be loaded");
+            }
+
+            return payload;
+        }
+
+        async function loadSmallNotes() {
+            notesStatus.textContent = "Loading";
+            smallNotes.innerHTML = "";
+
+            try {
+                const payload = await api("/api/second-brain/page?path=wiki%2Fsmall-notes.md");
+                renderNotes(parseSmallNotes(payload.page?.content || ""));
+            } catch (error) {
+                notesStatus.textContent = error.message || "Small notes unavailable";
             }
         }
 
-        function save(key, value) {
-            localStorage.setItem(storageKeys[key], JSON.stringify(value));
-        }
-
-        function escapeHtml(value) {
-            return String(value).replace(/[&<>"']/g, (char) => ({
-                "&": "&amp;",
-                "<": "&lt;",
-                ">": "&gt;",
-                '"': "&quot;",
-                "'": "&#039;"
-            }[char]));
-        }
-
-        let tasks = load("tasks");
-        let sources = load("sources");
-
-        function renderTasks() {
-            const list = document.getElementById("taskList");
-            list.innerHTML = "";
-            tasks.forEach((task, index) => {
-                const row = document.createElement("div");
-                row.className = "list-row " + task.status;
-                row.innerHTML = `
-                    <span>${escapeHtml(task.text)}</span>
-                    <select aria-label="Update task status">
-                        <option value="todo">todo</option>
-                        <option value="doing">doing</option>
-                        <option value="blocked">blocked</option>
-                        <option value="done">done</option>
-                    </select>
-                    <button type="button" aria-label="Remove task">x</button>
-                `;
-                const select = row.querySelector("select");
-                select.value = task.status;
-                select.addEventListener("change", () => {
-                    tasks[index].status = select.value;
-                    save("tasks", tasks);
-                    renderTasks();
-                    updateStats();
-                });
-                row.querySelector("button").addEventListener("click", () => {
-                    tasks.splice(index, 1);
-                    save("tasks", tasks);
-                    renderTasks();
-                    updateStats();
-                });
-                list.appendChild(row);
-            });
-        }
-
-        function renderSources() {
-            const list = document.getElementById("sourceList");
-            list.innerHTML = "";
-            sources.forEach((source, index) => {
-                const row = document.createElement("div");
-                row.className = "list-row " + source.status;
-                row.innerHTML = `
-                    <span><strong>${escapeHtml(source.title)}</strong><small>${escapeHtml(source.type)} - ${escapeHtml(source.url)}</small></span>
-                    <select aria-label="Update source status">
-                        <option value="queued">queued</option>
-                        <option value="captured">captured</option>
-                        <option value="ingested">ingested</option>
-                    </select>
-                    <button type="button" aria-label="Use source">use</button>
-                `;
-                const select = row.querySelector("select");
-                select.value = source.status;
-                select.addEventListener("change", () => {
-                    sources[index].status = select.value;
-                    save("sources", sources);
-                    renderSources();
-                    updateStats();
-                });
-                row.querySelector("button").addEventListener("click", () => {
-                    const params = new URLSearchParams({
-                        prompt: "Ingest " + source.title + " into the Codex-maintained second brain. Source: " + source.url
-                    });
-                    window.location.href = "backend/prompting.html?" + params.toString();
-                });
-                list.appendChild(row);
-            });
-        }
-
-        function updateStats() {
-            document.getElementById("openTaskCount").textContent = tasks.filter(task => task.status !== "done").length;
-            document.getElementById("rawCount").textContent = sources.filter(source => source.status !== "ingested").length;
-            document.getElementById("wikiHealth").textContent = tasks.some(task => task.status === "blocked") ? "Blocked" : "Cloud";
-        }
-
-        document.getElementById("taskForm").addEventListener("submit", (event) => {
-            event.preventDefault();
-            const text = document.getElementById("taskText").value.trim();
-            if (!text) return;
-            tasks.push({ text, status: document.getElementById("taskStatus").value });
-            document.getElementById("taskText").value = "";
-            save("tasks", tasks);
-            renderTasks();
-            updateStats();
-        });
-
-        document.getElementById("sourceForm").addEventListener("submit", (event) => {
-            event.preventDefault();
-            const title = document.getElementById("sourceTitle").value.trim();
-            const url = document.getElementById("sourceUrl").value.trim();
-            if (!title || !url) return;
-            sources.push({ title, url, type: document.getElementById("sourceType").value, status: "queued" });
-            document.getElementById("sourceTitle").value = "";
-            document.getElementById("sourceUrl").value = "";
-            save("sources", sources);
-            renderSources();
-            updateStats();
-        });
-
-        document.getElementById("clearDone").addEventListener("click", () => {
-            tasks = tasks.filter(task => task.status !== "done");
-            save("tasks", tasks);
-            renderTasks();
-            updateStats();
-        });
-
-        document.getElementById("clearSources").addEventListener("click", () => {
-            sources = sources.filter(source => source.status !== "ingested");
-            save("sources", sources);
-            renderSources();
-            updateStats();
-        });
-
-        renderTasks();
-        renderSources();
-        updateStats();
+        refreshNotes.addEventListener("click", loadSmallNotes);
+        loadSmallNotes();
     </script>
 </body>
 </html>
