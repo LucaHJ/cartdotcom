@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=6d30ed0">
+    <link rel="stylesheet" href="/dashboard.css?v=20260524-slick">
 </head>
 <body>
     <header class="topbar">
@@ -34,11 +34,14 @@
 
                 <div class="vault-tools">
                     <input id="pageFilter" type="search" placeholder="Filter pages" autocomplete="off">
-                    <div class="vault-stats" aria-live="polite">
-                        <span id="pageCount">0 pages</span>
-                        <span id="edgeCount">0 links</span>
-                        <span id="graphStatus">Loading</span>
-                    </div>
+                    <details class="diagnostics-menu">
+                        <summary>Diagnostics</summary>
+                        <div class="vault-stats" aria-live="polite">
+                            <span id="pageCount">0 pages</span>
+                            <span id="edgeCount">0 links</span>
+                            <span id="graphStatus">Loading</span>
+                        </div>
+                    </details>
                 </div>
 
                 <div id="vaultTree" class="vault-tree" aria-live="polite"></div>
@@ -58,26 +61,26 @@
 
                 <svg id="graphSvg" class="graph-canvas" role="img" aria-label="Second brain file and wikilink graph"></svg>
                 <p id="graphEmpty" class="graph-empty" hidden>No cloud Markdown pages found.</p>
-
-                <details id="editorDrawer" class="graph-inspector">
-                    <summary>
-                        <span id="currentPath">Select or create a page</span>
-                        <span id="saveStatus" class="copy-status" aria-live="polite"></span>
-                    </summary>
-                    <form id="pageForm" class="vault-form inspector-body">
-                        <label for="pathInput">Path</label>
-                        <input id="pathInput" type="text" placeholder="wiki/index.md" autocomplete="off" disabled>
-
-                        <label for="contentInput">Markdown</label>
-                        <textarea id="contentInput" class="inspector-textarea" rows="14" spellcheck="true" disabled></textarea>
-
-                        <div class="action-row">
-                            <button id="savePage" type="submit">Save</button>
-                            <button id="closeEditor" type="button">Close</button>
-                        </div>
-                    </form>
-                </details>
             </section>
+
+            <details id="editorDrawer" class="panel graph-inspector" open>
+                <summary>
+                    <span id="currentPath">Select or create a page</span>
+                    <span id="saveStatus" class="copy-status" aria-live="polite"></span>
+                </summary>
+                <form id="pageForm" class="vault-form inspector-body">
+                    <label for="pathInput">Path</label>
+                    <input id="pathInput" type="text" placeholder="wiki/index.md" autocomplete="off" disabled>
+
+                    <label for="contentInput">Markdown</label>
+                    <textarea id="contentInput" class="inspector-textarea" rows="14" spellcheck="true" disabled></textarea>
+
+                    <div class="action-row">
+                        <button id="savePage" type="submit">Save</button>
+                        <button id="closeEditor" type="button">Close</button>
+                    </div>
+                </form>
+            </details>
         </section>
     </main>
 
@@ -395,8 +398,10 @@
                     position.vy += (centerY - position.y) * gravity;
                     position.vx *= 0.82;
                     position.vy *= 0.82;
-                    position.x = Math.max(26, Math.min(width - 26, position.x + position.vx));
-                    position.y = Math.max(96, Math.min(height - 32, position.y + position.vy));
+                    const horizontalPadding = width < 520 ? 56 : 34;
+                    const verticalPadding = width < 520 ? 38 : 34;
+                    position.x = Math.max(horizontalPadding, Math.min(width - horizontalPadding, position.x + position.vx));
+                    position.y = Math.max(verticalPadding, Math.min(height - verticalPadding, position.y + position.vy));
                 });
             }
 
@@ -419,8 +424,8 @@
         }
 
         function renderGraph() {
-            const width = Math.max(720, graphSvg.clientWidth || graphSvg.parentElement.clientWidth || 1000);
-            const height = Math.max(620, graphSvg.clientHeight || graphSvg.parentElement.clientHeight || 720);
+            const width = Math.max(360, Math.round(graphSvg.clientWidth || graphSvg.parentElement.clientWidth || 720));
+            const height = Math.max(460, Math.round(graphSvg.clientHeight || graphSvg.parentElement.clientHeight || 620));
             const filter = pageFilter.value.trim().toLowerCase();
             const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
 
@@ -511,8 +516,13 @@
                     selectedPath = options.keepSelection;
                 }
                 buildGraph();
-                renderTree();
-                renderGraph();
+                const defaultPage = pages.find((page) => page.path === "wiki/index.md") || pages[0];
+                if (!selectedPath && defaultPage) {
+                    await loadPage(defaultPage.path);
+                } else {
+                    renderTree();
+                    renderGraph();
+                }
                 graphStatus.textContent = "Ready";
                 graphTitle.textContent = pages.length ? "Vault Map" : "Empty Vault";
             } catch (error) {
