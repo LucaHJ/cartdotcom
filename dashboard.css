@@ -822,6 +822,53 @@ label {
     padding: 0;
 }
 
+.brain-minimal .topbar {
+    border-bottom: 0;
+    background: var(--bg);
+}
+
+.brain-minimal .topnav a,
+.brain-minimal .nav-button,
+.brain-minimal button {
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--muted);
+    padding: 0;
+    box-shadow: none;
+}
+
+.brain-minimal .topnav a:hover,
+.brain-minimal .nav-button:hover,
+.brain-minimal button:hover {
+    background: transparent;
+    color: var(--ink-strong);
+}
+
+.brain-minimal input,
+.brain-minimal textarea {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: 0;
+    box-shadow: none;
+}
+
+.brain-minimal input:focus,
+.brain-minimal textarea:focus {
+    outline: 0;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+}
+
 .brain-workspace {
     display: grid;
     grid-template-columns: minmax(260px, 20vw) minmax(420px, 1fr) minmax(340px, 33vw);
@@ -840,9 +887,9 @@ label {
 
 .vault-tree-panel {
     overflow: hidden;
-    border-right: 1px solid var(--line);
+    border-right: 0;
     background: var(--bg);
-    padding: 16px 14px;
+    padding: 18px 22px;
 }
 
 .brain-workspace .panel-head {
@@ -851,9 +898,77 @@ label {
     padding-bottom: 0;
 }
 
+.vault-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 34px;
+}
+
 .vault-tools {
     display: grid;
     gap: 8px;
+}
+
+.vault-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 34px;
+}
+
+.search-toggle {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    color: var(--muted);
+}
+
+.search-toggle:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 50%;
+}
+
+.search-icon {
+    position: relative;
+    display: block;
+    width: 13px;
+    height: 13px;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+}
+
+.search-icon::after {
+    content: "";
+    position: absolute;
+    right: -6px;
+    bottom: -3px;
+    width: 7px;
+    height: 2px;
+    border-radius: 999px;
+    background: currentColor;
+    transform: rotate(45deg);
+}
+
+#pageFilter {
+    width: 0;
+    min-width: 0;
+    opacity: 0;
+    pointer-events: none;
+    color: var(--ink);
+    transition: width 180ms ease, opacity 140ms ease;
+}
+
+.vault-search.is-open #pageFilter,
+.vault-search.has-value #pageFilter {
+    width: min(210px, 48vw);
+    opacity: 1;
+    pointer-events: auto;
+    border-bottom: 1px solid rgba(156, 163, 175, 0.46);
+    padding-bottom: 3px;
 }
 
 .diagnostics-menu {
@@ -901,8 +1016,8 @@ label {
 }
 
 .vault-tree {
-    height: calc(100% - 130px);
-    margin-top: 12px;
+    height: calc(100% - 48px);
+    margin-top: 14px;
     overflow: auto;
     padding-right: 4px;
 }
@@ -915,7 +1030,6 @@ label {
     display: flex;
     align-items: center;
     min-height: 28px;
-    border-radius: 4px;
     color: var(--muted);
     cursor: pointer;
     font-size: 13px;
@@ -942,14 +1056,13 @@ label {
 .tree-folder summary:hover,
 .tree-file:hover,
 .tree-file.is-active {
-    background: var(--panel-soft);
     color: var(--ink-strong);
 }
 
 .tree-children {
     margin-left: 14px;
     padding-left: 8px;
-    border-left: 1px solid rgba(85, 88, 97, 0.38);
+    border-left: 0;
 }
 
 .tree-file {
@@ -957,7 +1070,6 @@ label {
     width: 100%;
     min-height: 28px;
     border: 0;
-    border-radius: 4px;
     background: transparent;
     color: var(--ink);
     padding: 4px 6px;
@@ -968,13 +1080,7 @@ label {
 }
 
 .tree-file::before {
-    content: "";
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    margin-right: 7px;
-    border-radius: 2px;
-    background: var(--line-strong);
+    display: none;
 }
 
 .tree-file.is-active::before {
@@ -994,11 +1100,11 @@ label {
     z-index: 3;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 12px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 0;
     background: var(--bg);
-    padding: 14px 16px 12px;
+    padding: 18px 22px 0;
 }
 
 .graph-toolbar h2 {
@@ -1015,7 +1121,7 @@ label {
 }
 
 .graph-actions button {
-    padding: 7px 10px;
+    padding: 0;
 }
 
 .graph-canvas {
@@ -1100,9 +1206,9 @@ label {
 .graph-inspector {
     min-width: 0;
     overflow: hidden;
-    border-left: 1px solid var(--line);
+    border-left: 0;
     background: var(--bg);
-    padding: 0;
+    padding: 18px 22px;
 }
 
 .graph-inspector[open] {
@@ -1122,13 +1228,13 @@ label {
 
 .graph-inspector summary {
     display: grid;
-    grid-template-columns: 3px minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
     align-items: center;
-    min-height: 62px;
-    border-bottom: 1px solid var(--line);
+    min-height: 34px;
+    border-bottom: 0;
     cursor: pointer;
-    padding: 14px 16px 12px;
+    padding: 0;
 }
 
 .graph-inspector summary::-webkit-details-marker {
@@ -1136,12 +1242,7 @@ label {
 }
 
 .graph-inspector summary::before {
-    content: "";
-    width: 3px;
-    height: 24px;
-    border-radius: 999px;
-    background: var(--accent);
-    grid-row: 1;
+    display: none;
 }
 
 .graph-inspector summary span:first-child {
@@ -1154,17 +1255,16 @@ label {
 }
 
 .graph-inspector summary .copy-status {
-    color: var(--muted);
-    font-size: 12px;
+    display: none;
 }
 
 .inspector-body {
     display: grid;
     grid-template-rows: auto auto auto minmax(0, 1fr) auto;
-    gap: 10px;
+    gap: 14px;
     min-height: 0;
     overflow: hidden;
-    padding: 14px 16px 16px;
+    padding: 16px 0 0;
 }
 
 .inspector-textarea {
@@ -1172,6 +1272,7 @@ label {
     height: 100%;
     font-family: Consolas, "Courier New", monospace;
     font-size: 13px;
+    line-height: 1.58;
     resize: none;
     overflow: auto;
 }
@@ -1221,12 +1322,11 @@ label {
     }
 
     .vault-tree-panel {
-        border-width: 0 0 1px;
+        border-width: 0;
     }
 
     .graph-inspector {
-        border-left: 0;
-        border-top: 1px solid var(--line);
+        border: 0;
     }
 
     .vault-tree {
@@ -1240,6 +1340,65 @@ label {
 
     .graph-inspector[open] {
         min-height: 520px;
+    }
+}
+
+@media (max-width: 920px) and (orientation: landscape) {
+    .brain-workspace {
+        grid-template-columns: minmax(150px, 22vw) minmax(260px, 1fr) minmax(210px, 30vw);
+        height: calc(100vh - 112px);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .brain-workspace .panel-head {
+        margin-bottom: 10px;
+    }
+
+    .vault-tree-panel {
+        border-right: 0;
+        border-bottom: 0;
+        padding: 12px;
+    }
+
+    .vault-tree {
+        height: calc(100% - 48px);
+        max-height: none;
+    }
+
+    .graph-panel {
+        min-height: 0;
+    }
+
+    .graph-toolbar {
+        padding: 10px 12px;
+    }
+
+    .graph-actions {
+        flex-wrap: nowrap;
+    }
+
+    .graph-actions button {
+        padding: 6px 8px;
+    }
+
+    .graph-inspector {
+        border-top: 0;
+        border-left: 0;
+    }
+
+    .graph-inspector[open] {
+        min-height: 0;
+    }
+
+    .graph-inspector summary {
+        min-height: 52px;
+        padding: 0;
+    }
+
+    .inspector-body {
+        gap: 8px;
+        padding: 10px 0 0;
     }
 }
 
@@ -1294,9 +1453,12 @@ label {
         padding: 12px;
     }
 
-    .graph-panel,
-    .graph-inspector {
+    .graph-panel {
         padding: 0;
+    }
+
+    .graph-inspector {
+        padding: 18px 26px 22px;
     }
 
     .graph-canvas {

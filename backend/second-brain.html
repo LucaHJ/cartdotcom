@@ -4,9 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260524-slick">
+    <link rel="stylesheet" href="/dashboard.css?v=20260524-text">
 </head>
-<body>
+<body class="brain-minimal">
     <header class="topbar">
         <div>
             <p class="eyebrow">cartdotcom control surface</p>
@@ -24,17 +24,19 @@
     <main class="shell brain-shell">
         <section class="brain-workspace" aria-label="Second brain vault graph">
             <aside class="panel vault-tree-panel">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">cloud vault</p>
-                        <h2>Pages</h2>
+                <div class="vault-head">
+                    <div id="vaultSearch" class="vault-search">
+                        <button class="search-toggle" id="searchToggle" type="button" aria-label="Search files" aria-expanded="false">
+                            <span class="search-icon" aria-hidden="true"></span>
+                        </button>
+                        <label class="sr-only" for="pageFilter">Search files</label>
+                        <input id="pageFilter" type="search" placeholder="Search files" autocomplete="off">
                     </div>
                     <button class="text-button" id="refreshPages" type="button">Refresh</button>
                 </div>
 
                 <div class="vault-tools">
-                    <input id="pageFilter" type="search" placeholder="Filter pages" autocomplete="off">
-                    <details class="diagnostics-menu">
+                    <details class="diagnostics-menu" hidden>
                         <summary>Diagnostics</summary>
                         <div class="vault-stats" aria-live="polite">
                             <span id="pageCount">0 pages</span>
@@ -49,10 +51,7 @@
 
             <section class="panel graph-panel">
                 <div class="graph-toolbar">
-                    <div>
-                        <p class="eyebrow">folder tree plus wikilinks</p>
-                        <h2 id="graphTitle">Vault Map</h2>
-                    </div>
+                    <h2 id="graphTitle" class="sr-only">Vault Map</h2>
                     <div class="graph-actions">
                         <button id="newPage" type="button">New page</button>
                         <button id="rebuildGraph" type="button">Rebuild graph</button>
@@ -69,10 +68,10 @@
                     <span id="saveStatus" class="copy-status" aria-live="polite"></span>
                 </summary>
                 <form id="pageForm" class="vault-form inspector-body">
-                    <label for="pathInput">Path</label>
+                    <label class="sr-only" for="pathInput">Path</label>
                     <input id="pathInput" type="text" placeholder="wiki/index.md" autocomplete="off" disabled>
 
-                    <label for="contentInput">Markdown</label>
+                    <label class="sr-only" for="contentInput">Markdown</label>
                     <textarea id="contentInput" class="inspector-textarea" rows="14" spellcheck="true" disabled></textarea>
 
                     <div class="action-row">
@@ -86,6 +85,8 @@
 
     <script>
         const pageFilter = document.getElementById("pageFilter");
+        const searchToggle = document.getElementById("searchToggle");
+        const vaultSearch = document.getElementById("vaultSearch");
         const vaultTree = document.getElementById("vaultTree");
         const pathInput = document.getElementById("pathInput");
         const contentInput = document.getElementById("contentInput");
@@ -113,6 +114,16 @@
                 '"': "&quot;",
                 "'": "&#039;"
             }[char]));
+        }
+
+        function setSearchOpen(open) {
+            vaultSearch.classList.toggle("is-open", open);
+            searchToggle.setAttribute("aria-expanded", open ? "true" : "false");
+            if (open) pageFilter.focus();
+        }
+
+        function syncSearchState() {
+            vaultSearch.classList.toggle("has-value", Boolean(pageFilter.value.trim()));
         }
 
         async function api(path, options = {}) {
@@ -610,9 +621,25 @@
             renderGraph();
             graphStatus.textContent = "Rebuilt";
         });
+        searchToggle.addEventListener("click", () => setSearchOpen(!vaultSearch.classList.contains("is-open")));
         pageFilter.addEventListener("input", () => {
+            syncSearchState();
             renderTree();
             renderGraph();
+        });
+        pageFilter.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape") return;
+            if (pageFilter.value) {
+                pageFilter.value = "";
+                syncSearchState();
+                renderTree();
+                renderGraph();
+            }
+            setSearchOpen(false);
+            searchToggle.focus();
+        });
+        pageFilter.addEventListener("blur", () => {
+            if (!pageFilter.value.trim()) setSearchOpen(false);
         });
 
         let resizeTimer = 0;
