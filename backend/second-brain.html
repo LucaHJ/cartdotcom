@@ -4,26 +4,26 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260524-text">
+    <link rel="stylesheet" href="/dashboard.css?v=20260524-fixed">
 </head>
 <body class="brain-minimal">
-    <header class="topbar">
-        <div>
-            <p class="eyebrow">cartdotcom control surface</p>
-            <h1>Second Brain Graph</h1>
-        </div>
-        <nav class="topnav" aria-label="Main navigation">
-            <a href="/home.html">Home</a>
-            <a href="/backend/dashboard.html">Dashboard</a>
-            <a href="/backend/prompting.html">Prompting</a>
-            <a href="/mobile-approval.html">Mobile Approval</a>
-            <button class="nav-button" id="logoutButton" type="button">Logout</button>
-        </nav>
-    </header>
-
     <main class="shell brain-shell">
         <section class="brain-workspace" aria-label="Second brain vault graph">
             <aside class="panel vault-tree-panel">
+                <header class="topbar">
+                    <div>
+                        <p class="eyebrow">cartdotcom control surface</p>
+                        <h1>Second Brain Graph</h1>
+                    </div>
+                    <nav class="topnav" aria-label="Main navigation">
+                        <a href="/home.html">Home</a>
+                        <a href="/backend/dashboard.html">Dashboard</a>
+                        <a href="/backend/prompting.html">Prompting</a>
+                        <a href="/mobile-approval.html">Mobile Approval</a>
+                        <button class="nav-button" id="logoutButton" type="button">Logout</button>
+                    </nav>
+                </header>
+
                 <div class="vault-head">
                     <div id="vaultSearch" class="vault-search">
                         <button class="search-toggle" id="searchToggle" type="button" aria-label="Search files" aria-expanded="false">
@@ -62,24 +62,34 @@
                 <p id="graphEmpty" class="graph-empty" hidden>No cloud Markdown pages found.</p>
             </section>
 
-            <details id="editorDrawer" class="panel graph-inspector" open>
-                <summary>
+            <section id="editorDrawer" class="panel graph-inspector" aria-label="Markdown editor">
+                <div class="inspector-head">
                     <span id="currentPath">Select or create a page</span>
                     <span id="saveStatus" class="copy-status" aria-live="polite"></span>
-                </summary>
+                    <div class="action-row">
+                        <button id="savePage" class="icon-button" type="submit" form="pageForm" aria-label="Save page">
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <path d="M5 3h11l3 3v15H5z"></path>
+                                <path d="M8 3v6h8V3"></path>
+                                <path d="M8 17h8"></path>
+                            </svg>
+                        </button>
+                        <button id="closeEditor" class="icon-button" type="button" aria-label="Close editor">
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <path d="M6 6l12 12"></path>
+                                <path d="M18 6L6 18"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
                 <form id="pageForm" class="vault-form inspector-body">
                     <label class="sr-only" for="pathInput">Path</label>
                     <input id="pathInput" type="text" placeholder="wiki/index.md" autocomplete="off" disabled>
 
                     <label class="sr-only" for="contentInput">Markdown</label>
                     <textarea id="contentInput" class="inspector-textarea" rows="14" spellcheck="true" disabled></textarea>
-
-                    <div class="action-row">
-                        <button id="savePage" type="submit">Save</button>
-                        <button id="closeEditor" type="button">Close</button>
-                    </div>
                 </form>
-            </details>
+            </section>
         </section>
     </main>
 
@@ -560,7 +570,7 @@
             }
 
             contentInput.value = pageContentByPath.get(path) || "";
-            editorDrawer.open = true;
+            editorDrawer.classList.add("has-page");
             renderTree();
             renderGraph();
         }
@@ -600,14 +610,23 @@
             contentInput.value = "";
             currentPath.textContent = "New Markdown page";
             saveStatus.textContent = "";
-            editorDrawer.open = true;
+            editorDrawer.classList.add("has-page");
             pathInput.focus();
             renderTree();
             renderGraph();
         });
 
         document.getElementById("closeEditor").addEventListener("click", () => {
-            editorDrawer.open = false;
+            selectedPath = "";
+            pathInput.value = "";
+            contentInput.value = "";
+            pathInput.disabled = true;
+            contentInput.disabled = true;
+            currentPath.textContent = "Select or create a page";
+            saveStatus.textContent = "";
+            editorDrawer.classList.remove("has-page");
+            renderTree();
+            renderGraph();
         });
 
         document.getElementById("logoutButton").addEventListener("click", async () => {

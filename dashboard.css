@@ -822,9 +822,34 @@ label {
     padding: 0;
 }
 
+body.brain-minimal {
+    height: 100vh;
+    overflow: hidden;
+}
+
+.brain-minimal .brain-shell {
+    height: 100vh;
+}
+
 .brain-minimal .topbar {
+    display: grid;
+    gap: 10px;
+    align-items: start;
     border-bottom: 0;
     background: var(--bg);
+    padding: 0;
+}
+
+.brain-minimal .topbar h1 {
+    margin-top: 3px;
+    font-size: 24px;
+    line-height: 1;
+}
+
+.brain-minimal .topnav {
+    justify-content: flex-start;
+    gap: 8px 10px;
+    line-height: 1.25;
 }
 
 .brain-minimal .topnav a,
@@ -837,6 +862,13 @@ label {
     color: var(--muted);
     padding: 0;
     box-shadow: none;
+}
+
+.brain-minimal .topnav a,
+.brain-minimal .nav-button {
+    min-height: 0;
+    padding: 0;
+    font-weight: 700;
 }
 
 .brain-minimal .topnav a:hover,
@@ -860,6 +892,49 @@ label {
     outline: 0;
 }
 
+.icon-button {
+    display: inline-grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid rgba(156, 163, 175, 0.28);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+}
+
+.icon-button:hover,
+.icon-button:focus-visible {
+    border-color: rgba(201, 209, 226, 0.72);
+    color: var(--ink-strong);
+}
+
+.icon-button svg {
+    width: 17px;
+    height: 17px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+}
+
+.brain-minimal .icon-button {
+    display: inline-grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid rgba(156, 163, 175, 0.28);
+    border-radius: 50%;
+    color: var(--muted);
+}
+
+.brain-minimal .icon-button:hover,
+.brain-minimal .icon-button:focus-visible {
+    border-color: rgba(201, 209, 226, 0.72);
+    color: var(--ink-strong);
+}
+
 .sr-only {
     position: absolute;
     width: 1px;
@@ -872,9 +947,10 @@ label {
 .brain-workspace {
     display: grid;
     grid-template-columns: minmax(260px, 20vw) minmax(420px, 1fr) minmax(340px, 33vw);
-    height: calc(100vh - 86px);
-    min-height: 680px;
+    height: 100vh;
+    min-height: 0;
     background: var(--bg);
+    overflow: hidden;
 }
 
 .vault-tree-panel,
@@ -886,6 +962,9 @@ label {
 }
 
 .vault-tree-panel {
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    min-height: 0;
     overflow: hidden;
     border-right: 0;
     background: var(--bg);
@@ -1016,10 +1095,44 @@ label {
 }
 
 .vault-tree {
-    height: calc(100% - 48px);
+    min-height: 0;
+    height: auto;
     margin-top: 14px;
     overflow: auto;
-    padding-right: 4px;
+    padding-left: 4px;
+    padding-right: 0;
+    direction: rtl;
+    scrollbar-color: rgba(156, 163, 175, 0.38) var(--bg);
+    scrollbar-width: thin;
+}
+
+.vault-tree * {
+    direction: ltr;
+}
+
+.vault-tree::-webkit-scrollbar,
+.inspector-textarea::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+}
+
+.vault-tree::-webkit-scrollbar-track,
+.inspector-textarea::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+
+.vault-tree::-webkit-scrollbar-thumb,
+.inspector-textarea::-webkit-scrollbar-thumb {
+    border: 2px solid var(--bg);
+    border-radius: 999px;
+    background: rgba(156, 163, 175, 0.34);
+}
+
+.vault-tree::-webkit-scrollbar-button,
+.inspector-textarea::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
 }
 
 .tree-folder {
@@ -1204,48 +1317,27 @@ label {
 }
 
 .graph-inspector {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
     min-width: 0;
+    min-height: 0;
     overflow: hidden;
     border-left: 0;
     background: var(--bg);
     padding: 18px 22px;
 }
 
-.graph-inspector[open] {
+.inspector-head {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    min-height: 0;
-}
-
-.graph-inspector:not([open]) {
-    display: block;
-}
-
-.graph-inspector:not([open]) summary {
-    min-height: 100%;
-    align-content: start;
-}
-
-.graph-inspector summary {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 12px;
     align-items: center;
     min-height: 34px;
     border-bottom: 0;
-    cursor: pointer;
     padding: 0;
 }
 
-.graph-inspector summary::-webkit-details-marker {
-    display: none;
-}
-
-.graph-inspector summary::before {
-    display: none;
-}
-
-.graph-inspector summary span:first-child {
+.inspector-head span:first-child {
     min-width: 0;
     overflow: hidden;
     color: var(--ink-strong);
@@ -1254,17 +1346,21 @@ label {
     white-space: nowrap;
 }
 
-.graph-inspector summary .copy-status {
+.inspector-head .copy-status {
     display: none;
+}
+
+.inspector-head .action-row {
+    margin: 0;
 }
 
 .inspector-body {
     display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
     gap: 14px;
     min-height: 0;
     overflow: hidden;
-    padding: 16px 0 0;
+    padding: 14px 0 0;
 }
 
 .inspector-textarea {
@@ -1275,6 +1371,8 @@ label {
     line-height: 1.58;
     resize: none;
     overflow: auto;
+    scrollbar-color: rgba(156, 163, 175, 0.38) var(--bg);
+    scrollbar-width: thin;
 }
 
 @media (max-width: 920px) {
@@ -1321,6 +1419,20 @@ label {
         min-height: 0;
     }
 
+    .brain-minimal .brain-workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: 32vh 30vh 38vh;
+        height: 100vh;
+        overflow: hidden;
+    }
+
+    .brain-minimal .vault-tree-panel,
+    .brain-minimal .graph-panel,
+    .brain-minimal .graph-inspector {
+        min-height: 0;
+        overflow: hidden;
+    }
+
     .vault-tree-panel {
         border-width: 0;
     }
@@ -1334,19 +1446,26 @@ label {
         height: auto;
     }
 
+    .brain-minimal .vault-tree {
+        max-height: none;
+        height: auto;
+        min-height: 0;
+    }
+
     .graph-panel {
         min-height: 620px;
     }
 
-    .graph-inspector[open] {
-        min-height: 520px;
+    .brain-minimal .graph-panel {
+        min-height: 0;
     }
 }
 
 @media (max-width: 920px) and (orientation: landscape) {
     .brain-workspace {
         grid-template-columns: minmax(150px, 22vw) minmax(260px, 1fr) minmax(210px, 30vw);
-        height: calc(100vh - 112px);
+        grid-template-rows: 1fr;
+        height: 100vh;
         min-height: 0;
         overflow: hidden;
     }
@@ -1355,14 +1474,36 @@ label {
         margin-bottom: 10px;
     }
 
+    .brain-minimal .topbar {
+        gap: 5px;
+    }
+
+    .brain-minimal .topbar .eyebrow {
+        display: none;
+    }
+
+    .brain-minimal .topbar h1 {
+        font-size: 18px;
+    }
+
+    .brain-minimal .topnav {
+        gap: 4px 8px;
+        font-size: 12px;
+    }
+
     .vault-tree-panel {
         border-right: 0;
         border-bottom: 0;
-        padding: 12px;
+        padding: 10px 12px;
+    }
+
+    .vault-head {
+        min-height: 24px;
     }
 
     .vault-tree {
-        height: calc(100% - 48px);
+        margin-top: 8px;
+        height: auto;
         max-height: none;
     }
 
@@ -1371,7 +1512,7 @@ label {
     }
 
     .graph-toolbar {
-        padding: 10px 12px;
+        padding: 10px 12px 0;
     }
 
     .graph-actions {
@@ -1387,11 +1528,11 @@ label {
         border-left: 0;
     }
 
-    .graph-inspector[open] {
+    .graph-inspector {
         min-height: 0;
     }
 
-    .graph-inspector summary {
+    .inspector-head {
         min-height: 52px;
         padding: 0;
     }
@@ -1461,8 +1602,18 @@ label {
         padding: 18px 26px 22px;
     }
 
+    .brain-minimal .action-row {
+        align-items: center;
+        display: flex;
+        flex-direction: row;
+    }
+
     .graph-canvas {
         height: 520px;
+    }
+
+    .brain-minimal .graph-canvas {
+        height: 100%;
     }
 
     .graph-node.folder text {
