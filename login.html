@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Backend Login</title>
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+    <header class="topbar">
+        <div>
+            <p class="eyebrow">cartdotcom control surface</p>
+            <h1>Backend Login</h1>
+        </div>
+        <nav class="topnav" aria-label="Main navigation">
+            <a href="home.html">Home</a>
+            <a href="mobile-approval.html">Mobile Approval</a>
+        </nav>
+    </header>
+
+    <main class="shell login-shell">
+        <section class="composer-panel login-panel" aria-label="Backend login">
+            <div class="composer-status">
+                <span>Backend access</span>
+                <span>Username and password</span>
+            </div>
+
+            <form id="loginForm" class="composer-form">
+                <label for="usernameInput">Username</label>
+                <input id="usernameInput" type="text" autocomplete="username" required>
+
+                <label for="passwordInput">Password</label>
+                <input id="passwordInput" type="password" autocomplete="current-password" required>
+
+                <div class="composer-actions login-actions">
+                    <button id="loginButton" type="submit">Login</button>
+                    <span id="loginStatus" class="copy-status" aria-live="polite"></span>
+                </div>
+            </form>
+        </section>
+    </main>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const next = params.get("next") || "/backend/dashboard.html";
+        const form = document.getElementById("loginForm");
+        const status = document.getElementById("loginStatus");
+        const button = document.getElementById("loginButton");
+
+        async function checkSession() {
+            const response = await fetch("/api/auth/session");
+            if (!response.ok) return;
+            const payload = await response.json().catch(() => ({}));
+            if (payload.authenticated) window.location.href = next;
+        }
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            button.disabled = true;
+            status.textContent = "Checking";
+
+            try {
+                const response = await fetch("/api/auth/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        username: document.getElementById("usernameInput").value,
+                        password: document.getElementById("passwordInput").value
+                    })
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.error || "Login failed.");
+                status.textContent = "Logged in";
+                window.location.href = next;
+            } catch (error) {
+                status.textContent = error.message;
+            } finally {
+                button.disabled = false;
+            }
+        });
+
+        checkSession();
+    </script>
+</body>
+</html>

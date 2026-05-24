@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Prompting Surface</title>
-    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
     <header class="topbar">
@@ -13,10 +13,11 @@
             <h1>Codex Prompting Surface</h1>
         </div>
         <nav class="topnav" aria-label="Main navigation">
-            <a href="home.html">Home</a>
-            <a href="backend/dashboard.html">Dashboard</a>
-            <a href="backend/second-brain.html">Second Brain</a>
-            <a href="mobile-approval.html">Mobile Approval</a>
+            <a href="/home.html">Home</a>
+            <a href="/backend/dashboard.html">Dashboard</a>
+            <a href="/backend/second-brain.html">Second Brain</a>
+            <a href="/mobile-approval.html">Mobile Approval</a>
+            <button class="nav-button" id="logoutButton" type="button">Logout</button>
             <a href="https://github.com/LucaHJ/cartdotcom">GitHub</a>
         </nav>
     </header>
@@ -255,6 +256,10 @@
         document.getElementById("clearHistory").addEventListener("click", () => {
             saveHistory([]);
             renderHistory();
+        });
+        document.getElementById("logoutButton").addEventListener("click", async () => {
+            await fetch("/api/auth/logout", { method: "POST" });
+            window.location.href = "/login.html";
         });
 
         applyQueryPrompt();

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Cloud Editor</title>
-    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
     <header class="topbar">
@@ -13,10 +13,11 @@
             <h1>Second Brain Cloud Editor</h1>
         </div>
         <nav class="topnav" aria-label="Main navigation">
-            <a href="home.html">Home</a>
-            <a href="backend/dashboard.html">Dashboard</a>
-            <a href="backend/prompting.html">Prompting</a>
-            <a href="mobile-approval.html">Mobile Approval</a>
+            <a href="/home.html">Home</a>
+            <a href="/backend/dashboard.html">Dashboard</a>
+            <a href="/backend/prompting.html">Prompting</a>
+            <a href="/mobile-approval.html">Mobile Approval</a>
+            <button class="nav-button" id="logoutButton" type="button">Logout</button>
         </nav>
     </header>
 
@@ -173,6 +174,10 @@
             contentInput.value = "";
             currentPath.textContent = "New Markdown page";
             pathInput.focus();
+        });
+        document.getElementById("logoutButton").addEventListener("click", async () => {
+            await fetch("/api/auth/logout", { method: "POST" });
+            window.location.href = "/login.html";
         });
 
         document.getElementById("refreshPages").addEventListener("click", refreshPages);

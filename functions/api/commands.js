@@ -1,4 +1,5 @@
 import { createPendingApproval } from "../_lib/mobile-auth.js";
+import { requireBackendSession } from "../_lib/backend-auth.js";
 
 const REMOTE_PROMPT_POLICY = {
     actionClass: "general",
@@ -8,13 +9,6 @@ const REMOTE_PROMPT_POLICY = {
     approvalRequired: true,
     resultChannel: "github_issue"
 };
-
-const ACCESS_IDENTITY_MISSING_ERROR = [
-    "Cloudflare Access identity is missing.",
-    "Protect prompting.html and /api/commands in the same Cloudflare Access application,",
-    "then reload after signing in. If Access login succeeds, confirm the API Function is receiving",
-    "a valid Cf-Access-Jwt-Assertion."
-].join(" ");
 
 const SECRET_PATTERNS = [
     /api[_-]?key\s*[:=]\s*\S+/i,
@@ -42,27 +36,6 @@ async function sha256(value) {
     const data = new TextEncoder().encode(String(value || ""));
     const digest = await crypto.subtle.digest("SHA-256", data);
     return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function getAccessPayloadEmail(data) {
-    return normalizeString(data?.cloudflareAccess?.JWT?.payload?.email, 320).toLowerCase();
-}
-
-function isAllowedSubmitter(request, env, data = {}) {
-    const email = normalizeString(request.headers.get("cf-access-authenticated-user-email"), 320).toLowerCase()
-        || getAccessPayloadEmail(data);
-    if (!email) return { ok: false, email: "" };
-
-    const allowList = normalizeString(env.ALLOWED_ACCESS_EMAILS, 4000)
-        .split(",")
-        .map(item => item.trim().toLowerCase())
-        .filter(Boolean);
-
-    if (allowList.length && !allowList.includes(email.toLowerCase())) {
-        return { ok: false, email };
-    }
-
-    return { ok: true, email };
 }
 
 function fetchMetadataLooksSafe(request) {
@@ -100,7 +73,7 @@ function buildIssueBody(job, submitter) {
         "| Field | Value |",
         "|---|---|",
         `| Job ID | \`${job.job_id}\` |`,
-        `| Submitted by | ${submitter || "Cloudflare Access user"} |`,
+        `| Submitted by | ${submitter || "backend user"} |`,
         `| Submitted at | ${job.submitted_at} |`,
         `| Action class | \`${job.action_class}\` |`,
         `| Target | ${job.target} |`,
@@ -168,9 +141,11 @@ export async function onRequestPost(context) {
         return json({ error: "Cross-site command submissions are blocked." }, 403);
     }
 
-    const submitter = isAllowedSubmitter(request, env, context.data);
+    const submitter = context.data.backendSession?.ok
+        ? context.data.backendSession
+        : await requireBackendSession(context);
     if (!submitter.ok) {
-        return json({ error: ACCESS_IDENTITY_MISSING_ERROR }, 401);
+        return json({ error: submitter.error || "Backend login is required." }, 401);
     }
 
     let input;

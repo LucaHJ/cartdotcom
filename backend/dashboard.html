@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Agent Maintenance Dashboard</title>
-    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
     <header class="topbar">
@@ -13,10 +13,11 @@
             <h1>Agent Maintenance Dashboard</h1>
         </div>
         <nav class="topnav" aria-label="Main navigation">
-            <a href="home.html">Home</a>
-            <a href="backend/prompting.html">Prompting</a>
-            <a href="backend/second-brain.html">Second Brain</a>
-            <a href="mobile-approval.html">Mobile Approval</a>
+            <a href="/home.html">Home</a>
+            <a href="/backend/prompting.html">Prompting</a>
+            <a href="/backend/second-brain.html">Second Brain</a>
+            <a href="/mobile-approval.html">Mobile Approval</a>
+            <button class="nav-button" id="logoutButton" type="button">Logout</button>
             <a href="https://github.com/LucaHJ/cartdotcom">GitHub</a>
         </nav>
     </header>
@@ -91,26 +92,26 @@
                         <p class="eyebrow">prompt operations</p>
                         <h2>Prompting Surface</h2>
                     </div>
-                    <a class="text-button" href="backend/prompting.html">Open</a>
+                    <a class="text-button" href="/backend/prompting.html">Open</a>
                 </div>
                 <div class="link-grid">
-                    <a class="link-card" href="backend/prompting.html">
+                    <a class="link-card" href="/backend/prompting.html">
                         <span>Codex prompts</span>
                         <small>Send one authenticated prompt with optional uploads.</small>
                     </a>
-                    <a class="link-card" href="backend/prompting.html#remote-command-inbox">
+                    <a class="link-card" href="/backend/prompting.html#remote-command-inbox">
                         <span>Remote inbox</span>
                         <small>Queue prompts through the fixed GitHub delivery path.</small>
                     </a>
-                    <a class="link-card" href="backend/prompting.html#prompt-history">
+                    <a class="link-card" href="/backend/prompting.html#prompt-history">
                         <span>Prompt history</span>
                         <small>Open previous submissions from the settings dropdown.</small>
                     </a>
-                    <a class="link-card" href="mobile-approval.html">
+                    <a class="link-card" href="/mobile-approval.html">
                         <span>Mobile approval</span>
                         <small>Review queued jobs and approve them with a passkey.</small>
                     </a>
-                    <a class="link-card" href="backend/second-brain.html">
+                    <a class="link-card" href="/backend/second-brain.html">
                         <span>Second brain</span>
                         <small>Edit cloud Markdown pages without a GitHub commit.</small>
                     </a>
@@ -167,26 +168,26 @@
                         <p class="eyebrow">repeatable prompts</p>
                         <h2>Codex Runbooks</h2>
                     </div>
-                    <a class="text-button" href="backend/prompting.html">Use prompts</a>
+                    <a class="text-button" href="/backend/prompting.html">Use prompts</a>
                 </div>
                 <div class="runbook-grid">
-                    <a class="runbook-card" href="backend/prompting.html">
+                    <a class="runbook-card" href="/backend/prompting.html">
                         <span>Ingest</span>
                         <small>Capture source, update wiki, index, and log.</small>
                     </a>
-                    <a class="runbook-card" href="backend/prompting.html">
+                    <a class="runbook-card" href="/backend/prompting.html">
                         <span>Add to brain</span>
                         <small>Research and write the wiki page before implementation.</small>
                     </a>
-                    <a class="runbook-card" href="backend/prompting.html">
+                    <a class="runbook-card" href="/backend/prompting.html">
                         <span>Query</span>
                         <small>Answer from index and wiki before raw files.</small>
                     </a>
-                    <a class="runbook-card" href="backend/prompting.html">
+                    <a class="runbook-card" href="/backend/prompting.html">
                         <span>Lint</span>
                         <small>Check links, provenance, orphans, stale claims.</small>
                     </a>
-                    <a class="runbook-card" href="backend/prompting.html">
+                    <a class="runbook-card" href="/backend/prompting.html">
                         <span>Handoff</span>
                         <small>Summarize current state for the next agent.</small>
                     </a>
@@ -302,7 +303,7 @@
                     const params = new URLSearchParams({
                         prompt: "Ingest " + source.title + " into the Codex-maintained second brain. Source: " + source.url
                     });
-                    window.location.href = "backend/prompting.html?" + params.toString();
+                    window.location.href = "/backend/prompting.html?" + params.toString();
                 });
                 list.appendChild(row);
             });
@@ -355,6 +356,10 @@
         renderTasks();
         renderSources();
         updateStats();
+        document.getElementById("logoutButton").addEventListener("click", async () => {
+            await fetch("/api/auth/logout", { method: "POST" });
+            window.location.href = "/login.html";
+        });
     </script>
 </body>
 </html>

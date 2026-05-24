@@ -101,6 +101,14 @@ textarea {
     font-weight: bold;
 }
 
+.nav-button {
+    min-height: 0;
+    border: 2px solid var(--line);
+    background: var(--panel);
+    padding: 9px 12px;
+    font-weight: bold;
+}
+
 .shell {
     max-width: 1180px;
     margin: 0 auto;
@@ -162,6 +170,21 @@ textarea {
     min-height: calc(100vh - 100px);
     display: grid;
     align-items: center;
+}
+
+.login-shell {
+    max-width: 540px;
+    min-height: calc(100vh - 100px);
+    display: grid;
+    align-items: center;
+}
+
+.login-panel {
+    width: 100%;
+}
+
+.login-actions {
+    grid-template-columns: auto minmax(0, 1fr);
 }
 
 .composer-panel {
