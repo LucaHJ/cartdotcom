@@ -16,6 +16,7 @@ export async function onRequest(context) {
     }
 
     if (url.pathname.startsWith("/api/auth/")) return context.next();
+    if (url.pathname === "/api/instagram/webhook") return context.next();
 
     const session = await requireBackendSession(context);
     if (!session.ok) {
