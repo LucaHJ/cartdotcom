@@ -42,12 +42,13 @@ If passkey registration shows:
 Cloudflare Access identity is missing.
 ```
 
-then the request reached the Pages Function without the `cf-access-authenticated-user-email` identity header. Check:
+then the request reached the Pages Function without usable Cloudflare Access identity. The Functions validate `Cf-Access-Jwt-Assertion` with Cloudflare's Access Pages plugin and use the JWT payload email, falling back to `cf-access-authenticated-user-email` when present. Check:
 
 1. `https://cartdotcom.com/mobile-approval` should trigger Cloudflare Access login when opened in a private browser.
 2. `/api/mobile/*` must be protected by the same Access application as `mobile-approval*`, or by an application that issues a valid Access session for API fetches.
 3. The policy must allow the email listed in `ALLOWED_ACCESS_EMAILS`.
-4. After changing Access paths, reload the phone page from a fresh authenticated session and try Register passkey again.
+4. `CF_ACCESS_DOMAIN` and `CF_ACCESS_AUD` may be set in Pages environment variables if the Access application is recreated. Current non-secret defaults are embedded in the API middleware for the existing app.
+5. After changing Access paths, reload the phone page from a fresh authenticated session and try Register passkey again.
 
 ## Required Pages Environment Variables
 

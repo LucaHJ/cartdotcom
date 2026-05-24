@@ -9,7 +9,8 @@ const EMAIL_HEADER = "cf-access-authenticated-user-email";
 const ACCESS_IDENTITY_MISSING_ERROR = [
     "Cloudflare Access identity is missing.",
     "Protect mobile-approval.html and /api/mobile/* in the same Cloudflare Access application,",
-    "then reload after signing in."
+    "then reload after signing in. If Access login succeeds, confirm the API Function is receiving",
+    "a valid Cf-Access-Jwt-Assertion."
 ].join(" ");
 const KEY_PREFIX = "mobile-auth";
 
@@ -57,8 +58,13 @@ export function getKV(env) {
     return env.MOBILE_AUTH_KV;
 }
 
-export function getActor(request, env) {
-    const email = normalizeString(request.headers.get(EMAIL_HEADER), 320).toLowerCase();
+function getAccessPayloadEmail(data) {
+    return normalizeString(data?.cloudflareAccess?.JWT?.payload?.email, 320).toLowerCase();
+}
+
+export function getActor(request, env, data = {}) {
+    const email = normalizeString(request.headers.get(EMAIL_HEADER), 320).toLowerCase()
+        || getAccessPayloadEmail(data);
     if (!email) {
         return { ok: false, error: ACCESS_IDENTITY_MISSING_ERROR };
     }
@@ -106,11 +112,11 @@ export async function putCredential(kv, email, credential) {
     await kv.put(keys(email).credential, JSON.stringify(credential));
 }
 
-export async function createRegistrationOptions(request, env) {
+export async function createRegistrationOptions(request, env, data = {}) {
     const kv = getKV(env);
     if (!kv) return json({ error: "MOBILE_AUTH_KV binding is required." }, 503);
 
-    const actor = getActor(request, env);
+    const actor = getActor(request, env, data);
     if (!actor.ok) return json({ error: actor.error }, 401);
 
     const existing = await getCredential(kv, actor.email);
@@ -135,11 +141,11 @@ export async function createRegistrationOptions(request, env) {
     return json({ options, email: actor.email, rpID });
 }
 
-export async function verifyRegistration(request, env) {
+export async function verifyRegistration(request, env, data = {}) {
     const kv = getKV(env);
     if (!kv) return json({ error: "MOBILE_AUTH_KV binding is required." }, 503);
 
-    const actor = getActor(request, env);
+    const actor = getActor(request, env, data);
     if (!actor.ok) return json({ error: actor.error }, 401);
 
     const body = await request.json().catch(() => null);
@@ -217,11 +223,11 @@ export async function createPendingApproval(context, job, metadata = {}) {
     };
 }
 
-export async function listPendingApprovals(request, env) {
+export async function listPendingApprovals(request, env, data = {}) {
     const kv = getKV(env);
     if (!kv) return json({ error: "MOBILE_AUTH_KV binding is required." }, 503);
 
-    const actor = getActor(request, env);
+    const actor = getActor(request, env, data);
     if (!actor.ok) return json({ error: actor.error }, 401);
 
     const listed = await kv.list({ prefix: `${KEY_PREFIX}:approval:` });
@@ -242,11 +248,11 @@ export async function listPendingApprovals(request, env) {
     });
 }
 
-export async function createApprovalOptions(request, env) {
+export async function createApprovalOptions(request, env, data = {}) {
     const kv = getKV(env);
     if (!kv) return json({ error: "MOBILE_AUTH_KV binding is required." }, 503);
 
-    const actor = getActor(request, env);
+    const actor = getActor(request, env, data);
     if (!actor.ok) return json({ error: actor.error }, 401);
 
     const body = await request.json().catch(() => null);
@@ -314,11 +320,11 @@ async function postGitHubComment(env, approval, decision, actorEmail) {
     });
 }
 
-export async function verifyApproval(request, env) {
+export async function verifyApproval(request, env, data = {}) {
     const kv = getKV(env);
     if (!kv) return json({ error: "MOBILE_AUTH_KV binding is required." }, 503);
 
-    const actor = getActor(request, env);
+    const actor = getActor(request, env, data);
     if (!actor.ok) return json({ error: actor.error }, 401);
 
     const body = await request.json().catch(() => null);

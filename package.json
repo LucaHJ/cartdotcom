@@ -5,6 +5,7 @@
     "build": "node -e \"console.log('Static Cloudflare Pages build: no asset compilation required')\""
   },
   "dependencies": {
+    "@cloudflare/pages-plugin-cloudflare-access": "^1.0.5",
     "@simplewebauthn/server": "^13.3.0"
   }
 }

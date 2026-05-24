@@ -12,7 +12,8 @@ const REMOTE_PROMPT_POLICY = {
 const ACCESS_IDENTITY_MISSING_ERROR = [
     "Cloudflare Access identity is missing.",
     "Protect prompting.html and /api/commands in the same Cloudflare Access application,",
-    "then reload after signing in."
+    "then reload after signing in. If Access login succeeds, confirm the API Function is receiving",
+    "a valid Cf-Access-Jwt-Assertion."
 ].join(" ");
 
 const SECRET_PATTERNS = [
@@ -43,8 +44,13 @@ async function sha256(value) {
     return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function isAllowedSubmitter(request, env) {
-    const email = request.headers.get("cf-access-authenticated-user-email");
+function getAccessPayloadEmail(data) {
+    return normalizeString(data?.cloudflareAccess?.JWT?.payload?.email, 320).toLowerCase();
+}
+
+function isAllowedSubmitter(request, env, data = {}) {
+    const email = normalizeString(request.headers.get("cf-access-authenticated-user-email"), 320).toLowerCase()
+        || getAccessPayloadEmail(data);
     if (!email) return { ok: false, email: "" };
 
     const allowList = normalizeString(env.ALLOWED_ACCESS_EMAILS, 4000)
@@ -162,7 +168,7 @@ export async function onRequestPost(context) {
         return json({ error: "Cross-site command submissions are blocked." }, 403);
     }
 
-    const submitter = isAllowedSubmitter(request, env);
+    const submitter = isAllowedSubmitter(request, env, context.data);
     if (!submitter.ok) {
         return json({ error: ACCESS_IDENTITY_MISSING_ERROR }, 401);
     }
