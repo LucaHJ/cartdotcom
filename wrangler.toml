@@ -5,3 +5,7 @@ compatibility_date = "2025-03-23"
 [[kv_namespaces]]
 binding = "MOBILE_AUTH_KV"
 id = "7429e70431774bc283e4e56b9e837023"
+
+[[kv_namespaces]]
+binding = "SECOND_BRAIN_KV"
+id = "b0c0506cf9be4d1a80d22e0e58ff0bf2"

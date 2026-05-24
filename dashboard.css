@@ -145,6 +145,13 @@ textarea {
     gap: 12px;
 }
 
+.vault-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.45fr) minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+}
+
 .prompting-grid {
     display: grid;
     gap: 12px;
@@ -678,6 +685,49 @@ label {
     color: var(--muted);
 }
 
+.vault-sidebar {
+    position: sticky;
+    top: 12px;
+}
+
+.vault-page-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+    max-height: calc(100vh - 245px);
+    overflow-y: auto;
+}
+
+.vault-page-button {
+    display: grid;
+    gap: 5px;
+    width: 100%;
+    min-height: 0;
+    padding: 10px;
+    text-align: left;
+}
+
+.vault-page-button span {
+    overflow-wrap: anywhere;
+    font-weight: bold;
+}
+
+.vault-page-button small {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.vault-form {
+    display: grid;
+    gap: 10px;
+}
+
+.vault-textarea {
+    min-height: min(62vh, 720px);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 14px;
+}
+
 @media (max-width: 920px) {
     .topbar {
         align-items: stretch;
@@ -693,8 +743,13 @@ label {
     .prompting-grid,
     .form-grid,
     .runbook-grid,
-    .remote-layout {
+    .remote-layout,
+    .vault-grid {
         grid-template-columns: 1fr;
+    }
+
+    .vault-sidebar {
+        position: static;
     }
 
     .inline-form,

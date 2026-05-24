@@ -15,6 +15,7 @@
         <nav class="topnav" aria-label="Main navigation">
             <a href="home.html">Home</a>
             <a href="prompting.html">Prompting</a>
+            <a href="second-brain.html">Second Brain</a>
             <a href="mobile-approval.html">Mobile Approval</a>
             <a href="https://github.com/LucaHJ/cartdotcom">GitHub</a>
         </nav>
@@ -24,8 +25,8 @@
         <section class="status-strip" aria-label="System status">
             <article class="metric">
                 <span class="metric-label">Wiki Layer</span>
-                <strong id="wikiHealth">Ready</strong>
-                <small>index, log, schema</small>
+                <strong id="wikiHealth">Cloud</strong>
+                <small>KV mirror plus local vault</small>
             </article>
             <article class="metric">
                 <span class="metric-label">Raw Queue</span>
@@ -108,6 +109,10 @@
                     <a class="link-card" href="mobile-approval.html">
                         <span>Mobile approval</span>
                         <small>Review queued jobs and approve them with a passkey.</small>
+                    </a>
+                    <a class="link-card" href="second-brain.html">
+                        <span>Second brain</span>
+                        <small>Edit cloud Markdown pages without a GitHub commit.</small>
                     </a>
                 </div>
             </section>
@@ -306,7 +311,7 @@
         function updateStats() {
             document.getElementById("openTaskCount").textContent = tasks.filter(task => task.status !== "done").length;
             document.getElementById("rawCount").textContent = sources.filter(source => source.status !== "ingested").length;
-            document.getElementById("wikiHealth").textContent = tasks.some(task => task.status === "blocked") ? "Blocked" : "Ready";
+            document.getElementById("wikiHealth").textContent = tasks.some(task => task.status === "blocked") ? "Blocked" : "Cloud";
         }
 
         document.getElementById("taskForm").addEventListener("submit", (event) => {
