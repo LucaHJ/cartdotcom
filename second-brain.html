@@ -3,181 +3,27 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Second Brain Cloud Editor</title>
-    <link rel="stylesheet" href="dashboard.css">
+    <meta http-equiv="refresh" content="0; url=/backend/second-brain.html">
+    <title>Second Brain Graph</title>
+    <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
     <header class="topbar">
         <div>
             <p class="eyebrow">cartdotcom control surface</p>
-            <h1>Second Brain Cloud Editor</h1>
+            <h1>Second Brain Graph</h1>
         </div>
         <nav class="topnav" aria-label="Main navigation">
-            <a href="home.html">Home</a>
-            <a href="backend/dashboard.html">Dashboard</a>
-            <a href="backend/prompting.html">Prompting</a>
-            <a href="mobile-approval.html">Mobile Approval</a>
+            <a href="/home.html">Home</a>
+            <a href="/backend/dashboard.html">Dashboard</a>
+            <a href="/backend/prompting.html">Prompting</a>
+            <a href="/mobile-approval.html">Mobile Approval</a>
         </nav>
     </header>
-
     <main class="shell">
-        <section class="vault-grid" aria-label="Cloud Markdown editor">
-            <aside class="panel vault-sidebar">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">cloud vault</p>
-                        <h2>Markdown Pages</h2>
-                    </div>
-                    <button class="text-button" id="refreshPages" type="button">Refresh</button>
-                </div>
-                <input id="pageFilter" type="search" placeholder="Filter pages" autocomplete="off">
-                <div id="pageList" class="vault-page-list" aria-live="polite"></div>
-            </aside>
-
-            <section class="panel vault-editor">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">editor</p>
-                        <h2 id="currentPath">No page selected</h2>
-                    </div>
-                    <span id="saveStatus" class="copy-status" aria-live="polite"></span>
-                </div>
-
-                <form id="pageForm" class="vault-form">
-                    <label for="pathInput">Path</label>
-                    <input id="pathInput" type="text" placeholder="wiki/index.md" autocomplete="off">
-
-                    <label for="contentInput">Markdown</label>
-                    <textarea id="contentInput" class="vault-textarea" rows="22" spellcheck="true"></textarea>
-
-                    <div class="action-row">
-                        <button id="savePage" type="submit">Save</button>
-                        <button id="newPage" type="button">New</button>
-                    </div>
-                </form>
-            </section>
+        <section class="panel">
+            <p>Opening the backend second-brain graph. <a href="/backend/second-brain.html">Continue manually</a>.</p>
         </section>
     </main>
-
-    <script>
-        const pageList = document.getElementById("pageList");
-        const pageFilter = document.getElementById("pageFilter");
-        const pathInput = document.getElementById("pathInput");
-        const contentInput = document.getElementById("contentInput");
-        const currentPath = document.getElementById("currentPath");
-        const saveStatus = document.getElementById("saveStatus");
-        let pages = [];
-
-        function escapeHtml(value) {
-            return String(value).replace(/[&<>"']/g, (char) => ({
-                "&": "&amp;",
-                "<": "&lt;",
-                ">": "&gt;",
-                '"': "&quot;",
-                "'": "&#039;"
-            }[char]));
-        }
-
-        async function api(path, options = {}) {
-            const response = await fetch(path, {
-                ...options,
-                headers: {
-                    "Content-Type": "application/json",
-                    ...(options.headers || {})
-                }
-            });
-            const contentType = response.headers.get("content-type") || "";
-            const redirectedToAccess = response.redirected && response.url.includes("cloudflareaccess.com");
-            const payload = contentType.includes("application/json") ? await response.json().catch(() => ({})) : {};
-            if (redirectedToAccess || (!contentType.includes("application/json") && response.url.includes("cloudflareaccess.com"))) {
-                throw new Error("Backend login session missing. Sign in again, then try again.");
-            }
-            if (!response.ok) throw new Error(payload.error || "Request failed.");
-            return payload;
-        }
-
-        function renderPages() {
-            const filter = pageFilter.value.trim().toLowerCase();
-            const filtered = pages.filter(page => !filter || page.path.toLowerCase().includes(filter));
-            pageList.innerHTML = "";
-            if (!filtered.length) {
-                pageList.innerHTML = "<p class='empty'>No cloud Markdown pages found.</p>";
-                return;
-            }
-
-            filtered.forEach((page) => {
-                const button = document.createElement("button");
-                button.type = "button";
-                button.className = "vault-page-button";
-                button.innerHTML = `
-                    <span>${escapeHtml(page.path)}</span>
-                    <small>${escapeHtml(page.updated_at || "not timestamped")}</small>
-                `;
-                button.addEventListener("click", () => loadPage(page.path));
-                pageList.appendChild(button);
-            });
-        }
-
-        async function refreshPages() {
-            saveStatus.textContent = "Loading";
-            try {
-                const payload = await api("/api/second-brain/pages");
-                pages = payload.pages || [];
-                renderPages();
-                saveStatus.textContent = `${payload.count || 0} pages`;
-            } catch (error) {
-                saveStatus.textContent = error.message;
-            }
-        }
-
-        async function loadPage(path) {
-            saveStatus.textContent = "Loading";
-            try {
-                const payload = await api(`/api/second-brain/page?path=${encodeURIComponent(path)}`);
-                pathInput.value = payload.page.path;
-                contentInput.value = payload.page.content;
-                currentPath.textContent = payload.page.path;
-                saveStatus.textContent = "Loaded";
-            } catch (error) {
-                saveStatus.textContent = error.message;
-            }
-        }
-
-        document.getElementById("pageForm").addEventListener("submit", async (event) => {
-            event.preventDefault();
-            const path = pathInput.value.trim();
-            if (!path) {
-                saveStatus.textContent = "Path required";
-                return;
-            }
-
-            saveStatus.textContent = "Saving";
-            try {
-                const payload = await api("/api/second-brain/page", {
-                    method: "PUT",
-                    body: JSON.stringify({
-                        path,
-                        content: contentInput.value
-                    })
-                });
-                currentPath.textContent = payload.page.path;
-                saveStatus.textContent = "Saved";
-                await refreshPages();
-            } catch (error) {
-                saveStatus.textContent = error.message;
-            }
-        });
-
-        document.getElementById("newPage").addEventListener("click", () => {
-            pathInput.value = "";
-            contentInput.value = "";
-            currentPath.textContent = "New Markdown page";
-            pathInput.focus();
-        });
-
-        document.getElementById("refreshPages").addEventListener("click", refreshPages);
-        pageFilter.addEventListener("input", renderPages);
-        refreshPages();
-    </script>
 </body>
 </html>

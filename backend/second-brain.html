@@ -3,14 +3,14 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Second Brain Cloud Editor</title>
+    <title>Second Brain Graph</title>
     <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
     <header class="topbar">
         <div>
             <p class="eyebrow">cartdotcom control surface</p>
-            <h1>Second Brain Cloud Editor</h1>
+            <h1>Second Brain Graph</h1>
         </div>
         <nav class="topnav" aria-label="Main navigation">
             <a href="/home.html">Home</a>
@@ -21,53 +21,86 @@
         </nav>
     </header>
 
-    <main class="shell">
-        <section class="vault-grid" aria-label="Cloud Markdown editor">
-            <aside class="panel vault-sidebar">
+    <main class="shell brain-shell">
+        <section class="brain-workspace" aria-label="Second brain vault graph">
+            <aside class="panel vault-tree-panel">
                 <div class="panel-head">
                     <div>
                         <p class="eyebrow">cloud vault</p>
-                        <h2>Markdown Pages</h2>
+                        <h2>Pages</h2>
                     </div>
                     <button class="text-button" id="refreshPages" type="button">Refresh</button>
                 </div>
-                <input id="pageFilter" type="search" placeholder="Filter pages" autocomplete="off">
-                <div id="pageList" class="vault-page-list" aria-live="polite"></div>
-            </aside>
 
-            <section class="panel vault-editor">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">editor</p>
-                        <h2 id="currentPath">No page selected</h2>
+                <div class="vault-tools">
+                    <input id="pageFilter" type="search" placeholder="Filter pages" autocomplete="off">
+                    <div class="vault-stats" aria-live="polite">
+                        <span id="pageCount">0 pages</span>
+                        <span id="edgeCount">0 links</span>
+                        <span id="graphStatus">Loading</span>
                     </div>
-                    <span id="saveStatus" class="copy-status" aria-live="polite"></span>
                 </div>
 
-                <form id="pageForm" class="vault-form">
-                    <label for="pathInput">Path</label>
-                    <input id="pathInput" type="text" placeholder="wiki/index.md" autocomplete="off">
+                <div id="vaultTree" class="vault-tree" aria-live="polite"></div>
+            </aside>
 
-                    <label for="contentInput">Markdown</label>
-                    <textarea id="contentInput" class="vault-textarea" rows="22" spellcheck="true"></textarea>
-
-                    <div class="action-row">
-                        <button id="savePage" type="submit">Save</button>
-                        <button id="newPage" type="button">New</button>
+            <section class="panel graph-panel">
+                <div class="graph-toolbar">
+                    <div>
+                        <p class="eyebrow">folder tree plus wikilinks</p>
+                        <h2 id="graphTitle">Vault Map</h2>
                     </div>
-                </form>
+                    <div class="graph-actions">
+                        <button id="newPage" type="button">New page</button>
+                        <button id="rebuildGraph" type="button">Rebuild graph</button>
+                    </div>
+                </div>
+
+                <svg id="graphSvg" class="graph-canvas" role="img" aria-label="Second brain file and wikilink graph"></svg>
+                <p id="graphEmpty" class="graph-empty" hidden>No cloud Markdown pages found.</p>
+
+                <details id="editorDrawer" class="graph-inspector">
+                    <summary>
+                        <span id="currentPath">Select or create a page</span>
+                        <span id="saveStatus" class="copy-status" aria-live="polite"></span>
+                    </summary>
+                    <form id="pageForm" class="vault-form inspector-body">
+                        <label for="pathInput">Path</label>
+                        <input id="pathInput" type="text" placeholder="wiki/index.md" autocomplete="off" disabled>
+
+                        <label for="contentInput">Markdown</label>
+                        <textarea id="contentInput" class="inspector-textarea" rows="14" spellcheck="true" disabled></textarea>
+
+                        <div class="action-row">
+                            <button id="savePage" type="submit">Save</button>
+                            <button id="closeEditor" type="button">Close</button>
+                        </div>
+                    </form>
+                </details>
             </section>
         </section>
     </main>
 
     <script>
-        const pageList = document.getElementById("pageList");
         const pageFilter = document.getElementById("pageFilter");
+        const vaultTree = document.getElementById("vaultTree");
         const pathInput = document.getElementById("pathInput");
         const contentInput = document.getElementById("contentInput");
         const currentPath = document.getElementById("currentPath");
         const saveStatus = document.getElementById("saveStatus");
+        const pageCount = document.getElementById("pageCount");
+        const edgeCount = document.getElementById("edgeCount");
+        const graphStatus = document.getElementById("graphStatus");
+        const graphTitle = document.getElementById("graphTitle");
+        const graphSvg = document.getElementById("graphSvg");
+        const graphEmpty = document.getElementById("graphEmpty");
+        const editorDrawer = document.getElementById("editorDrawer");
+        const svgNamespace = "http://www.w3.org/2000/svg";
+
         let pages = [];
+        let pageContentByPath = new Map();
+        let graphData = { nodes: [], edges: [] };
+        let selectedPath = "";
 
         function escapeHtml(value) {
             return String(value).replace(/[&<>"']/g, (char) => ({
@@ -97,51 +130,418 @@
             return payload;
         }
 
-        function renderPages() {
-            const filter = pageFilter.value.trim().toLowerCase();
-            const filtered = pages.filter(page => !filter || page.path.toLowerCase().includes(filter));
-            pageList.innerHTML = "";
-            if (!filtered.length) {
-                pageList.innerHTML = "<p class='empty'>No cloud Markdown pages found.</p>";
-                return;
+        async function mapLimit(items, limit, worker) {
+            const results = new Array(items.length);
+            let index = 0;
+            const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+                while (index < items.length) {
+                    const current = index;
+                    index += 1;
+                    results[current] = await worker(items[current], current);
+                }
+            });
+            await Promise.all(runners);
+            return results;
+        }
+
+        function createTree(files) {
+            const root = { type: "folder", name: "Vault", path: "", children: [], childMap: new Map() };
+
+            function ensureChild(parent, type, name, path) {
+                const key = `${type}:${name}`;
+                if (!parent.childMap.has(key)) {
+                    const child = { type, name, path, children: [], childMap: new Map() };
+                    parent.childMap.set(key, child);
+                    parent.children.push(child);
+                }
+                return parent.childMap.get(key);
             }
 
-            filtered.forEach((page) => {
-                const button = document.createElement("button");
-                button.type = "button";
-                button.className = "vault-page-button";
-                button.innerHTML = `
-                    <span>${escapeHtml(page.path)}</span>
-                    <small>${escapeHtml(page.updated_at || "not timestamped")}</small>
-                `;
-                button.addEventListener("click", () => loadPage(page.path));
-                pageList.appendChild(button);
+            files.forEach((page) => {
+                const segments = page.path.split("/").filter(Boolean);
+                let parent = root;
+                let currentPath = "";
+                segments.forEach((segment, index) => {
+                    currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+                    const isFile = index === segments.length - 1;
+                    parent = ensureChild(parent, isFile ? "file" : "folder", segment, currentPath);
+                });
+            });
+
+            return root;
+        }
+
+        function sortTreeChildren(children) {
+            return children.slice().sort((left, right) => {
+                if (left.type !== right.type) return left.type === "folder" ? -1 : 1;
+                return left.name.localeCompare(right.name);
             });
         }
 
-        async function refreshPages() {
-            saveStatus.textContent = "Loading";
+        function renderTreeNode(node, container) {
+            if (node.type === "folder") {
+                const details = document.createElement("details");
+                details.className = "tree-folder";
+                details.open = true;
+
+                const summary = document.createElement("summary");
+                summary.textContent = node.name;
+                details.appendChild(summary);
+
+                const children = document.createElement("div");
+                children.className = "tree-children";
+                sortTreeChildren(node.children).forEach((child) => renderTreeNode(child, children));
+                details.appendChild(children);
+                container.appendChild(details);
+                return;
+            }
+
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "tree-file" + (node.path === selectedPath ? " is-active" : "");
+            button.textContent = node.name;
+            button.title = node.path;
+            button.addEventListener("click", () => loadPage(node.path));
+            container.appendChild(button);
+        }
+
+        function renderTree() {
+            const filter = pageFilter.value.trim().toLowerCase();
+            const filtered = pages.filter((page) => !filter || page.path.toLowerCase().includes(filter));
+            vaultTree.innerHTML = "";
+
+            if (!filtered.length) {
+                vaultTree.innerHTML = `<p class="empty">${filter ? "No matching pages." : "No cloud Markdown pages found."}</p>`;
+                return;
+            }
+
+            const tree = createTree(filtered);
+            sortTreeChildren(tree.children).forEach((child) => renderTreeNode(child, vaultTree));
+        }
+
+        function normalizeLinkKey(value) {
+            return String(value || "")
+                .trim()
+                .replace(/\\/g, "/")
+                .replace(/^Vault\//i, "")
+                .replace(/^\/+/, "")
+                .replace(/\.md$/i, "")
+                .toLowerCase();
+        }
+
+        function createWikiResolver() {
+            const byPath = new Map();
+            const byName = new Map();
+            const duplicateNames = new Set();
+
+            pages.forEach((page) => {
+                const pathKey = normalizeLinkKey(page.path);
+                const nameKey = normalizeLinkKey(page.path.split("/").pop());
+                byPath.set(pathKey, page.path);
+                if (byName.has(nameKey) && byName.get(nameKey) !== page.path) {
+                    duplicateNames.add(nameKey);
+                } else {
+                    byName.set(nameKey, page.path);
+                }
+            });
+
+            duplicateNames.forEach((key) => byName.delete(key));
+
+            return (target) => {
+                const key = normalizeLinkKey(target);
+                return byPath.get(key) || byName.get(key) || null;
+            };
+        }
+
+        function extractWikiTargets(content) {
+            const targets = [];
+            const regex = /\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g;
+            let match;
+            while ((match = regex.exec(content)) !== null) {
+                targets.push(match[1].trim());
+            }
+            return targets;
+        }
+
+        function upsertNode(nodeMap, node) {
+            if (!nodeMap.has(node.id)) nodeMap.set(node.id, node);
+            return nodeMap.get(node.id);
+        }
+
+        function addEdge(edges, edgeKeys, source, target, type) {
+            if (!source || !target || source === target) return;
+            const key = `${source}->${target}:${type}`;
+            if (edgeKeys.has(key)) return;
+            edgeKeys.add(key);
+            edges.push({ source, target, type });
+        }
+
+        function buildGraph() {
+            const nodeMap = new Map();
+            const edges = [];
+            const edgeKeys = new Set();
+            const resolver = createWikiResolver();
+            const rootId = "folder:";
+
+            upsertNode(nodeMap, { id: rootId, label: "Vault", type: "root", path: "" });
+
+            pages.forEach((page) => {
+                const segments = page.path.split("/").filter(Boolean);
+                let parentId = rootId;
+                let folderPath = "";
+
+                segments.forEach((segment, index) => {
+                    const isFile = index === segments.length - 1;
+                    if (isFile) {
+                        const fileId = `file:${page.path}`;
+                        upsertNode(nodeMap, { id: fileId, label: segment.replace(/\.md$/i, ""), type: "file", path: page.path });
+                        addEdge(edges, edgeKeys, parentId, fileId, "folder");
+                        return;
+                    }
+
+                    folderPath = folderPath ? `${folderPath}/${segment}` : segment;
+                    const folderId = `folder:${folderPath}`;
+                    upsertNode(nodeMap, { id: folderId, label: segment, type: "folder", path: folderPath });
+                    addEdge(edges, edgeKeys, parentId, folderId, "folder");
+                    parentId = folderId;
+                });
+
+                const sourceId = `file:${page.path}`;
+                const content = pageContentByPath.get(page.path) || "";
+                extractWikiTargets(content).forEach((target) => {
+                    const resolved = resolver(target);
+                    if (resolved) addEdge(edges, edgeKeys, sourceId, `file:${resolved}`, "wikilink");
+                });
+            });
+
+            graphData = { nodes: Array.from(nodeMap.values()), edges };
+            pageCount.textContent = `${pages.length} page${pages.length === 1 ? "" : "s"}`;
+            edgeCount.textContent = `${edges.length} link${edges.length === 1 ? "" : "s"}`;
+        }
+
+        function hashString(value) {
+            let hash = 0;
+            for (let index = 0; index < value.length; index += 1) {
+                hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+            }
+            return Math.abs(hash);
+        }
+
+        function layoutGraph(nodes, edges, width, height) {
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const positions = new Map();
+            const minDimension = Math.max(360, Math.min(width, height));
+
+            nodes.forEach((node, index) => {
+                const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2 + (hashString(node.id) % 80) / 80;
+                const ring = node.type === "root" ? 0 : node.type === "folder" ? 0.26 : 0.42 + ((hashString(node.path) % 100) / 420);
+                const radius = minDimension * ring;
+                positions.set(node.id, {
+                    x: centerX + Math.cos(angle) * radius,
+                    y: centerY + Math.sin(angle) * radius,
+                    vx: 0,
+                    vy: 0
+                });
+            });
+
+            const nodeRadius = (node) => node.type === "root" ? 16 : node.type === "folder" ? 11 : 7;
+
+            for (let iteration = 0; iteration < 130; iteration += 1) {
+                for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
+                    for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) {
+                        const left = nodes[leftIndex];
+                        const right = nodes[rightIndex];
+                        const a = positions.get(left.id);
+                        const b = positions.get(right.id);
+                        const dx = b.x - a.x || 0.01;
+                        const dy = b.y - a.y || 0.01;
+                        const distanceSquared = dx * dx + dy * dy;
+                        const distance = Math.sqrt(distanceSquared);
+                        const force = Math.min(2.2, 5200 / Math.max(80, distanceSquared));
+                        const fx = (dx / distance) * force;
+                        const fy = (dy / distance) * force;
+                        a.vx -= fx;
+                        a.vy -= fy;
+                        b.vx += fx;
+                        b.vy += fy;
+                    }
+                }
+
+                edges.forEach((edge) => {
+                    const sourceNode = nodes.find((node) => node.id === edge.source);
+                    const targetNode = nodes.find((node) => node.id === edge.target);
+                    const source = positions.get(edge.source);
+                    const target = positions.get(edge.target);
+                    if (!source || !target || !sourceNode || !targetNode) return;
+
+                    const dx = target.x - source.x || 0.01;
+                    const dy = target.y - source.y || 0.01;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const desired = edge.type === "folder" ? 86 + nodeRadius(targetNode) * 2 : 145;
+                    const force = (distance - desired) * (edge.type === "folder" ? 0.018 : 0.012);
+                    const fx = (dx / distance) * force;
+                    const fy = (dy / distance) * force;
+                    source.vx += fx;
+                    source.vy += fy;
+                    target.vx -= fx;
+                    target.vy -= fy;
+                });
+
+                nodes.forEach((node) => {
+                    const position = positions.get(node.id);
+                    const gravity = node.type === "root" ? 0.045 : 0.003;
+                    position.vx += (centerX - position.x) * gravity;
+                    position.vy += (centerY - position.y) * gravity;
+                    position.vx *= 0.82;
+                    position.vy *= 0.82;
+                    position.x = Math.max(26, Math.min(width - 26, position.x + position.vx));
+                    position.y = Math.max(96, Math.min(height - 32, position.y + position.vy));
+                });
+            }
+
+            nodes.forEach((node) => {
+                const position = positions.get(node.id);
+                node.x = position.x;
+                node.y = position.y;
+            });
+        }
+
+        function createSvgElement(name, attributes = {}) {
+            const element = document.createElementNS(svgNamespace, name);
+            Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, value));
+            return element;
+        }
+
+        function shortLabel(value) {
+            const label = String(value || "");
+            return label.length > 28 ? `${label.slice(0, 25)}...` : label;
+        }
+
+        function renderGraph() {
+            const width = Math.max(720, graphSvg.clientWidth || graphSvg.parentElement.clientWidth || 1000);
+            const height = Math.max(620, graphSvg.clientHeight || graphSvg.parentElement.clientHeight || 720);
+            const filter = pageFilter.value.trim().toLowerCase();
+            const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
+
+            graphSvg.replaceChildren();
+            graphSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+            graphEmpty.hidden = graphData.nodes.length > 1;
+
+            if (graphData.nodes.length <= 1) return;
+
+            layoutGraph(graphData.nodes, graphData.edges, width, height);
+
+            const edgeLayer = createSvgElement("g", { class: "graph-edges" });
+            graphData.edges.forEach((edge) => {
+                const source = nodeById.get(edge.source);
+                const target = nodeById.get(edge.target);
+                if (!source || !target) return;
+
+                const sourceMatches = !filter || source.type !== "file" || source.path.toLowerCase().includes(filter);
+                const targetMatches = !filter || target.type !== "file" || target.path.toLowerCase().includes(filter);
+                const line = createSvgElement("line", {
+                    class: `graph-edge ${edge.type}${sourceMatches && targetMatches ? "" : " dimmed"}`,
+                    x1: source.x,
+                    y1: source.y,
+                    x2: target.x,
+                    y2: target.y
+                });
+                edgeLayer.appendChild(line);
+            });
+            graphSvg.appendChild(edgeLayer);
+
+            const nodeLayer = createSvgElement("g", { class: "graph-nodes" });
+            graphData.nodes.forEach((node) => {
+                const matches = !filter || node.type !== "file" || node.path.toLowerCase().includes(filter);
+                const group = createSvgElement("g", {
+                    class: `graph-node ${node.type}${node.path === selectedPath ? " selected" : ""}${matches ? "" : " dimmed"}`,
+                    transform: `translate(${node.x} ${node.y})`
+                });
+                group.style.cursor = node.type === "file" || node.type === "folder" ? "pointer" : "default";
+
+                const radius = node.type === "root" ? 16 : node.type === "folder" ? 11 : 7;
+                group.appendChild(createSvgElement("circle", { r: radius }));
+
+                const title = createSvgElement("title");
+                title.textContent = node.path || "Vault";
+                group.appendChild(title);
+
+                const text = createSvgElement("text", { x: radius + 6, y: 4 });
+                text.textContent = shortLabel(node.label);
+                group.appendChild(text);
+
+                if (node.type === "file") {
+                    group.addEventListener("click", () => loadPage(node.path));
+                } else if (node.type === "folder" && node.path) {
+                    group.addEventListener("click", () => {
+                        pageFilter.value = `${node.path}/`;
+                        renderTree();
+                        renderGraph();
+                    });
+                }
+
+                nodeLayer.appendChild(group);
+            });
+            graphSvg.appendChild(nodeLayer);
+        }
+
+        async function loadAllPageContent() {
+            pageContentByPath = new Map();
+            await mapLimit(pages, 8, async (page) => {
+                try {
+                    const payload = await api(`/api/second-brain/page?path=${encodeURIComponent(page.path)}`);
+                    pageContentByPath.set(page.path, payload.page.content || "");
+                } catch (error) {
+                    pageContentByPath.set(page.path, "");
+                }
+            });
+        }
+
+        async function refreshPages(options = {}) {
+            graphStatus.textContent = "Loading";
+            saveStatus.textContent = "";
             try {
                 const payload = await api("/api/second-brain/pages");
                 pages = payload.pages || [];
-                renderPages();
-                saveStatus.textContent = `${payload.count || 0} pages`;
+                pageCount.textContent = `${pages.length} page${pages.length === 1 ? "" : "s"}`;
+                graphStatus.textContent = "Reading";
+                await loadAllPageContent();
+                if (options.keepSelection && pages.some((page) => page.path === options.keepSelection)) {
+                    selectedPath = options.keepSelection;
+                }
+                buildGraph();
+                renderTree();
+                renderGraph();
+                graphStatus.textContent = "Ready";
+                graphTitle.textContent = pages.length ? "Vault Map" : "Empty Vault";
             } catch (error) {
-                saveStatus.textContent = error.message;
+                graphStatus.textContent = "Blocked";
+                vaultTree.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+                graphEmpty.hidden = false;
+                graphEmpty.textContent = error.message;
             }
         }
 
         async function loadPage(path) {
-            saveStatus.textContent = "Loading";
-            try {
+            selectedPath = path;
+            graphStatus.textContent = "Ready";
+            saveStatus.textContent = "Loaded";
+            pathInput.disabled = false;
+            contentInput.disabled = false;
+            pathInput.value = path;
+            currentPath.textContent = path;
+
+            if (!pageContentByPath.has(path)) {
+                saveStatus.textContent = "Loading";
                 const payload = await api(`/api/second-brain/page?path=${encodeURIComponent(path)}`);
-                pathInput.value = payload.page.path;
-                contentInput.value = payload.page.content;
-                currentPath.textContent = payload.page.path;
-                saveStatus.textContent = "Loaded";
-            } catch (error) {
-                saveStatus.textContent = error.message;
+                pageContentByPath.set(path, payload.page.content || "");
             }
+
+            contentInput.value = pageContentByPath.get(path) || "";
+            editorDrawer.open = true;
+            renderTree();
+            renderGraph();
         }
 
         document.getElementById("pageForm").addEventListener("submit", async (event) => {
@@ -161,27 +561,56 @@
                         content: contentInput.value
                     })
                 });
+                selectedPath = payload.page.path;
                 currentPath.textContent = payload.page.path;
+                pageContentByPath.set(payload.page.path, contentInput.value);
                 saveStatus.textContent = "Saved";
-                await refreshPages();
+                await refreshPages({ keepSelection: payload.page.path });
             } catch (error) {
                 saveStatus.textContent = error.message;
             }
         });
 
         document.getElementById("newPage").addEventListener("click", () => {
+            selectedPath = "";
+            pathInput.disabled = false;
+            contentInput.disabled = false;
             pathInput.value = "";
             contentInput.value = "";
             currentPath.textContent = "New Markdown page";
+            saveStatus.textContent = "";
+            editorDrawer.open = true;
             pathInput.focus();
+            renderTree();
+            renderGraph();
         });
+
+        document.getElementById("closeEditor").addEventListener("click", () => {
+            editorDrawer.open = false;
+        });
+
         document.getElementById("logoutButton").addEventListener("click", async () => {
             await fetch("/api/auth/logout", { method: "POST" });
             window.location.href = "/login.html";
         });
 
-        document.getElementById("refreshPages").addEventListener("click", refreshPages);
-        pageFilter.addEventListener("input", renderPages);
+        document.getElementById("refreshPages").addEventListener("click", () => refreshPages({ keepSelection: selectedPath }));
+        document.getElementById("rebuildGraph").addEventListener("click", () => {
+            buildGraph();
+            renderGraph();
+            graphStatus.textContent = "Rebuilt";
+        });
+        pageFilter.addEventListener("input", () => {
+            renderTree();
+            renderGraph();
+        });
+
+        let resizeTimer = 0;
+        window.addEventListener("resize", () => {
+            window.clearTimeout(resizeTimer);
+            resizeTimer = window.setTimeout(renderGraph, 120);
+        });
+
         refreshPages();
     </script>
 </body>
