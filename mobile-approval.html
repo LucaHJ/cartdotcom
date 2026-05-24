@@ -175,6 +175,11 @@
             try {
                 if (!window.PublicKeyCredential) throw new Error("This browser does not support passkeys.");
                 const payload = await api("/api/mobile/register/options", { method: "POST", body: "{}" });
+                if (payload.registered) {
+                    status.textContent = "Already registered";
+                    await loadApprovals();
+                    return;
+                }
                 const credential = await navigator.credentials.create({ publicKey: toCreationOptions(payload.options) });
                 const verified = await api("/api/mobile/register/verify", {
                     method: "POST",
@@ -189,8 +194,11 @@
 
         function renderApprovals(payload) {
             const list = document.getElementById("approvalList");
+            const registerButton = document.getElementById("registerPasskey");
             document.getElementById("approvalIdentity").textContent = payload.email || "Cloudflare Access";
             document.getElementById("passkeyStatus").textContent = payload.registered ? "Ready" : "Setup";
+            registerButton.textContent = payload.registered ? "Passkey registered" : "Register passkey";
+            registerButton.disabled = Boolean(payload.registered);
             document.getElementById("pendingCount").textContent = payload.approvals.length;
 
             if (!payload.approvals.length) {

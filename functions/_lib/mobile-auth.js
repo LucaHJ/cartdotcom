@@ -120,6 +120,14 @@ export async function createRegistrationOptions(request, env, data = {}) {
     if (!actor.ok) return json({ error: actor.error }, 401);
 
     const existing = await getCredential(kv, actor.email);
+    if (existing) {
+        return json({
+            registered: true,
+            email: actor.email,
+            rpID: getRelyingParty(request, env).rpID
+        });
+    }
+
     const { rpName, rpID } = getRelyingParty(request, env);
     const options = await generateRegistrationOptions({
         rpName,
@@ -128,7 +136,7 @@ export async function createRegistrationOptions(request, env, data = {}) {
         userName: actor.email,
         userDisplayName: actor.email,
         attestationType: "none",
-        excludeCredentials: existing ? [{ id: existing.id, transports: existing.transports }] : [],
+        excludeCredentials: [],
         authenticatorSelection: {
             residentKey: "preferred",
             userVerification: "required"

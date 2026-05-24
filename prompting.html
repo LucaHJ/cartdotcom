@@ -24,7 +24,7 @@
         <section class="composer-panel" aria-label="Remote Codex prompt composer">
             <div class="composer-status">
                 <span>Authenticated delivery</span>
-                <span>GitHub queue</span>
+                <span>Approval queue</span>
                 <span>Fixed queue policy</span>
             </div>
 
@@ -173,7 +173,7 @@
         function addHistory(prompt, payload) {
             const history = loadHistory();
             history.push({
-                title: payload.issueNumber ? `Issue #${payload.issueNumber}` : "Submitted prompt",
+                title: payload.issueNumber ? `Issue #${payload.issueNumber}` : `Queued ${payload.jobId || "prompt"}`,
                 date: new Date().toLocaleString(),
                 prompt,
                 preview: prompt.replace(/\s+/g, " ").slice(0, 140) || "Upload-only prompt"

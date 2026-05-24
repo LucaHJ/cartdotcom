@@ -196,6 +196,8 @@ export async function onRequestPost(context) {
         return json({ error: "Prompt hash mismatch." }, 400);
     }
 
+    const queueRepo = parseRepo(env.COMMAND_QUEUE_REPO || "");
+    const hasGitHubQueue = Boolean(queueRepo && env.GITHUB_TOKEN);
     const job = {
         job_id: normalizeString(input.job_id, 80) || `cmd_${crypto.randomUUID().slice(0, 8)}`,
         submitted_at: normalizeString(input.submitted_at, 40) || new Date().toISOString(),
@@ -208,64 +210,70 @@ export async function onRequestPost(context) {
         risk_level: REMOTE_PROMPT_POLICY.risk,
         approval_level: REMOTE_PROMPT_POLICY.approval,
         approval_required: REMOTE_PROMPT_POLICY.approvalRequired,
-        result_channel: REMOTE_PROMPT_POLICY.resultChannel
+        result_channel: hasGitHubQueue ? REMOTE_PROMPT_POLICY.resultChannel : "mobile_auth_kv"
     };
 
-    const queueRepo = parseRepo(env.COMMAND_QUEUE_REPO || "");
-    if (!queueRepo || !env.GITHUB_TOKEN) {
+    let issue = null;
+    if (hasGitHubQueue) {
+        const labels = env.ENABLE_COMMAND_LABELS === "true"
+            ? [
+                "remote-command",
+                `remote-${job.action_class}`,
+                job.approval_required ? "approval-required" : "approval-not-required",
+                `risk-${job.risk_level}`
+            ]
+            : [];
+
+        const response = await fetch(`https://api.github.com/repos/${queueRepo}/issues`, {
+            method: "POST",
+            headers: {
+                "accept": "application/vnd.github+json",
+                "authorization": `Bearer ${env.GITHUB_TOKEN}`,
+                "content-type": "application/json",
+                "user-agent": "cartdotcom-remote-command-inbox",
+                "x-github-api-version": "2022-11-28"
+            },
+            body: JSON.stringify({
+                title: `[Remote Prompt] ${prompt.replace(/\s+/g, " ").slice(0, 72) || "Uploaded file"}`,
+                body: buildIssueBody(job, submitter.email),
+                ...(labels.length ? { labels } : {})
+            })
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            return json({
+                error: "GitHub issue creation failed.",
+                detail: payload.message || "Unknown GitHub API error."
+            }, 502);
+        }
+        issue = payload;
+    }
+
+    const approvalResult = job.approval_required
+        ? await createPendingApproval(context, job, {
+            submitter: submitter.email,
+            issueNumber: issue?.number || null,
+            issueUrl: issue?.html_url || ""
+        })
+        : {};
+
+    if (!issue && !approvalResult.configured) {
         return json({
-            error: "Queue backend is not configured. Set COMMAND_QUEUE_REPO and GITHUB_TOKEN in Cloudflare Pages.",
+            error: "Queue backend is not configured. Set MOBILE_AUTH_KV or COMMAND_QUEUE_REPO and GITHUB_TOKEN in Cloudflare Pages.",
             jobId: job.job_id,
             promptHash: job.prompt_hash
         }, 503);
-    }
-
-    const labels = env.ENABLE_COMMAND_LABELS === "true"
-        ? [
-            "remote-command",
-            `remote-${job.action_class}`,
-            job.approval_required ? "approval-required" : "approval-not-required",
-            `risk-${job.risk_level}`
-        ]
-        : [];
-
-    const response = await fetch(`https://api.github.com/repos/${queueRepo}/issues`, {
-        method: "POST",
-        headers: {
-            "accept": "application/vnd.github+json",
-            "authorization": `Bearer ${env.GITHUB_TOKEN}`,
-            "content-type": "application/json",
-            "user-agent": "cartdotcom-remote-command-inbox",
-            "x-github-api-version": "2022-11-28"
-        },
-        body: JSON.stringify({
-            title: `[Remote Prompt] ${prompt.replace(/\s+/g, " ").slice(0, 72) || "Uploaded file"}`,
-            body: buildIssueBody(job, submitter.email),
-            ...(labels.length ? { labels } : {})
-        })
-    });
-
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-        return json({
-            error: "GitHub issue creation failed.",
-            detail: payload.message || "Unknown GitHub API error."
-        }, 502);
     }
 
     return json({
         ok: true,
         jobId: job.job_id,
         promptHash: job.prompt_hash,
-        issueNumber: payload.number,
-        issueUrl: payload.html_url,
+        queueBackend: issue ? "github_issue" : "mobile_auth_kv",
+        issueNumber: issue?.number || null,
+        issueUrl: issue?.html_url || "",
         approvalRequired: job.approval_required,
-        ...(job.approval_required
-            ? await createPendingApproval(context, job, {
-                submitter: submitter.email,
-                issueNumber: payload.number,
-                issueUrl: payload.html_url
-            })
-            : {})
+        ...approvalResult
     });
 }

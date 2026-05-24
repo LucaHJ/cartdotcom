@@ -7,8 +7,8 @@ The intended flow is:
 1. User opens the protected prompting page.
 2. User enters a prompt and optional uploads.
 3. `/api/commands` validates the request.
-4. The function creates a GitHub Issue as the queue item.
-5. High-risk jobs are written to the mobile approval queue.
+4. The function creates a mobile approval queue item in `MOBILE_AUTH_KV`.
+5. If `COMMAND_QUEUE_REPO` and `GITHUB_TOKEN` are configured, the function also creates a GitHub Issue.
 6. The phone approves or rejects the job with a passkey.
 7. Local Codex later processes approved jobs under WAR ROOM rules.
 
@@ -55,14 +55,21 @@ then the request reached the Pages Function without usable Cloudflare Access ide
 Set these in the Cloudflare Pages project:
 
 ```text
-COMMAND_QUEUE_REPO=LucaHJ/cartdotcom
-GITHUB_TOKEN=<fine-grained token with Issues: Read and write on COMMAND_QUEUE_REPO>
 ALLOWED_ACCESS_EMAILS=<comma-separated allowed Cloudflare Access emails>
 WEBAUTHN_RP_ID=cartdotcom.com
 WEBAUTHN_ORIGIN=https://cartdotcom.com
 ```
 
 Do not put these values in the repository.
+
+Optional GitHub Issue mirror:
+
+```text
+COMMAND_QUEUE_REPO=LucaHJ/cartdotcom
+GITHUB_TOKEN=<fine-grained token with Issues: Read and write on COMMAND_QUEUE_REPO>
+```
+
+The queue works without GitHub when `MOBILE_AUTH_KV` is bound. GitHub Issues are an audit/mirror channel, not the only queue backend.
 
 ## Required KV Binding
 
@@ -83,7 +90,8 @@ This stores passkey metadata, short-lived WebAuthn challenges, and pending appro
 - Prompts with likely secrets are rejected.
 - The server recomputes the prompt hash and rejects mismatches.
 - The browser cannot set action class, approval gate, target, result channel, or permission level.
-- Jobs are queued as GitHub Issues; Codex app-server is not exposed.
+- Jobs are queued in Cloudflare KV for mobile approval; Codex app-server is not exposed.
+- GitHub Issues are created only when the optional GitHub queue variables are configured.
 - Passkey approval requires WebAuthn user verification.
 - Approval challenges are bound to job id, prompt hash, action class, target, approval gate, and decision.
 
