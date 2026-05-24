@@ -221,6 +221,13 @@ textarea {
     align-items: center;
 }
 
+.youtube-shell {
+    max-width: 980px;
+    min-height: calc(100vh - 92px);
+    display: grid;
+    align-items: center;
+}
+
 .login-shell {
     max-width: 540px;
     min-height: calc(100vh - 92px);
@@ -288,6 +295,89 @@ textarea {
     grid-template-columns: auto auto minmax(0, 1fr);
     gap: 10px;
     align-items: center;
+}
+
+.youtube-panel {
+    display: grid;
+    gap: 18px;
+}
+
+.youtube-form {
+    display: grid;
+    gap: 10px;
+}
+
+.youtube-url-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+}
+
+.youtube-url-input {
+    min-height: 46px;
+    border-radius: 8px;
+    font-size: 17px;
+}
+
+.youtube-jobs-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+}
+
+.youtube-jobs-head h2 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.youtube-job-list {
+    display: grid;
+    gap: 10px;
+}
+
+.youtube-job {
+    display: grid;
+    gap: 5px;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+}
+
+.youtube-job:first-child {
+    border-top: 0;
+    padding-top: 0;
+}
+
+.youtube-job div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+    justify-content: space-between;
+}
+
+.youtube-job strong {
+    color: var(--ink-strong);
+    font-size: 15px;
+}
+
+.youtube-job span {
+    color: var(--accent-strong);
+    font-size: 12px;
+    font-weight: 750;
+    text-transform: uppercase;
+}
+
+.youtube-job a,
+.youtube-job small {
+    overflow-wrap: anywhere;
+}
+
+.youtube-job small {
+    color: var(--muted);
 }
 
 .upload-button {
@@ -1745,6 +1835,7 @@ body.brain-minimal {
     .action-row,
     .approval-actions,
     .composer-actions,
+    .youtube-url-row,
     .option-row {
         align-items: stretch;
         display: flex;

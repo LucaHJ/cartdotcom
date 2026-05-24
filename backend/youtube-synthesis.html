@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>YouTube Synthesis Intake</title>
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-youtube">
+</head>
+<body>
+    <header class="topbar">
+        <div>
+            <p class="eyebrow">cartdotcom control surface</p>
+            <h1>YouTube Synthesis Intake</h1>
+        </div>
+        <nav class="topnav" aria-label="Main navigation">
+            <a href="/home.html">Home</a>
+            <a href="/backend/dashboard.html">Dashboard</a>
+            <a href="/backend/prompting.html">Prompting</a>
+            <a href="/backend/second-brain.html">Second Brain</a>
+            <a href="/mobile-approval.html">Mobile Approval</a>
+            <button class="nav-button" id="logoutButton" type="button">Logout</button>
+        </nav>
+    </header>
+
+    <main class="shell youtube-shell">
+        <section class="composer-panel youtube-panel" aria-label="YouTube synthesis intake">
+            <form id="youtubeForm" class="youtube-form">
+                <label class="composer-label" for="youtubeUrl">YouTube URL</label>
+                <div class="youtube-url-row">
+                    <input id="youtubeUrl" class="youtube-url-input" type="url" inputmode="url" autocomplete="off" placeholder="https://www.youtube.com/watch?v=..." required>
+                    <button id="submitYoutube" type="submit">Queue</button>
+                </div>
+                <p id="submitStatus" class="copy-status" aria-live="polite"></p>
+            </form>
+
+            <div class="youtube-jobs-head">
+                <h2>Recent Jobs</h2>
+                <button class="icon-button refresh-button" id="refreshJobs" type="button" aria-label="Refresh jobs" title="Refresh jobs">
+                    <svg aria-hidden="true" viewBox="0 0 24 24">
+                        <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path>
+                        <path d="M3 21v-5h5"></path>
+                        <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"></path>
+                        <path d="M21 3v5h-5"></path>
+                    </svg>
+                </button>
+            </div>
+            <div id="jobList" class="youtube-job-list" aria-live="polite"></div>
+        </section>
+    </main>
+
+    <script>
+        const form = document.getElementById("youtubeForm");
+        const youtubeUrl = document.getElementById("youtubeUrl");
+        const submitButton = document.getElementById("submitYoutube");
+        const submitStatus = document.getElementById("submitStatus");
+        const jobList = document.getElementById("jobList");
+        const refreshJobs = document.getElementById("refreshJobs");
+
+        function escapeHtml(value) {
+            return String(value || "").replace(/[&<>"']/g, (char) => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#039;"
+            }[char]));
+        }
+
+        function formatDate(value) {
+            if (!value) return "";
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+        }
+
+        async function api(path, options = {}) {
+            const response = await fetch(path, {
+                credentials: "same-origin",
+                ...options,
+                headers: {
+                    accept: "application/json",
+                    "Content-Type": "application/json",
+                    ...(options.headers || {})
+                }
+            });
+            const contentType = response.headers.get("content-type") || "";
+            const payload = contentType.includes("application/json") ? await response.json().catch(() => ({})) : {};
+            if (!contentType.includes("application/json")) {
+                throw new Error("Backend login required");
+            }
+            if (!response.ok || payload.error) {
+                throw new Error(payload.error || "Request failed");
+            }
+            return payload;
+        }
+
+        function renderJobs(jobs) {
+            if (!jobs.length) {
+                jobList.innerHTML = "<p class='empty'>No YouTube synthesis jobs yet.</p>";
+                return;
+            }
+
+            jobList.innerHTML = jobs.map((job) => `
+                <article class="youtube-job">
+                    <div>
+                        <strong>${escapeHtml(job.jobId)}</strong>
+                        <span>${escapeHtml(job.status || "queued")}</span>
+                    </div>
+                    <a href="${escapeHtml(job.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(job.videoId || job.url)}</a>
+                    <small>${escapeHtml(formatDate(job.createdAt))}${job.note ? " - " + escapeHtml(job.note) : ""}</small>
+                </article>
+            `).join("");
+        }
+
+        async function loadJobs() {
+            jobList.innerHTML = "<p class='empty'>Loading</p>";
+            try {
+                const payload = await api("/api/backend/youtube-synthesis");
+                renderJobs(payload.jobs || []);
+            } catch (error) {
+                jobList.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const url = youtubeUrl.value.trim();
+            if (!url) {
+                submitStatus.textContent = "URL required";
+                return;
+            }
+
+            submitButton.disabled = true;
+            submitStatus.textContent = "Queueing";
+            try {
+                const payload = await api("/api/backend/youtube-synthesis", {
+                    method: "POST",
+                    body: JSON.stringify({ url })
+                });
+                submitStatus.textContent = `Queued ${payload.jobId}`;
+                youtubeUrl.value = "";
+                await loadJobs();
+            } catch (error) {
+                submitStatus.textContent = error.message;
+            } finally {
+                submitButton.disabled = false;
+            }
+        });
+
+        refreshJobs.addEventListener("click", loadJobs);
+        document.getElementById("logoutButton").addEventListener("click", async () => {
+            await fetch("/api/auth/logout", { method: "POST" });
+            window.location.href = "/login.html";
+        });
+
+        loadJobs();
+    </script>
+</body>
+</html>

@@ -11,12 +11,16 @@ const BACKEND_STATIC_PATHS = new Set([
     "/backend/prompting.html",
     "/backend/second-brain",
     "/backend/second-brain.html",
+    "/backend/youtube-synthesis",
+    "/backend/youtube-synthesis.html",
     "/dashboard",
     "/dashboard.html",
     "/prompting",
     "/prompting.html",
     "/second-brain",
-    "/second-brain.html"
+    "/second-brain.html",
+    "/youtube-synthesis",
+    "/youtube-synthesis.html"
 ]);
 const REDIRECTS = new Map([
     ["/dashboard", "/backend/dashboard.html"],
@@ -24,7 +28,9 @@ const REDIRECTS = new Map([
     ["/prompting", "/backend/prompting.html"],
     ["/prompting.html", "/backend/prompting.html"],
     ["/second-brain", "/backend/second-brain.html"],
-    ["/second-brain.html", "/backend/second-brain.html"]
+    ["/second-brain.html", "/backend/second-brain.html"],
+    ["/youtube-synthesis", "/backend/youtube-synthesis.html"],
+    ["/youtube-synthesis.html", "/backend/youtube-synthesis.html"]
 ]);
 const MOBILE_ACCESS_PATHS = new Set(["/mobile-approval", "/mobile-approval.html"]);
 
