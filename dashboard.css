@@ -109,7 +109,7 @@ textarea {
 
 .status-strip {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 10px;
     margin-bottom: 12px;
 }
@@ -164,6 +164,11 @@ textarea {
 .panel h2 {
     margin: 3px 0 0;
     font-size: 22px;
+}
+
+.panel h3 {
+    margin: 0 0 10px;
+    font-size: 18px;
 }
 
 .text-button {
@@ -296,6 +301,42 @@ label {
     grid-template-columns: 1fr;
 }
 
+.remote-panel {
+    grid-column: 1 / -1;
+}
+
+.remote-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 0.7fr);
+    gap: 12px;
+}
+
+.remote-form {
+    min-width: 0;
+}
+
+.remote-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.remote-summary span {
+    border: 2px solid var(--line);
+    background: var(--accent-soft);
+    padding: 7px 9px;
+    font-size: 12px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.remote-queue {
+    border-left: 2px solid var(--line);
+    padding-left: 12px;
+    min-width: 0;
+}
+
 .stack-list {
     display: grid;
     gap: 8px;
@@ -337,9 +378,46 @@ label {
     border-left: 8px solid var(--done);
 }
 
+.command-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 58px 58px 42px;
+    gap: 8px;
+    align-items: center;
+    border: 2px solid var(--line);
+    background: #ffffff;
+    padding: 8px;
+}
+
+.command-row.low {
+    border-left: 8px solid var(--done);
+}
+
+.command-row.medium {
+    border-left: 8px solid var(--accent);
+}
+
+.command-row.high,
+.command-row.critical {
+    border-left: 8px solid var(--warning);
+}
+
+.command-row span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.command-row small,
+.command-row em {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 11px;
+    font-style: normal;
+}
+
 .runbook-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 10px;
 }
 
@@ -394,14 +472,23 @@ label {
     .status-strip,
     .dashboard-grid,
     .form-grid,
-    .runbook-grid {
+    .runbook-grid,
+    .remote-layout {
         grid-template-columns: 1fr;
     }
 
     .inline-form,
     .source-form,
-    .list-row {
+    .list-row,
+    .command-row {
         grid-template-columns: 1fr;
+    }
+
+    .remote-queue {
+        border-left: 0;
+        border-top: 2px solid var(--line);
+        padding-left: 0;
+        padding-top: 12px;
     }
 }
 
