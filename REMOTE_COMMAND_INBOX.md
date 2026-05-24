@@ -1,10 +1,10 @@
 # Remote Command Inbox Setup
 
-This site includes a remote command inbox UI and a Cloudflare Pages Function at `/api/commands`.
+This site includes a remote command inbox UI on `prompting.html` and a Cloudflare Pages Function at `/api/commands`.
 
 The intended flow is:
 
-1. User opens the protected dashboard.
+1. User opens the protected prompting page.
 2. User submits a structured Codex job.
 3. `/api/commands` validates the request.
 4. The function creates a GitHub Issue as the queue item.

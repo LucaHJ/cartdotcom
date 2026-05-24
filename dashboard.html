@@ -14,6 +14,7 @@
         </div>
         <nav class="topnav" aria-label="Main navigation">
             <a href="home.html">Home</a>
+            <a href="prompting.html">Prompting</a>
             <a href="https://github.com/LucaHJ/cartdotcom">GitHub</a>
         </nav>
     </header>
@@ -36,100 +37,13 @@
                 <small>open checks</small>
             </article>
             <article class="metric">
-                <span class="metric-label">Prompt Mode</span>
-                <strong id="modeReadout">Ingest</strong>
-                <small>Codex only</small>
-            </article>
-            <article class="metric">
-                <span class="metric-label">Remote Inbox</span>
+                <span class="metric-label">Remote Drafts</span>
                 <strong id="remoteJobCount">0</strong>
-                <small>local drafts</small>
+                <small>on prompting page</small>
             </article>
         </section>
 
         <section class="dashboard-grid">
-            <article class="panel prompt-panel">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">second brain prompting</p>
-                        <h2>Codex Prompt Builder</h2>
-                    </div>
-                    <button class="text-button" id="resetPrompt" type="button">Reset</button>
-                </div>
-
-                <div class="form-grid">
-                    <label>
-                        Mode
-                        <select id="promptMode">
-                            <option value="ingest">Ingest raw source</option>
-                            <option value="second-brain-addition">Second-brain addition</option>
-                            <option value="query">Query wiki</option>
-                            <option value="lint">Lint wiki</option>
-                            <option value="handoff">Agent handoff</option>
-                            <option value="project-review">Project review</option>
-                        </select>
-                    </label>
-                    <label>
-                        Project or area
-                        <input id="projectName" type="text" value="WAR ROOM" autocomplete="off">
-                    </label>
-                    <label>
-                        Source path, URL, or topic
-                        <input id="sourceRef" type="text" placeholder="Vault/raw/... or topic to query" autocomplete="off">
-                    </label>
-                    <label>
-                        Output format
-                        <select id="outputFormat">
-                            <option value="wiki update">Wiki update</option>
-                            <option value="briefing">Briefing</option>
-                            <option value="task list">Task list</option>
-                            <option value="decision record">Decision record</option>
-                            <option value="review findings">Review findings</option>
-                        </select>
-                    </label>
-                </div>
-
-                <label class="wide-label">
-                    Objective
-                    <textarea id="objective" rows="5" placeholder="Describe what Codex should accomplish."></textarea>
-                </label>
-
-                <label class="wide-label">
-                    Success criteria
-                    <textarea id="successCriteria" rows="4" placeholder="List the conditions that prove the goal has been reached."></textarea>
-                </label>
-
-                <div class="option-row">
-                    <label class="check-control">
-                        <input id="requireSources" type="checkbox" checked>
-                        Require source provenance
-                    </label>
-                    <label class="check-control">
-                        <input id="updateIndex" type="checkbox" checked>
-                        Update index and log
-                    </label>
-                    <label class="check-control">
-                        <input id="flagContradictions" type="checkbox" checked>
-                        Flag contradictions
-                    </label>
-                    <label class="check-control">
-                        <input id="iterateUntilDone" type="checkbox" checked>
-                        Test and iterate
-                    </label>
-                </div>
-
-                <label class="wide-label">
-                    Generated Codex prompt
-                    <textarea id="generatedPrompt" rows="10" readonly></textarea>
-                </label>
-
-                <div class="action-row">
-                    <button id="copyPrompt" type="button">Copy prompt</button>
-                    <button id="savePrompt" type="button">Save to prompt history</button>
-                    <span id="copyStatus" class="copy-status" aria-live="polite"></span>
-                </div>
-            </article>
-
             <aside class="panel map-panel">
                 <div class="panel-head">
                     <div>
@@ -169,84 +83,27 @@
                 </div>
             </aside>
 
-            <section class="panel remote-panel">
+            <section class="panel">
                 <div class="panel-head">
                     <div>
-                        <p class="eyebrow">remote command inbox</p>
-                        <h2>Submit A Codex Job</h2>
+                        <p class="eyebrow">prompt operations</p>
+                        <h2>Prompting Surface</h2>
                     </div>
-                    <button class="text-button" id="clearCommands" type="button">Clear local drafts</button>
+                    <a class="text-button" href="prompting.html">Open</a>
                 </div>
-
-                <div class="remote-layout">
-                    <form class="remote-form" id="commandForm">
-                        <div class="form-grid">
-                            <label>
-                                Action class
-                                <select id="commandMode">
-                                    <option value="small_note">Small note</option>
-                                    <option value="wiki_research">Wiki research</option>
-                                    <option value="repo_edit">Repo edit</option>
-                                    <option value="agent_rule_change">Agent rule change</option>
-                                    <option value="deploy">Deploy or publish</option>
-                                    <option value="general">General task</option>
-                                </select>
-                            </label>
-                            <label>
-                                Target
-                                <input id="commandTarget" type="text" value="WAR ROOM" autocomplete="off">
-                            </label>
-                            <label>
-                                Approval level
-                                <select id="approvalLevel">
-                                    <option value="auto">Auto from action class</option>
-                                    <option value="capture_only">Capture only</option>
-                                    <option value="research_only">Research only</option>
-                                    <option value="draft_changes">Draft changes</option>
-                                    <option value="run_local_codex">Run local Codex</option>
-                                    <option value="push_or_pr">Push or PR</option>
-                                    <option value="deploy">Deploy</option>
-                                </select>
-                            </label>
-                            <label>
-                                Result channel
-                                <select id="resultChannel">
-                                    <option value="github_issue">GitHub issue comment</option>
-                                    <option value="pull_request">Pull request</option>
-                                    <option value="dashboard_status">Dashboard status</option>
-                                    <option value="war_room_note">WAR ROOM note</option>
-                                </select>
-                            </label>
-                        </div>
-
-                        <label class="wide-label">
-                            Remote prompt
-                            <textarea id="commandPrompt" rows="5" placeholder="Submit the exact prompt Codex should receive after queue and approval checks."></textarea>
-                        </label>
-
-                        <label class="wide-label">
-                            Success criteria
-                            <textarea id="commandCriteria" rows="3" placeholder="What must be true before this job is done?"></textarea>
-                        </label>
-
-                        <div class="remote-summary" id="commandSummary" aria-live="polite">
-                            <span>Risk: low</span>
-                            <span>Approval: capture only</span>
-                            <span>Hash: waiting for prompt</span>
-                        </div>
-
-                        <div class="action-row">
-                            <button id="saveCommandDraft" type="button">Save local draft</button>
-                            <button id="submitCommand" type="submit">Submit to queue</button>
-                            <button id="copyCommandJson" type="button">Copy job JSON</button>
-                            <span id="commandStatus" class="copy-status" aria-live="polite"></span>
-                        </div>
-                    </form>
-
-                    <div class="remote-queue">
-                        <h3>Local Job Drafts</h3>
-                        <div id="commandList" class="stack-list" aria-live="polite"></div>
-                    </div>
+                <div class="link-grid">
+                    <a class="link-card" href="prompting.html">
+                        <span>Codex prompts</span>
+                        <small>Build wiki, repo, handoff, and review prompts.</small>
+                    </a>
+                    <a class="link-card" href="prompting.html#remote-command-inbox">
+                        <span>Remote inbox</span>
+                        <small>Submit queue jobs with action class and approval metadata.</small>
+                    </a>
+                    <a class="link-card" href="prompting.html#prompt-history">
+                        <span>Prompt history</span>
+                        <small>Reuse saved local prompt drafts.</small>
+                    </a>
                 </div>
             </section>
 
@@ -300,40 +157,30 @@
                         <p class="eyebrow">repeatable prompts</p>
                         <h2>Codex Runbooks</h2>
                     </div>
+                    <a class="text-button" href="prompting.html">Use prompts</a>
                 </div>
                 <div class="runbook-grid">
-                    <button class="runbook-card" data-template="ingest" type="button">
+                    <a class="runbook-card" href="prompting.html?template=ingest">
                         <span>Ingest</span>
                         <small>Capture source, update wiki, index, and log.</small>
-                    </button>
-                    <button class="runbook-card" data-template="second-brain-addition" type="button">
+                    </a>
+                    <a class="runbook-card" href="prompting.html?template=second-brain-addition">
                         <span>Add to brain</span>
                         <small>Research and write the wiki page before implementation.</small>
-                    </button>
-                    <button class="runbook-card" data-template="query" type="button">
+                    </a>
+                    <a class="runbook-card" href="prompting.html?template=query">
                         <span>Query</span>
                         <small>Answer from index and wiki before raw files.</small>
-                    </button>
-                    <button class="runbook-card" data-template="lint" type="button">
+                    </a>
+                    <a class="runbook-card" href="prompting.html?template=lint">
                         <span>Lint</span>
                         <small>Check links, provenance, orphans, stale claims.</small>
-                    </button>
-                    <button class="runbook-card" data-template="handoff" type="button">
+                    </a>
+                    <a class="runbook-card" href="prompting.html?template=handoff">
                         <span>Handoff</span>
                         <small>Summarize current state for the next agent.</small>
-                    </button>
+                    </a>
                 </div>
-            </section>
-
-            <section class="panel history-panel">
-                <div class="panel-head">
-                    <div>
-                        <p class="eyebrow">local memory</p>
-                        <h2>Prompt History</h2>
-                    </div>
-                    <button class="text-button" id="clearHistory" type="button">Clear</button>
-                </div>
-                <div id="promptHistory" class="history-list"></div>
             </section>
         </section>
     </main>
@@ -342,7 +189,6 @@
         const storageKeys = {
             tasks: "cartdotcom.agentTasks",
             sources: "cartdotcom.rawSources",
-            history: "cartdotcom.promptHistory",
             commands: "cartdotcom.remoteCommands"
         };
 
@@ -357,7 +203,6 @@
                 { title: "Karpathy LLM Wiki", url: "Vault/raw/articles/2026-04-04-karpathy-llm-wiki.md", type: "article", status: "ingested" },
                 { title: "AI second brain Instagram video", url: "Vault/raw/videos/2026-05-24-raycfu-ai-second-brain-instagram.md", type: "video", status: "ingested" }
             ],
-            history: [],
             commands: []
         };
 
@@ -387,146 +232,7 @@
 
         let tasks = load("tasks");
         let sources = load("sources");
-        let history = load("history");
-        let commands = load("commands");
-
-        const mode = document.getElementById("promptMode");
-        const projectName = document.getElementById("projectName");
-        const sourceRef = document.getElementById("sourceRef");
-        const outputFormat = document.getElementById("outputFormat");
-        const objective = document.getElementById("objective");
-        const successCriteria = document.getElementById("successCriteria");
-        const requireSources = document.getElementById("requireSources");
-        const updateIndex = document.getElementById("updateIndex");
-        const flagContradictions = document.getElementById("flagContradictions");
-        const iterateUntilDone = document.getElementById("iterateUntilDone");
-        const generatedPrompt = document.getElementById("generatedPrompt");
-        const copyStatus = document.getElementById("copyStatus");
-        const commandMode = document.getElementById("commandMode");
-        const commandTarget = document.getElementById("commandTarget");
-        const approvalLevel = document.getElementById("approvalLevel");
-        const resultChannel = document.getElementById("resultChannel");
-        const commandPrompt = document.getElementById("commandPrompt");
-        const commandCriteria = document.getElementById("commandCriteria");
-        const commandSummary = document.getElementById("commandSummary");
-        const commandStatus = document.getElementById("commandStatus");
-
-        const actionPolicy = {
-            small_note: { risk: "low", approval: "capture_only", requiresApproval: false },
-            wiki_research: { risk: "medium", approval: "research_only", requiresApproval: false },
-            repo_edit: { risk: "high", approval: "run_local_codex", requiresApproval: true },
-            agent_rule_change: { risk: "high", approval: "draft_changes", requiresApproval: true },
-            deploy: { risk: "critical", approval: "deploy", requiresApproval: true },
-            general: { risk: "medium", approval: "draft_changes", requiresApproval: true }
-        };
-
-        function makeId(prefix) {
-            if (window.crypto && window.crypto.randomUUID) {
-                return prefix + "_" + window.crypto.randomUUID().slice(0, 8);
-            }
-            return prefix + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-        }
-
-        async function sha256(value) {
-            const text = String(value || "");
-            if (!text) return "";
-            if (window.crypto && window.crypto.subtle) {
-                const data = new TextEncoder().encode(text);
-                const digest = await window.crypto.subtle.digest("SHA-256", data);
-                return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, "0")).join("");
-            }
-            let hash = 0;
-            for (let index = 0; index < text.length; index += 1) {
-                hash = ((hash << 5) - hash) + text.charCodeAt(index);
-                hash |= 0;
-            }
-            return "local-" + Math.abs(hash).toString(16);
-        }
-
-        function getCommandPolicy() {
-            const policy = actionPolicy[commandMode.value] || actionPolicy.general;
-            return {
-                risk: policy.risk,
-                approval: approvalLevel.value === "auto" ? policy.approval : approvalLevel.value,
-                requiresApproval: policy.requiresApproval || ["run_local_codex", "push_or_pr", "deploy"].includes(approvalLevel.value)
-            };
-        }
-
-        async function buildCommandJob(status) {
-            const prompt = commandPrompt.value.trim();
-            const criteria = commandCriteria.value.trim() || "Infer practical success criteria, state them briefly, then test and iterate until they pass or document the blocker.";
-            const policy = getCommandPolicy();
-            return {
-                job_id: makeId("cmd"),
-                submitted_at: new Date().toISOString(),
-                submitted_by: "cartdotcom-dashboard",
-                action_class: commandMode.value,
-                target: commandTarget.value.trim() || "WAR ROOM",
-                prompt,
-                prompt_hash: await sha256(prompt),
-                success_criteria: criteria,
-                risk_level: policy.risk,
-                approval_level: policy.approval,
-                approval_required: policy.requiresApproval,
-                result_channel: resultChannel.value,
-                status
-            };
-        }
-
-        async function updateCommandSummary() {
-            const promptHash = await sha256(commandPrompt.value.trim());
-            const policy = getCommandPolicy();
-            commandSummary.innerHTML = `
-                <span>Risk: ${escapeHtml(policy.risk)}</span>
-                <span>Approval: ${escapeHtml(policy.approval.replaceAll("_", " "))}</span>
-                <span>Hash: ${promptHash ? escapeHtml(promptHash.slice(0, 14)) : "waiting for prompt"}</span>
-            `;
-        }
-
-        function buildPrompt() {
-            const selectedMode = mode.value;
-            const label = mode.options[mode.selectedIndex].text;
-            const provenance = requireSources.checked ? "Require local source provenance and cite relevant files or URLs." : "Use available context, but provenance is optional.";
-            const indexRule = updateIndex.checked ? "If wiki files change, update Vault/wiki/index.md and append to Vault/wiki/log.md." : "Do not update index or log unless necessary.";
-            const contradictionRule = flagContradictions.checked ? "Flag contradictions, stale claims, and weak evidence explicitly." : "Focus on the requested output.";
-            const iterationRule = iterateUntilDone.checked ? "Test the result against the success criteria and iterate until the criteria pass. If they cannot pass, document the unmet criteria, blocker, and next action." : "Report any verification performed.";
-            const criteria = successCriteria.value.trim() || "Infer practical success criteria from the objective, state them briefly, then verify against them.";
-
-            const modeInstructions = {
-                ingest: "Ingest the source into the Codex-maintained LLM Wiki. Preserve raw sources, create or update a source summary, update relevant concepts/entities/synthesis pages, then report what changed.",
-                "second-brain-addition": "Use the Second-Brain Feature Addition Protocol. First research the topic, capture sources, develop or update the wiki page, update index and log, and verify links/provenance. Do not implement into rules, templates, dashboards, or code unless the user explicitly requested implementation.",
-                query: "Answer from Vault/wiki/index.md and relevant wiki pages first. Fall back to Vault/raw only if the wiki is insufficient or verification matters.",
-                lint: "Lint the wiki for broken links, missing provenance, orphan pages, stale claims, missing source summaries, and missing log entries. Fix mechanical issues directly.",
-                handoff: "Create an agent handoff with current objective, current state, changed files, decisions made, blockers, and next action.",
-                "project-review": "Review the project as a senior engineer. Prioritize bugs, risks, behavioral regressions, missing tests, and missing operational notes."
-            };
-
-            return [
-                "Mode: " + label,
-                "Project or area: " + (projectName.value.trim() || "WAR ROOM"),
-                "Source path, URL, or topic: " + (sourceRef.value.trim() || "not specified"),
-                "Output format: " + outputFormat.value,
-                "",
-                "Objective:",
-                objective.value.trim() || "Use the WAR ROOM agent rules to perform the selected workflow.",
-                "",
-                "Success criteria:",
-                criteria,
-                "",
-                "Instructions:",
-                modeInstructions[selectedMode],
-                provenance,
-                indexRule,
-                contradictionRule,
-                iterationRule,
-                "Keep the result concise, actionable, and compatible with the Codex-native WAR ROOM system. Do not set up Claude."
-            ].join("\n");
-        }
-
-        function updatePrompt() {
-            generatedPrompt.value = buildPrompt();
-            document.getElementById("modeReadout").textContent = mode.options[mode.selectedIndex].text.split(" ")[0];
-        }
+        const commands = load("commands");
 
         function renderTasks() {
             const list = document.getElementById("taskList");
@@ -586,86 +292,15 @@
                     updateStats();
                 });
                 row.querySelector("button").addEventListener("click", () => {
-                    mode.value = "ingest";
-                    sourceRef.value = source.url;
-                    objective.value = "Ingest " + source.title + " into the Codex-maintained second brain.";
-                    updatePrompt();
+                    const params = new URLSearchParams({
+                        template: "ingest",
+                        source: source.url,
+                        objective: "Ingest " + source.title + " into the Codex-maintained second brain."
+                    });
+                    window.location.href = "prompting.html?" + params.toString();
                 });
                 list.appendChild(row);
             });
-        }
-
-        function renderHistory() {
-            const target = document.getElementById("promptHistory");
-            target.innerHTML = "";
-            if (!history.length) {
-                target.innerHTML = "<p class='empty'>No saved prompts yet.</p>";
-                return;
-            }
-            history.slice().reverse().forEach((item) => {
-                const card = document.createElement("button");
-                card.className = "history-card";
-                card.type = "button";
-                card.innerHTML = `<strong>${escapeHtml(item.mode)}</strong><small>${escapeHtml(item.date)}</small><span>${escapeHtml(item.preview)}</span>`;
-                card.addEventListener("click", () => {
-                    generatedPrompt.value = item.prompt;
-                });
-                target.appendChild(card);
-            });
-        }
-
-        function renderCommands() {
-            const list = document.getElementById("commandList");
-            list.innerHTML = "";
-            if (!commands.length) {
-                list.innerHTML = "<p class='empty'>No local command drafts yet.</p>";
-                return;
-            }
-            commands.slice().reverse().forEach((command) => {
-                const row = document.createElement("div");
-                row.className = "command-row " + command.risk_level;
-                row.innerHTML = `
-                    <span>
-                        <strong>${escapeHtml(command.action_class.replaceAll("_", " "))}</strong>
-                        <small>${escapeHtml(command.target)} - ${escapeHtml(command.status)} - ${escapeHtml(command.approval_level.replaceAll("_", " "))}</small>
-                        <em>${escapeHtml(command.prompt.slice(0, 120) || "No prompt text")}</em>
-                    </span>
-                    <button type="button" data-action="use">use</button>
-                    <button type="button" data-action="copy">copy</button>
-                    <button type="button" data-action="remove">x</button>
-                `;
-                row.querySelector('[data-action="use"]').addEventListener("click", () => {
-                    commandMode.value = command.action_class;
-                    commandTarget.value = command.target;
-                    approvalLevel.value = command.approval_level;
-                    resultChannel.value = command.result_channel;
-                    commandPrompt.value = command.prompt;
-                    commandCriteria.value = command.success_criteria;
-                    updateCommandSummary();
-                });
-                row.querySelector('[data-action="copy"]').addEventListener("click", async () => {
-                    await navigator.clipboard.writeText(JSON.stringify(command, null, 2));
-                    commandStatus.textContent = "Copied job JSON";
-                    setTimeout(() => commandStatus.textContent = "", 1800);
-                });
-                row.querySelector('[data-action="remove"]').addEventListener("click", () => {
-                    commands = commands.filter(item => item.job_id !== command.job_id);
-                    save("commands", commands);
-                    renderCommands();
-                    updateStats();
-                });
-                list.appendChild(row);
-            });
-        }
-
-        async function saveCommand(status, extra, baseJob) {
-            const job = Object.assign({}, baseJob || await buildCommandJob(status), { status }, extra || {});
-            commands.push(job);
-            commands = commands.slice(-12);
-            save("commands", commands);
-            renderCommands();
-            updateStats();
-            return job;
         }
 
         function updateStats() {
@@ -699,30 +334,6 @@
             updateStats();
         });
 
-        document.getElementById("copyPrompt").addEventListener("click", async () => {
-            try {
-                await navigator.clipboard.writeText(generatedPrompt.value);
-                copyStatus.textContent = "Copied";
-            } catch (error) {
-                generatedPrompt.select();
-                document.execCommand("copy");
-                copyStatus.textContent = "Copied";
-            }
-            setTimeout(() => copyStatus.textContent = "", 1800);
-        });
-
-        document.getElementById("savePrompt").addEventListener("click", () => {
-            history.push({
-                mode: mode.options[mode.selectedIndex].text,
-                date: new Date().toLocaleString(),
-                prompt: generatedPrompt.value,
-                preview: generatedPrompt.value.split("\n").slice(0, 2).join(" - ")
-            });
-            history = history.slice(-8);
-            save("history", history);
-            renderHistory();
-        });
-
         document.getElementById("clearDone").addEventListener("click", () => {
             tasks = tasks.filter(task => task.status !== "done");
             save("tasks", tasks);
@@ -737,135 +348,8 @@
             updateStats();
         });
 
-        document.getElementById("clearHistory").addEventListener("click", () => {
-            history = [];
-            save("history", history);
-            renderHistory();
-        });
-
-        document.getElementById("clearCommands").addEventListener("click", () => {
-            commands = [];
-            save("commands", commands);
-            renderCommands();
-            updateStats();
-        });
-
-        document.getElementById("saveCommandDraft").addEventListener("click", async () => {
-            if (!commandPrompt.value.trim()) {
-                commandStatus.textContent = "Prompt required";
-                return;
-            }
-            await saveCommand("local_draft");
-            commandStatus.textContent = "Saved local draft";
-            setTimeout(() => commandStatus.textContent = "", 1800);
-        });
-
-        document.getElementById("copyCommandJson").addEventListener("click", async () => {
-            if (!commandPrompt.value.trim()) {
-                commandStatus.textContent = "Prompt required";
-                return;
-            }
-            const job = await buildCommandJob("preview");
-            await navigator.clipboard.writeText(JSON.stringify(job, null, 2));
-            commandStatus.textContent = "Copied job JSON";
-            setTimeout(() => commandStatus.textContent = "", 1800);
-        });
-
-        document.getElementById("commandForm").addEventListener("submit", async (event) => {
-            event.preventDefault();
-            if (!commandPrompt.value.trim()) {
-                commandStatus.textContent = "Prompt required";
-                return;
-            }
-            const submitButton = document.getElementById("submitCommand");
-            submitButton.disabled = true;
-            commandStatus.textContent = "Submitting";
-            const job = await buildCommandJob("submitted");
-            if (window.location.protocol === "file:") {
-                await saveCommand("local_draft", { backend_message: "Open through the deployed site to submit to the queue." }, job);
-                commandStatus.textContent = "Saved locally; backend unavailable from file";
-                submitButton.disabled = false;
-                return;
-            }
-            try {
-                const response = await fetch("/api/commands", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "X-Command-Client": "cartdotcom-dashboard"
-                    },
-                    body: JSON.stringify(job)
-                });
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok) {
-                    await saveCommand("local_draft", { backend_status: response.status, backend_message: payload.error || "Queue backend rejected the job." }, job);
-                    commandStatus.textContent = payload.error || "Saved locally; queue unavailable";
-                } else {
-                    await saveCommand("queued", { queue_url: payload.issueUrl || "", queue_id: payload.issueNumber || payload.jobId || "" }, job);
-                    commandStatus.textContent = "Submitted to queue";
-                }
-            } catch (error) {
-                await saveCommand("local_draft", { backend_message: "Network error while submitting." }, job);
-                commandStatus.textContent = "Saved locally; network error";
-            } finally {
-                submitButton.disabled = false;
-                setTimeout(() => commandStatus.textContent = "", 2600);
-            }
-        });
-
-        document.getElementById("resetPrompt").addEventListener("click", () => {
-            mode.value = "ingest";
-            projectName.value = "WAR ROOM";
-            sourceRef.value = "";
-            outputFormat.value = "wiki update";
-            objective.value = "";
-            successCriteria.value = "";
-            requireSources.checked = true;
-            updateIndex.checked = true;
-            flagContradictions.checked = true;
-            iterateUntilDone.checked = true;
-            updatePrompt();
-        });
-
-        document.querySelectorAll(".runbook-card").forEach((button) => {
-            button.addEventListener("click", () => {
-                mode.value = button.dataset.template;
-                const objectives = {
-                    ingest: "Process the selected raw source into the Codex-maintained wiki.",
-                    "second-brain-addition": "Add this topic to the second brain by researching it and developing the wiki page first.",
-                    query: "Answer this question using the wiki first and raw sources only when needed.",
-                    lint: "Run a wiki maintenance pass and fix mechanical issues.",
-                    handoff: "Prepare a concise handoff for the next Codex agent."
-                };
-                const criteria = {
-                    ingest: "Raw source is captured, source summary exists, related pages are updated, index and log are current, and links resolve.",
-                    "second-brain-addition": "Research is captured, the wiki page is created or updated, source summary exists when needed, index and log are current, links resolve, and no implementation happens unless explicitly requested.",
-                    query: "Answer resolves the question, cites relevant wiki or raw source pages, and captures durable synthesis when useful.",
-                    lint: "Mechanical issues are fixed, unresolved judgment calls are documented, and index/log are updated if changes occur.",
-                    handoff: "Handoff includes objective, state, changed files, decisions, blockers, and next action."
-                };
-                objective.value = objectives[button.dataset.template];
-                successCriteria.value = criteria[button.dataset.template];
-                updatePrompt();
-            });
-        });
-
-        [mode, projectName, sourceRef, outputFormat, objective, successCriteria, requireSources, updateIndex, flagContradictions, iterateUntilDone].forEach((element) => {
-            element.addEventListener("input", updatePrompt);
-            element.addEventListener("change", updatePrompt);
-        });
-
-        [commandMode, commandTarget, approvalLevel, resultChannel, commandPrompt, commandCriteria].forEach((element) => {
-            element.addEventListener("input", updateCommandSummary);
-            element.addEventListener("change", updateCommandSummary);
-        });
-
         renderTasks();
         renderSources();
-        renderHistory();
-        renderCommands();
-        updatePrompt();
-        updateCommandSummary();
         updateStats();
     </script>
 </body>

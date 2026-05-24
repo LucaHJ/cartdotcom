@@ -109,7 +109,7 @@ textarea {
 
 .status-strip {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
     gap: 10px;
     margin-bottom: 12px;
 }
@@ -142,6 +142,11 @@ textarea {
 .dashboard-grid {
     display: grid;
     grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+    gap: 12px;
+}
+
+.prompting-grid {
+    display: grid;
     gap: 12px;
 }
 
@@ -178,6 +183,29 @@ textarea {
     background: transparent;
     color: var(--accent);
     font-weight: bold;
+}
+
+.link-grid {
+    display: grid;
+    gap: 10px;
+}
+
+.link-card {
+    display: grid;
+    gap: 6px;
+    border: 2px solid var(--line);
+    background: #ffffff;
+    padding: 12px;
+}
+
+.link-card span {
+    font-size: 19px;
+    font-weight: bold;
+}
+
+.link-card small {
+    color: var(--muted);
+    line-height: 1.35;
 }
 
 .form-grid {
@@ -427,6 +455,9 @@ label {
     text-align: left;
     padding: 12px;
     min-height: 124px;
+    border: 2px solid var(--line);
+    background: #ffffff;
+    color: var(--ink);
 }
 
 .runbook-card span {
@@ -471,6 +502,7 @@ label {
 
     .status-strip,
     .dashboard-grid,
+    .prompting-grid,
     .form-grid,
     .runbook-grid,
     .remote-layout {
