@@ -22,6 +22,33 @@ Recommended Access policy:
 - Require MFA/passkey through the identity provider.
 - Use a short session duration for `/api/commands`.
 
+Recommended protected paths in one Access self-hosted application:
+
+```text
+cartdotcom.com/dashboard*
+cartdotcom.com/prompting*
+cartdotcom.com/mobile-approval*
+cartdotcom.com/api/commands
+cartdotcom.com/api/mobile/*
+```
+
+Use one Access application for these paths when possible so the browser page and API requests share the same Access session. Cloudflare Access path wildcards can protect specific paths without making the whole public site private.
+
+## Troubleshooting Access Identity
+
+If passkey registration shows:
+
+```text
+Cloudflare Access identity is missing.
+```
+
+then the request reached the Pages Function without the `cf-access-authenticated-user-email` identity header. Check:
+
+1. `https://cartdotcom.com/mobile-approval` should trigger Cloudflare Access login when opened in a private browser.
+2. `/api/mobile/*` must be protected by the same Access application as `mobile-approval*`, or by an application that issues a valid Access session for API fetches.
+3. The policy must allow the email listed in `ALLOWED_ACCESS_EMAILS`.
+4. After changing Access paths, reload the phone page from a fresh authenticated session and try Register passkey again.
+
 ## Required Pages Environment Variables
 
 Set these in the Cloudflare Pages project:

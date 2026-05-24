@@ -156,6 +156,14 @@
             return payload;
         }
 
+        function friendlyErrorMessage(error) {
+            const message = error && error.message ? error.message : String(error || "Request failed");
+            if (message.includes("Cloudflare Access identity is missing") || message.includes("Cloudflare Access authentication is required")) {
+                return "Cloudflare Access session missing. Sign in through the protected Mobile Approval page; if this keeps happening, mobile-approval and /api/mobile/* must be in the same Access app.";
+            }
+            return message;
+        }
+
         async function registerPasskey() {
             const status = document.getElementById("setupStatus");
             status.textContent = "Starting";
@@ -170,7 +178,7 @@
                 status.textContent = verified.verified ? "Registered" : "Registration failed";
                 await loadApprovals();
             } catch (error) {
-                status.textContent = error.message;
+                status.textContent = friendlyErrorMessage(error);
             }
         }
 
@@ -245,7 +253,7 @@
                 renderApprovals(payload);
                 if (!status.textContent) status.textContent = "Loaded";
             } catch (error) {
-                document.getElementById("approvalList").innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+                document.getElementById("approvalList").innerHTML = `<p class="empty">${escapeHtml(friendlyErrorMessage(error))}</p>`;
                 document.getElementById("passkeyStatus").textContent = "Blocked";
             }
         }
@@ -270,7 +278,7 @@
                 status.textContent = verified.verified ? `${decision}d` : "Not verified";
                 await loadApprovals();
             } catch (error) {
-                status.textContent = error.message;
+                status.textContent = friendlyErrorMessage(error);
             }
         }
 

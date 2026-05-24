@@ -6,6 +6,11 @@ import {
 } from "@simplewebauthn/server";
 
 const EMAIL_HEADER = "cf-access-authenticated-user-email";
+const ACCESS_IDENTITY_MISSING_ERROR = [
+    "Cloudflare Access identity is missing.",
+    "Protect mobile-approval.html and /api/mobile/* in the same Cloudflare Access application,",
+    "then reload after signing in."
+].join(" ");
 const KEY_PREFIX = "mobile-auth";
 
 export function json(data, status = 200) {
@@ -55,7 +60,7 @@ export function getKV(env) {
 export function getActor(request, env) {
     const email = normalizeString(request.headers.get(EMAIL_HEADER), 320).toLowerCase();
     if (!email) {
-        return { ok: false, error: "Cloudflare Access authentication is required." };
+        return { ok: false, error: ACCESS_IDENTITY_MISSING_ERROR };
     }
 
     const allowList = normalizeString(env.ALLOWED_ACCESS_EMAILS, 4000)

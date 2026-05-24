@@ -9,6 +9,12 @@ const REMOTE_PROMPT_POLICY = {
     resultChannel: "github_issue"
 };
 
+const ACCESS_IDENTITY_MISSING_ERROR = [
+    "Cloudflare Access identity is missing.",
+    "Protect prompting.html and /api/commands in the same Cloudflare Access application,",
+    "then reload after signing in."
+].join(" ");
+
 const SECRET_PATTERNS = [
     /api[_-]?key\s*[:=]\s*\S+/i,
     /secret\s*[:=]\s*\S+/i,
@@ -158,7 +164,7 @@ export async function onRequestPost(context) {
 
     const submitter = isAllowedSubmitter(request, env);
     if (!submitter.ok) {
-        return json({ error: "Cloudflare Access authentication is required before remote command submission." }, 401);
+        return json({ error: ACCESS_IDENTITY_MISSING_ERROR }, 401);
     }
 
     let input;
