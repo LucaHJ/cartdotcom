@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Mobile Approval</title>
-    <link rel="stylesheet" href="dashboard.css?v=20260524-fixed">
+    <link rel="stylesheet" href="dashboard.css?v=20260525-icons">
 </head>
 <body>
     <header class="topbar">
@@ -40,7 +40,14 @@
                         <p class="eyebrow">setup</p>
                         <h2>Register This Phone</h2>
                     </div>
-                    <button class="text-button" id="refreshApprovals" type="button">Refresh</button>
+                    <button class="icon-button refresh-button" id="refreshApprovals" type="button" aria-label="Refresh approvals" title="Refresh approvals">
+                        <svg aria-hidden="true" viewBox="0 0 24 24">
+                            <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path>
+                            <path d="M3 21v-5h5"></path>
+                            <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"></path>
+                            <path d="M21 3v5h-5"></path>
+                        </svg>
+                    </button>
                 </div>
                 <div class="approval-actions">
                     <button id="registerPasskey" type="button">Register passkey</button>

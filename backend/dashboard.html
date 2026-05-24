@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Small Notes</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-small-notes">
-    <link rel="stylesheet" href="/dashboard-small-notes.css?v=20260525">
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-icons">
+    <link rel="stylesheet" href="/dashboard-small-notes.css?v=20260525-icons">
 </head>
 <body class="small-notes-dashboard">
     <header class="topbar notes-topbar">
@@ -14,7 +14,14 @@
             <a href="/backend/prompting.html">Prompting</a>
             <a href="/backend/second-brain.html">Second Brain</a>
             <a href="/mobile-approval.html">Mobile Approval</a>
-            <button class="nav-button" id="refreshNotes" type="button">Refresh</button>
+            <button class="icon-button refresh-button" id="refreshNotes" type="button" aria-label="Refresh notes" title="Refresh notes">
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path>
+                    <path d="M3 21v-5h5"></path>
+                    <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"></path>
+                    <path d="M21 3v5h-5"></path>
+                </svg>
+            </button>
             <button class="nav-button" id="logoutButton" type="button">Logout</button>
         </nav>
     </header>

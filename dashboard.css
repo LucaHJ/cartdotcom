@@ -897,10 +897,12 @@ body.brain-minimal {
     place-items: center;
     width: 34px;
     height: 34px;
+    min-height: 34px;
     border: 1px solid rgba(156, 163, 175, 0.28);
     border-radius: 50%;
     background: transparent;
     color: var(--muted);
+    padding: 0;
 }
 
 .icon-button:hover,
@@ -924,9 +926,11 @@ body.brain-minimal {
     place-items: center;
     width: 34px;
     height: 34px;
+    min-height: 34px;
     border: 1px solid rgba(156, 163, 175, 0.28);
     border-radius: 50%;
     color: var(--muted);
+    padding: 0;
 }
 
 .brain-minimal .icon-button:hover,
@@ -1519,7 +1523,7 @@ body.brain-minimal {
         flex-wrap: nowrap;
     }
 
-    .graph-actions button {
+    .graph-actions button:not(.icon-button) {
         padding: 6px 8px;
     }
 
