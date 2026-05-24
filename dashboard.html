@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Agent Maintenance Dashboard</title>
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+    <header class="topbar">
+        <div>
+            <p class="eyebrow">cartdotcom control surface</p>
+            <h1>Agent Maintenance Dashboard</h1>
+        </div>
+        <nav class="topnav" aria-label="Main navigation">
+            <a href="home.html">Home</a>
+            <a href="https://github.com/LucaHJ/cartdotcom">GitHub</a>
+        </nav>
+    </header>
+
+    <main class="shell">
+        <section class="status-strip" aria-label="System status">
+            <article class="metric">
+                <span class="metric-label">Wiki Layer</span>
+                <strong id="wikiHealth">Ready</strong>
+                <small>index, log, schema</small>
+            </article>
+            <article class="metric">
+                <span class="metric-label">Raw Queue</span>
+                <strong id="rawCount">0</strong>
+                <small>sources waiting</small>
+            </article>
+            <article class="metric">
+                <span class="metric-label">Agent Tasks</span>
+                <strong id="openTaskCount">0</strong>
+                <small>open checks</small>
+            </article>
+            <article class="metric">
+                <span class="metric-label">Prompt Mode</span>
+                <strong id="modeReadout">Ingest</strong>
+                <small>Codex only</small>
+            </article>
+        </section>
+
+        <section class="dashboard-grid">
+            <article class="panel prompt-panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">second brain prompting</p>
+                        <h2>Codex Prompt Builder</h2>
+                    </div>
+                    <button class="text-button" id="resetPrompt" type="button">Reset</button>
+                </div>
+
+                <div class="form-grid">
+                    <label>
+                        Mode
+                        <select id="promptMode">
+                            <option value="ingest">Ingest raw source</option>
+                            <option value="query">Query wiki</option>
+                            <option value="lint">Lint wiki</option>
+                            <option value="handoff">Agent handoff</option>
+                            <option value="project-review">Project review</option>
+                        </select>
+                    </label>
+                    <label>
+                        Project or area
+                        <input id="projectName" type="text" value="WAR ROOM" autocomplete="off">
+                    </label>
+                    <label>
+                        Source path, URL, or topic
+                        <input id="sourceRef" type="text" placeholder="Vault/raw/... or topic to query" autocomplete="off">
+                    </label>
+                    <label>
+                        Output format
+                        <select id="outputFormat">
+                            <option value="wiki update">Wiki update</option>
+                            <option value="briefing">Briefing</option>
+                            <option value="task list">Task list</option>
+                            <option value="decision record">Decision record</option>
+                            <option value="review findings">Review findings</option>
+                        </select>
+                    </label>
+                </div>
+
+                <label class="wide-label">
+                    Objective
+                    <textarea id="objective" rows="5" placeholder="Describe what Codex should accomplish."></textarea>
+                </label>
+
+                <label class="wide-label">
+                    Success criteria
+                    <textarea id="successCriteria" rows="4" placeholder="List the conditions that prove the goal has been reached."></textarea>
+                </label>
+
+                <div class="option-row">
+                    <label class="check-control">
+                        <input id="requireSources" type="checkbox" checked>
+                        Require source provenance
+                    </label>
+                    <label class="check-control">
+                        <input id="updateIndex" type="checkbox" checked>
+                        Update index and log
+                    </label>
+                    <label class="check-control">
+                        <input id="flagContradictions" type="checkbox" checked>
+                        Flag contradictions
+                    </label>
+                    <label class="check-control">
+                        <input id="iterateUntilDone" type="checkbox" checked>
+                        Test and iterate
+                    </label>
+                </div>
+
+                <label class="wide-label">
+                    Generated Codex prompt
+                    <textarea id="generatedPrompt" rows="10" readonly></textarea>
+                </label>
+
+                <div class="action-row">
+                    <button id="copyPrompt" type="button">Copy prompt</button>
+                    <button id="savePrompt" type="button">Save to prompt history</button>
+                    <span id="copyStatus" class="copy-status" aria-live="polite"></span>
+                </div>
+            </article>
+
+            <aside class="panel map-panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">operating model</p>
+                        <h2>Raw To Wiki Flow</h2>
+                    </div>
+                </div>
+                <svg class="flow-map" viewBox="0 0 520 300" role="img" aria-label="Raw source to wiki workflow">
+                    <defs>
+                        <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                            <path d="M0,0 L0,6 L7,3 z"></path>
+                        </marker>
+                    </defs>
+                    <rect class="node" x="20" y="35" width="125" height="58" rx="4"></rect>
+                    <text x="82" y="62">raw</text>
+                    <text x="82" y="82">sources</text>
+                    <rect class="node" x="198" y="35" width="125" height="58" rx="4"></rect>
+                    <text x="260" y="62">source</text>
+                    <text x="260" y="82">summary</text>
+                    <rect class="node" x="374" y="35" width="125" height="58" rx="4"></rect>
+                    <text x="436" y="62">concepts</text>
+                    <text x="436" y="82">entities</text>
+                    <rect class="node accent" x="198" y="180" width="125" height="58" rx="4"></rect>
+                    <text x="260" y="207">index</text>
+                    <text x="260" y="227">and log</text>
+                    <rect class="node" x="374" y="180" width="125" height="58" rx="4"></rect>
+                    <text x="436" y="207">project</text>
+                    <text x="436" y="227">actions</text>
+                    <line class="edge" x1="145" y1="64" x2="198" y2="64"></line>
+                    <line class="edge" x1="323" y1="64" x2="374" y2="64"></line>
+                    <line class="edge" x1="260" y1="93" x2="260" y2="180"></line>
+                    <line class="edge" x1="323" y1="209" x2="374" y2="209"></line>
+                </svg>
+                <div class="flow-notes">
+                    <p><strong>Rule:</strong> raw files are evidence. Wiki pages are maintained by Codex.</p>
+                    <p><strong>Every ingest:</strong> update source summary, concepts, entities, index, and log.</p>
+                </div>
+            </aside>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">agent maintenance</p>
+                        <h2>Maintenance Board</h2>
+                    </div>
+                    <button class="text-button" id="clearDone" type="button">Clear done</button>
+                </div>
+                <form class="inline-form" id="taskForm">
+                    <input id="taskText" type="text" placeholder="Add maintenance task" autocomplete="off">
+                    <select id="taskStatus" aria-label="Task status">
+                        <option value="todo">todo</option>
+                        <option value="doing">doing</option>
+                        <option value="blocked">blocked</option>
+                        <option value="done">done</option>
+                    </select>
+                    <button type="submit">Add</button>
+                </form>
+                <div id="taskList" class="stack-list" aria-live="polite"></div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">source capture</p>
+                        <h2>Raw Source Queue</h2>
+                    </div>
+                    <button class="text-button" id="clearSources" type="button">Clear ingested</button>
+                </div>
+                <form class="source-form" id="sourceForm">
+                    <input id="sourceTitle" type="text" placeholder="Source title" autocomplete="off">
+                    <input id="sourceUrl" type="text" placeholder="URL or local path" autocomplete="off">
+                    <select id="sourceType" aria-label="Source type">
+                        <option value="article">article</option>
+                        <option value="video">video</option>
+                        <option value="book">book</option>
+                        <option value="podcast">podcast</option>
+                        <option value="note">note</option>
+                    </select>
+                    <button type="submit">Queue</button>
+                </form>
+                <div id="sourceList" class="stack-list" aria-live="polite"></div>
+            </section>
+
+            <section class="panel runbooks">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">repeatable prompts</p>
+                        <h2>Codex Runbooks</h2>
+                    </div>
+                </div>
+                <div class="runbook-grid">
+                    <button class="runbook-card" data-template="ingest" type="button">
+                        <span>Ingest</span>
+                        <small>Capture source, update wiki, index, and log.</small>
+                    </button>
+                    <button class="runbook-card" data-template="query" type="button">
+                        <span>Query</span>
+                        <small>Answer from index and wiki before raw files.</small>
+                    </button>
+                    <button class="runbook-card" data-template="lint" type="button">
+                        <span>Lint</span>
+                        <small>Check links, provenance, orphans, stale claims.</small>
+                    </button>
+                    <button class="runbook-card" data-template="handoff" type="button">
+                        <span>Handoff</span>
+                        <small>Summarize current state for the next agent.</small>
+                    </button>
+                </div>
+            </section>
+
+            <section class="panel history-panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">local memory</p>
+                        <h2>Prompt History</h2>
+                    </div>
+                    <button class="text-button" id="clearHistory" type="button">Clear</button>
+                </div>
+                <div id="promptHistory" class="history-list"></div>
+            </section>
+        </section>
+    </main>
+
+    <script>
+        const storageKeys = {
+            tasks: "cartdotcom.agentTasks",
+            sources: "cartdotcom.rawSources",
+            history: "cartdotcom.promptHistory"
+        };
+
+        const defaults = {
+            tasks: [
+                { text: "Run weekly wiki lint", status: "todo" },
+                { text: "Review raw source queue", status: "todo" },
+                { text: "Update project registry after meaningful work", status: "todo" },
+                { text: "Flag contradictions instead of smoothing them over", status: "doing" }
+            ],
+            sources: [
+                { title: "Karpathy LLM Wiki", url: "Vault/raw/articles/2026-04-04-karpathy-llm-wiki.md", type: "article", status: "ingested" },
+                { title: "AI second brain Instagram video", url: "Vault/raw/videos/2026-05-24-raycfu-ai-second-brain-instagram.md", type: "video", status: "ingested" }
+            ],
+            history: []
+        };
+
+        function load(key) {
+            const saved = localStorage.getItem(storageKeys[key]);
+            if (!saved) return defaults[key];
+            try {
+                return JSON.parse(saved);
+            } catch (error) {
+                return defaults[key];
+            }
+        }
+
+        function save(key, value) {
+            localStorage.setItem(storageKeys[key], JSON.stringify(value));
+        }
+
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, (char) => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#039;"
+            }[char]));
+        }
+
+        let tasks = load("tasks");
+        let sources = load("sources");
+        let history = load("history");
+
+        const mode = document.getElementById("promptMode");
+        const projectName = document.getElementById("projectName");
+        const sourceRef = document.getElementById("sourceRef");
+        const outputFormat = document.getElementById("outputFormat");
+        const objective = document.getElementById("objective");
+        const successCriteria = document.getElementById("successCriteria");
+        const requireSources = document.getElementById("requireSources");
+        const updateIndex = document.getElementById("updateIndex");
+        const flagContradictions = document.getElementById("flagContradictions");
+        const iterateUntilDone = document.getElementById("iterateUntilDone");
+        const generatedPrompt = document.getElementById("generatedPrompt");
+        const copyStatus = document.getElementById("copyStatus");
+
+        function buildPrompt() {
+            const selectedMode = mode.value;
+            const label = mode.options[mode.selectedIndex].text;
+            const provenance = requireSources.checked ? "Require local source provenance and cite relevant files or URLs." : "Use available context, but provenance is optional.";
+            const indexRule = updateIndex.checked ? "If wiki files change, update Vault/wiki/index.md and append to Vault/wiki/log.md." : "Do not update index or log unless necessary.";
+            const contradictionRule = flagContradictions.checked ? "Flag contradictions, stale claims, and weak evidence explicitly." : "Focus on the requested output.";
+            const iterationRule = iterateUntilDone.checked ? "Test the result against the success criteria and iterate until the criteria pass. If they cannot pass, document the unmet criteria, blocker, and next action." : "Report any verification performed.";
+            const criteria = successCriteria.value.trim() || "Infer practical success criteria from the objective, state them briefly, then verify against them.";
+
+            const modeInstructions = {
+                ingest: "Ingest the source into the Codex-maintained LLM Wiki. Preserve raw sources, create or update a source summary, update relevant concepts/entities/synthesis pages, then report what changed.",
+                query: "Answer from Vault/wiki/index.md and relevant wiki pages first. Fall back to Vault/raw only if the wiki is insufficient or verification matters.",
+                lint: "Lint the wiki for broken links, missing provenance, orphan pages, stale claims, missing source summaries, and missing log entries. Fix mechanical issues directly.",
+                handoff: "Create an agent handoff with current objective, current state, changed files, decisions made, blockers, and next action.",
+                "project-review": "Review the project as a senior engineer. Prioritize bugs, risks, behavioral regressions, missing tests, and missing operational notes."
+            };
+
+            return [
+                "Mode: " + label,
+                "Project or area: " + (projectName.value.trim() || "WAR ROOM"),
+                "Source path, URL, or topic: " + (sourceRef.value.trim() || "not specified"),
+                "Output format: " + outputFormat.value,
+                "",
+                "Objective:",
+                objective.value.trim() || "Use the WAR ROOM agent rules to perform the selected workflow.",
+                "",
+                "Success criteria:",
+                criteria,
+                "",
+                "Instructions:",
+                modeInstructions[selectedMode],
+                provenance,
+                indexRule,
+                contradictionRule,
+                iterationRule,
+                "Keep the result concise, actionable, and compatible with the Codex-native WAR ROOM system. Do not set up Claude."
+            ].join("\n");
+        }
+
+        function updatePrompt() {
+            generatedPrompt.value = buildPrompt();
+            document.getElementById("modeReadout").textContent = mode.options[mode.selectedIndex].text.split(" ")[0];
+        }
+
+        function renderTasks() {
+            const list = document.getElementById("taskList");
+            list.innerHTML = "";
+            tasks.forEach((task, index) => {
+                const row = document.createElement("div");
+                row.className = "list-row " + task.status;
+                row.innerHTML = `
+                    <span>${escapeHtml(task.text)}</span>
+                    <select aria-label="Update task status">
+                        <option value="todo">todo</option>
+                        <option value="doing">doing</option>
+                        <option value="blocked">blocked</option>
+                        <option value="done">done</option>
+                    </select>
+                    <button type="button" aria-label="Remove task">x</button>
+                `;
+                const select = row.querySelector("select");
+                select.value = task.status;
+                select.addEventListener("change", () => {
+                    tasks[index].status = select.value;
+                    save("tasks", tasks);
+                    renderTasks();
+                    updateStats();
+                });
+                row.querySelector("button").addEventListener("click", () => {
+                    tasks.splice(index, 1);
+                    save("tasks", tasks);
+                    renderTasks();
+                    updateStats();
+                });
+                list.appendChild(row);
+            });
+        }
+
+        function renderSources() {
+            const list = document.getElementById("sourceList");
+            list.innerHTML = "";
+            sources.forEach((source, index) => {
+                const row = document.createElement("div");
+                row.className = "list-row " + source.status;
+                row.innerHTML = `
+                    <span><strong>${escapeHtml(source.title)}</strong><small>${escapeHtml(source.type)} - ${escapeHtml(source.url)}</small></span>
+                    <select aria-label="Update source status">
+                        <option value="queued">queued</option>
+                        <option value="captured">captured</option>
+                        <option value="ingested">ingested</option>
+                    </select>
+                    <button type="button" aria-label="Use source">use</button>
+                `;
+                const select = row.querySelector("select");
+                select.value = source.status;
+                select.addEventListener("change", () => {
+                    sources[index].status = select.value;
+                    save("sources", sources);
+                    renderSources();
+                    updateStats();
+                });
+                row.querySelector("button").addEventListener("click", () => {
+                    mode.value = "ingest";
+                    sourceRef.value = source.url;
+                    objective.value = "Ingest " + source.title + " into the Codex-maintained second brain.";
+                    updatePrompt();
+                });
+                list.appendChild(row);
+            });
+        }
+
+        function renderHistory() {
+            const target = document.getElementById("promptHistory");
+            target.innerHTML = "";
+            if (!history.length) {
+                target.innerHTML = "<p class='empty'>No saved prompts yet.</p>";
+                return;
+            }
+            history.slice().reverse().forEach((item) => {
+                const card = document.createElement("button");
+                card.className = "history-card";
+                card.type = "button";
+                card.innerHTML = `<strong>${escapeHtml(item.mode)}</strong><small>${escapeHtml(item.date)}</small><span>${escapeHtml(item.preview)}</span>`;
+                card.addEventListener("click", () => {
+                    generatedPrompt.value = item.prompt;
+                });
+                target.appendChild(card);
+            });
+        }
+
+        function updateStats() {
+            document.getElementById("openTaskCount").textContent = tasks.filter(task => task.status !== "done").length;
+            document.getElementById("rawCount").textContent = sources.filter(source => source.status !== "ingested").length;
+            document.getElementById("wikiHealth").textContent = tasks.some(task => task.status === "blocked") ? "Blocked" : "Ready";
+        }
+
+        document.getElementById("taskForm").addEventListener("submit", (event) => {
+            event.preventDefault();
+            const text = document.getElementById("taskText").value.trim();
+            if (!text) return;
+            tasks.push({ text, status: document.getElementById("taskStatus").value });
+            document.getElementById("taskText").value = "";
+            save("tasks", tasks);
+            renderTasks();
+            updateStats();
+        });
+
+        document.getElementById("sourceForm").addEventListener("submit", (event) => {
+            event.preventDefault();
+            const title = document.getElementById("sourceTitle").value.trim();
+            const url = document.getElementById("sourceUrl").value.trim();
+            if (!title || !url) return;
+            sources.push({ title, url, type: document.getElementById("sourceType").value, status: "queued" });
+            document.getElementById("sourceTitle").value = "";
+            document.getElementById("sourceUrl").value = "";
+            save("sources", sources);
+            renderSources();
+            updateStats();
+        });
+
+        document.getElementById("copyPrompt").addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText(generatedPrompt.value);
+                copyStatus.textContent = "Copied";
+            } catch (error) {
+                generatedPrompt.select();
+                document.execCommand("copy");
+                copyStatus.textContent = "Copied";
+            }
+            setTimeout(() => copyStatus.textContent = "", 1800);
+        });
+
+        document.getElementById("savePrompt").addEventListener("click", () => {
+            history.push({
+                mode: mode.options[mode.selectedIndex].text,
+                date: new Date().toLocaleString(),
+                prompt: generatedPrompt.value,
+                preview: generatedPrompt.value.split("\n").slice(0, 2).join(" - ")
+            });
+            history = history.slice(-8);
+            save("history", history);
+            renderHistory();
+        });
+
+        document.getElementById("clearDone").addEventListener("click", () => {
+            tasks = tasks.filter(task => task.status !== "done");
+            save("tasks", tasks);
+            renderTasks();
+            updateStats();
+        });
+
+        document.getElementById("clearSources").addEventListener("click", () => {
+            sources = sources.filter(source => source.status !== "ingested");
+            save("sources", sources);
+            renderSources();
+            updateStats();
+        });
+
+        document.getElementById("clearHistory").addEventListener("click", () => {
+            history = [];
+            save("history", history);
+            renderHistory();
+        });
+
+        document.getElementById("resetPrompt").addEventListener("click", () => {
+            mode.value = "ingest";
+            projectName.value = "WAR ROOM";
+            sourceRef.value = "";
+            outputFormat.value = "wiki update";
+            objective.value = "";
+            successCriteria.value = "";
+            requireSources.checked = true;
+            updateIndex.checked = true;
+            flagContradictions.checked = true;
+            iterateUntilDone.checked = true;
+            updatePrompt();
+        });
+
+        document.querySelectorAll(".runbook-card").forEach((button) => {
+            button.addEventListener("click", () => {
+                mode.value = button.dataset.template;
+                const objectives = {
+                    ingest: "Process the selected raw source into the Codex-maintained wiki.",
+                    query: "Answer this question using the wiki first and raw sources only when needed.",
+                    lint: "Run a wiki maintenance pass and fix mechanical issues.",
+                    handoff: "Prepare a concise handoff for the next Codex agent."
+                };
+                const criteria = {
+                    ingest: "Raw source is captured, source summary exists, related pages are updated, index and log are current, and links resolve.",
+                    query: "Answer resolves the question, cites relevant wiki or raw source pages, and captures durable synthesis when useful.",
+                    lint: "Mechanical issues are fixed, unresolved judgment calls are documented, and index/log are updated if changes occur.",
+                    handoff: "Handoff includes objective, state, changed files, decisions, blockers, and next action."
+                };
+                objective.value = objectives[button.dataset.template];
+                successCriteria.value = criteria[button.dataset.template];
+                updatePrompt();
+            });
+        });
+
+        [mode, projectName, sourceRef, outputFormat, objective, successCriteria, requireSources, updateIndex, flagContradictions, iterateUntilDone].forEach((element) => {
+            element.addEventListener("input", updatePrompt);
+            element.addEventListener("change", updatePrompt);
+        });
+
+        renderTasks();
+        renderSources();
+        renderHistory();
+        updatePrompt();
+        updateStats();
+    </script>
+</body>
+</html>
