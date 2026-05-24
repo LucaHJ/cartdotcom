@@ -328,6 +328,25 @@ async function postGitHubComment(env, approval, decision, actorEmail) {
     });
 }
 
+async function sendApprovalNotification(env, approval, decision, actorEmail) {
+    if (decision !== "approve" || !env.APPROVED_PROMPT_QUEUE?.send) return;
+    try {
+        await env.APPROVED_PROMPT_QUEUE.send({
+            type: "mobile_approval",
+            job_id: approval.job_id,
+            status: "approved",
+            actor: actorEmail,
+            prompt_hash: approval.prompt_hash,
+            action_class: approval.action_class,
+            risk_level: approval.risk_level,
+            target: approval.target,
+            approved_at: new Date().toISOString()
+        });
+    } catch (error) {
+        console.warn("Approval notification queue send failed", error);
+    }
+}
+
 export async function verifyApproval(request, env, data = {}) {
     const kv = getKV(env);
     if (!kv) return json({ error: "MOBILE_AUTH_KV binding is required." }, 503);
@@ -399,6 +418,7 @@ export async function verifyApproval(request, env, data = {}) {
     });
     await kv.delete(`${keys(actor.email).authenticationPrefix}${jobId}`);
     await postGitHubComment(env, approval, decision, actor.email);
+    await sendApprovalNotification(env, approval, decision, actor.email);
 
     return json({
         verified: true,
