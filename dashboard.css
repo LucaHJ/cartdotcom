@@ -365,6 +365,72 @@ label {
     min-width: 0;
 }
 
+.approval-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.approval-actions button {
+    padding: 8px 12px;
+    font-weight: bold;
+}
+
+.approval-list {
+    display: grid;
+    gap: 12px;
+}
+
+.approval-card {
+    display: grid;
+    gap: 10px;
+    border: 2px solid var(--line);
+    background: #ffffff;
+    padding: 12px;
+}
+
+.approval-card.low {
+    border-left: 8px solid var(--done);
+}
+
+.approval-card.medium {
+    border-left: 8px solid var(--accent);
+}
+
+.approval-card.high,
+.approval-card.critical {
+    border-left: 8px solid var(--warning);
+}
+
+.approval-card h2 {
+    margin: 3px 0 0;
+}
+
+.approval-card dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+}
+
+.approval-card dl div {
+    border: 2px solid var(--line);
+    padding: 8px;
+}
+
+.approval-card dt {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.approval-card dd {
+    margin: 4px 0 0;
+    overflow-wrap: anywhere;
+}
+
 .stack-list {
     display: grid;
     gap: 8px;
@@ -538,8 +604,13 @@ label {
     }
 
     .action-row,
+    .approval-actions,
     .option-row {
         align-items: stretch;
         flex-direction: column;
+    }
+
+    .approval-card dl {
+        grid-template-columns: 1fr;
     }
 }

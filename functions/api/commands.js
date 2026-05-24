@@ -1,3 +1,5 @@
+import { createPendingApproval } from "../_lib/mobile-auth.js";
+
 const ALLOWED_ACTIONS = new Set([
     "small_note",
     "wiki_research",
@@ -220,6 +222,13 @@ export async function onRequestPost(context) {
         promptHash: job.prompt_hash,
         issueNumber: payload.number,
         issueUrl: payload.html_url,
-        approvalRequired: job.approval_required
+        approvalRequired: job.approval_required,
+        ...(job.approval_required
+            ? await createPendingApproval(context, job, {
+                submitter: submitter.email,
+                issueNumber: payload.number,
+                issueUrl: payload.html_url
+            })
+            : {})
     });
 }

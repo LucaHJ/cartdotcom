@@ -15,6 +15,7 @@
         <nav class="topnav" aria-label="Main navigation">
             <a href="home.html">Home</a>
             <a href="dashboard.html">Dashboard</a>
+            <a href="mobile-approval.html">Mobile Approval</a>
             <a href="https://github.com/LucaHJ/cartdotcom">GitHub</a>
         </nav>
     </header>
@@ -581,8 +582,14 @@
                     await saveCommand("local_draft", { backend_status: response.status, backend_message: payload.error || "Queue backend rejected the job." }, job);
                     commandStatus.textContent = payload.error || "Saved locally; queue unavailable";
                 } else {
-                    await saveCommand("queued", { queue_url: payload.issueUrl || "", queue_id: payload.issueNumber || payload.jobId || "" }, job);
-                    commandStatus.textContent = "Submitted to queue";
+                    await saveCommand("queued", { queue_url: payload.issueUrl || "", queue_id: payload.issueNumber || payload.jobId || "", approval_url: payload.approvalUrl || "" }, job);
+                    if (payload.approvalRequired && payload.approvalUrl) {
+                        commandStatus.innerHTML = `Submitted; <a href="${payload.approvalUrl}">mobile approval required</a>`;
+                    } else if (payload.approvalRequired) {
+                        commandStatus.textContent = "Submitted; mobile approval not configured";
+                    } else {
+                        commandStatus.textContent = "Submitted to queue";
+                    }
                 }
             } catch (error) {
                 await saveCommand("local_draft", { backend_message: "Network error while submitting." }, job);

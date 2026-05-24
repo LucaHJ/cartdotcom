@@ -1,6 +1,6 @@
 # Remote Command Inbox Setup
 
-This site includes a remote command inbox UI on `prompting.html` and a Cloudflare Pages Function at `/api/commands`.
+This site includes a remote command inbox UI on `prompting.html`, a mobile approval UI on `mobile-approval.html`, and Cloudflare Pages Functions for queue and passkey approval.
 
 The intended flow is:
 
@@ -8,11 +8,13 @@ The intended flow is:
 2. User submits a structured Codex job.
 3. `/api/commands` validates the request.
 4. The function creates a GitHub Issue as the queue item.
-5. Local Codex later processes approved jobs under WAR ROOM rules.
+5. High-risk jobs are written to the mobile approval queue.
+6. The phone approves or rejects the job with a passkey.
+7. Local Codex later processes approved jobs under WAR ROOM rules.
 
 ## Required Cloudflare Setup
 
-Protect the dashboard and `/api/commands` path with Cloudflare Access before enabling submissions.
+Protect the dashboard, prompting page, mobile approval page, `/api/commands`, and `/api/mobile/*` paths with Cloudflare Access before enabling submissions.
 
 Recommended Access policy:
 
@@ -28,14 +30,28 @@ Set these in the Cloudflare Pages project:
 COMMAND_QUEUE_REPO=LucaHJ/cartdotcom
 GITHUB_TOKEN=<fine-grained token with Issues: Read and write on COMMAND_QUEUE_REPO>
 ALLOWED_ACCESS_EMAILS=<comma-separated allowed Cloudflare Access emails>
+WEBAUTHN_RP_ID=cartdotcom.com
+WEBAUTHN_ORIGIN=https://cartdotcom.com
 ```
 
 Do not put these values in the repository.
+
+## Required KV Binding
+
+Create a Workers KV namespace and bind it to the Pages project as:
+
+```text
+MOBILE_AUTH_KV
+```
+
+This stores passkey metadata, short-lived WebAuthn challenges, and pending approval records. Cloudflare KV is eventually consistent, which is acceptable for this first single-user approval layer because approval is not a high-frequency write path.
 
 ## Optional Development Variable
 
 ```text
 ALLOW_UNAUTHENTICATED_COMMANDS=true
+ALLOW_UNAUTHENTICATED_MOBILE_AUTH=true
+MOBILE_AUTH_DEV_EMAIL=dev@local.test
 ```
 
 Use this only for local testing. Do not set it in production.
@@ -47,6 +63,8 @@ Use this only for local testing. Do not set it in production.
 - Prompts with likely secrets are rejected.
 - The server recomputes the prompt hash and rejects mismatches.
 - Jobs are queued as GitHub Issues; Codex app-server is not exposed.
+- Passkey approval requires WebAuthn user verification.
+- Approval challenges are bound to job id, prompt hash, action class, target, approval level, and decision.
 
 Labels are disabled by default so the first submission does not fail when repository labels have not been created. Set `ENABLE_COMMAND_LABELS=true` after creating these labels:
 
@@ -66,6 +84,6 @@ risk-high
 risk-critical
 ```
 
-## Current Limitation
+## Current Mobile Approval Model
 
-The mobile Face ID approval app is not implemented yet. Until then, high-risk jobs should remain queued and be manually approved or converted into PR-only work.
+The first implementation uses WebAuthn/passkeys in the mobile browser rather than a native iOS app. On iPhone, this uses the system passkey flow with Face ID or device passcode. A native app can still be added later if APNs notifications or app-only device attestation become necessary.

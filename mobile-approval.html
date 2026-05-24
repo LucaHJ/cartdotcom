@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mobile Approval</title>
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+    <header class="topbar">
+        <div>
+            <p class="eyebrow">cartdotcom control surface</p>
+            <h1>Mobile Approval</h1>
+        </div>
+        <nav class="topnav" aria-label="Main navigation">
+            <a href="home.html">Home</a>
+            <a href="dashboard.html">Dashboard</a>
+            <a href="prompting.html">Prompting</a>
+        </nav>
+    </header>
+
+    <main class="shell">
+        <section class="status-strip" aria-label="Mobile approval status">
+            <article class="metric">
+                <span class="metric-label">Passkey</span>
+                <strong id="passkeyStatus">Unknown</strong>
+                <small id="approvalIdentity">Cloudflare Access</small>
+            </article>
+            <article class="metric">
+                <span class="metric-label">Pending</span>
+                <strong id="pendingCount">0</strong>
+                <small>approval jobs</small>
+            </article>
+        </section>
+
+        <section class="prompting-grid">
+            <section class="panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">setup</p>
+                        <h2>Register This Phone</h2>
+                    </div>
+                    <button class="text-button" id="refreshApprovals" type="button">Refresh</button>
+                </div>
+                <div class="approval-actions">
+                    <button id="registerPasskey" type="button">Register passkey</button>
+                    <span id="setupStatus" class="copy-status" aria-live="polite"></span>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">pending jobs</p>
+                        <h2>Approval Queue</h2>
+                    </div>
+                </div>
+                <div id="approvalList" class="approval-list" aria-live="polite"></div>
+            </section>
+        </section>
+    </main>
+
+    <script>
+        function base64URLToBuffer(value) {
+            const base64 = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let index = 0; index < binary.length; index += 1) {
+                bytes[index] = binary.charCodeAt(index);
+            }
+            return bytes.buffer;
+        }
+
+        function bufferToBase64URL(value) {
+            const bytes = new Uint8Array(value);
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+        }
+
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, (char) => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#039;"
+            }[char]));
+        }
+
+        function toCreationOptions(options) {
+            return {
+                ...options,
+                challenge: base64URLToBuffer(options.challenge),
+                user: {
+                    ...options.user,
+                    id: base64URLToBuffer(options.user.id)
+                },
+                excludeCredentials: (options.excludeCredentials || []).map(credential => ({
+                    ...credential,
+                    id: base64URLToBuffer(credential.id)
+                }))
+            };
+        }
+
+        function toRequestOptions(options) {
+            return {
+                ...options,
+                challenge: base64URLToBuffer(options.challenge),
+                allowCredentials: (options.allowCredentials || []).map(credential => ({
+                    ...credential,
+                    id: base64URLToBuffer(credential.id)
+                }))
+            };
+        }
+
+        function registrationResponseToJSON(credential) {
+            return {
+                id: credential.id,
+                rawId: bufferToBase64URL(credential.rawId),
+                type: credential.type,
+                authenticatorAttachment: credential.authenticatorAttachment,
+                response: {
+                    clientDataJSON: bufferToBase64URL(credential.response.clientDataJSON),
+                    attestationObject: bufferToBase64URL(credential.response.attestationObject),
+                    transports: typeof credential.response.getTransports === "function" ? credential.response.getTransports() : []
+                }
+            };
+        }
+
+        function authenticationResponseToJSON(credential) {
+            return {
+                id: credential.id,
+                rawId: bufferToBase64URL(credential.rawId),
+                type: credential.type,
+                authenticatorAttachment: credential.authenticatorAttachment,
+                response: {
+                    clientDataJSON: bufferToBase64URL(credential.response.clientDataJSON),
+                    authenticatorData: bufferToBase64URL(credential.response.authenticatorData),
+                    signature: bufferToBase64URL(credential.response.signature),
+                    userHandle: credential.response.userHandle ? bufferToBase64URL(credential.response.userHandle) : null
+                }
+            };
+        }
+
+        async function api(path, options) {
+            const response = await fetch(path, {
+                ...options,
+                headers: {
+                    "Content-Type": "application/json",
+                    ...(options && options.headers ? options.headers : {})
+                }
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload.error || "Request failed");
+            return payload;
+        }
+
+        async function registerPasskey() {
+            const status = document.getElementById("setupStatus");
+            status.textContent = "Starting";
+            try {
+                if (!window.PublicKeyCredential) throw new Error("This browser does not support passkeys.");
+                const payload = await api("/api/mobile/register/options", { method: "POST", body: "{}" });
+                const credential = await navigator.credentials.create({ publicKey: toCreationOptions(payload.options) });
+                const verified = await api("/api/mobile/register/verify", {
+                    method: "POST",
+                    body: JSON.stringify({ response: registrationResponseToJSON(credential) })
+                });
+                status.textContent = verified.verified ? "Registered" : "Registration failed";
+                await loadApprovals();
+            } catch (error) {
+                status.textContent = error.message;
+            }
+        }
+
+        function renderApprovals(payload) {
+            const list = document.getElementById("approvalList");
+            document.getElementById("approvalIdentity").textContent = payload.email || "Cloudflare Access";
+            document.getElementById("passkeyStatus").textContent = payload.registered ? "Ready" : "Setup";
+            document.getElementById("pendingCount").textContent = payload.approvals.length;
+
+            if (!payload.approvals.length) {
+                list.innerHTML = "<p class='empty'>No pending approvals.</p>";
+                return;
+            }
+
+            const targetJob = new URLSearchParams(window.location.search).get("job");
+            const approvals = targetJob
+                ? payload.approvals.filter(item => item.job_id === targetJob).concat(payload.approvals.filter(item => item.job_id !== targetJob))
+                : payload.approvals;
+
+            list.innerHTML = "";
+            approvals.forEach((approval) => {
+                const card = document.createElement("article");
+                card.className = "approval-card " + approval.risk_level;
+                card.innerHTML = `
+                    <div>
+                        <p class="eyebrow">${escapeHtml(approval.risk_level)} risk</p>
+                        <h2>${escapeHtml(approval.action_class.replaceAll("_", " "))}</h2>
+                    </div>
+                    <dl>
+                        <div><dt>Job</dt><dd>${escapeHtml(approval.job_id)}</dd></div>
+                        <div><dt>Target</dt><dd>${escapeHtml(approval.target)}</dd></div>
+                        <div><dt>Approval</dt><dd>${escapeHtml(approval.approval_level.replaceAll("_", " "))}</dd></div>
+                        <div><dt>Prompt hash</dt><dd>sha256:${escapeHtml(approval.prompt_hash)}</dd></div>
+                    </dl>
+                    <label class="wide-label">
+                        Prompt
+                        <textarea rows="5" readonly>${escapeHtml(approval.prompt)}</textarea>
+                    </label>
+                    <label class="wide-label">
+                        Success criteria
+                        <textarea rows="3" readonly>${escapeHtml(approval.success_criteria)}</textarea>
+                    </label>
+                    <div class="action-row">
+                        <button type="button" data-decision="approve">Approve with passkey</button>
+                        <button type="button" data-decision="reject">Reject with passkey</button>
+                        ${approval.issueUrl ? `<a class="text-button" href="${escapeHtml(approval.issueUrl)}">Issue</a>` : ""}
+                    </div>
+                `;
+                card.querySelectorAll("button[data-decision]").forEach((button) => {
+                    button.addEventListener("click", () => approveJob(approval.job_id, button.dataset.decision));
+                });
+                list.appendChild(card);
+            });
+        }
+
+        async function loadApprovals() {
+            const status = document.getElementById("setupStatus");
+            try {
+                const payload = await api("/api/mobile/approvals", { method: "GET" });
+                renderApprovals(payload);
+                if (!status.textContent) status.textContent = "Loaded";
+            } catch (error) {
+                document.getElementById("approvalList").innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+                document.getElementById("passkeyStatus").textContent = "Blocked";
+            }
+        }
+
+        async function approveJob(jobId, decision) {
+            const status = document.getElementById("setupStatus");
+            status.textContent = decision === "approve" ? "Approving" : "Rejecting";
+            try {
+                const payload = await api("/api/mobile/approve/options", {
+                    method: "POST",
+                    body: JSON.stringify({ job_id: jobId, decision })
+                });
+                const credential = await navigator.credentials.get({ publicKey: toRequestOptions(payload.options) });
+                const verified = await api("/api/mobile/approve/verify", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        job_id: jobId,
+                        decision,
+                        response: authenticationResponseToJSON(credential)
+                    })
+                });
+                status.textContent = verified.verified ? `${decision}d` : "Not verified";
+                await loadApprovals();
+            } catch (error) {
+                status.textContent = error.message;
+            }
+        }
+
+        document.getElementById("registerPasskey").addEventListener("click", registerPasskey);
+        document.getElementById("refreshApprovals").addEventListener("click", loadApprovals);
+        loadApprovals();
+    </script>
+</body>
+</html>
