@@ -44,6 +44,8 @@ Create a Workers KV namespace and bind it to the Pages project as:
 MOBILE_AUTH_KV
 ```
 
+This repository manages that binding through `wrangler.toml`.
+
 This stores passkey metadata, short-lived WebAuthn challenges, and pending approval records. Cloudflare KV is eventually consistent, which is acceptable for this first single-user approval layer because approval is not a high-frequency write path.
 
 ## Security Defaults

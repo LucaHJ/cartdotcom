@@ -1,0 +1,7 @@
+name = "cartdotcom"
+pages_build_output_dir = "."
+compatibility_date = "2025-03-23"
+
+[[kv_namespaces]]
+binding = "MOBILE_AUTH_KV"
+id = "7429e70431774bc283e4e56b9e837023"
