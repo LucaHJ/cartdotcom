@@ -1357,9 +1357,10 @@ body.brain-minimal {
 }
 
 .graph-edge {
-    stroke: #484b52;
-    stroke-width: 1.25;
-    opacity: 0.54;
+    stroke: var(--ink);
+    stroke-width: 2.15;
+    opacity: 0.82;
+    vector-effect: non-scaling-stroke;
 }
 
 .graph-node circle:not(.graph-hit-target) {

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-structure-graph">
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-zoom-lines">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -798,7 +798,7 @@
 
         function setGraphZoom(nextZoom, originX = null, originY = null) {
             const previousZoom = graphZoom;
-            const boundedZoom = Math.max(0.32, Math.min(3.4, nextZoom));
+            const boundedZoom = Math.max(0.06, Math.min(8, nextZoom));
             if (Math.abs(boundedZoom - previousZoom) < 0.001) return;
 
             const width = Math.max(360, Math.round(graphSvg.clientWidth || graphSvg.parentElement.clientWidth || 720));
@@ -960,7 +960,19 @@
         }
 
         function nodeScreenScale() {
-            return Math.max(0.3, Math.min(3.2, 1 / graphZoom));
+            return Math.max(0.16, Math.min(18, 1 / graphZoom));
+        }
+
+        function graphNodeRadius(node) {
+            return node.type === "root" ? 20 : node.type === "folder" ? 16 : 13;
+        }
+
+        function graphHitRadius(node) {
+            const radius = graphNodeRadius(node);
+            const expandedRadius = Math.max(24, radius + 8);
+            const compactRadius = radius + 3;
+            const overviewProgress = Math.max(0, Math.min(1, (graphZoom - 0.14) / 0.26));
+            return compactRadius + (expandedRadius - compactRadius) * overviewProgress;
         }
 
         function updateGraphNodeScales() {
@@ -970,6 +982,8 @@
                 const node = graphData.nodes.find((item) => item.id === group.dataset.nodeId);
                 if (!node) return;
                 group.setAttribute("transform", `translate(${node.x} ${node.y}) scale(${scale})`);
+                const hitTarget = group.querySelector(".graph-hit-target");
+                if (hitTarget) hitTarget.setAttribute("r", graphHitRadius(node));
             });
         }
 
@@ -1033,7 +1047,10 @@
             viewportLayer.appendChild(edgeLayer);
 
             const nodeLayer = createSvgElement("g", { class: "graph-nodes" });
-            graphData.nodes.forEach((node) => {
+            graphData.nodes.slice().sort((left, right) => {
+                const order = { root: 0, folder: 1, file: 2 };
+                return order[left.type] - order[right.type];
+            }).forEach((node) => {
                 const matches = !filter || node.type !== "file" || node.path.toLowerCase().includes(filter);
                 const focusMatches = !focusedNodeId || focusedIds.has(node.id);
                 const group = createSvgElement("g", {
@@ -1043,10 +1060,10 @@
                 });
                 group.style.cursor = "pointer";
 
-                const radius = node.type === "root" ? 20 : node.type === "folder" ? 16 : 13;
+                const radius = graphNodeRadius(node);
                 group.appendChild(createSvgElement("circle", { r: radius }));
 
-                group.appendChild(createSvgElement("circle", { class: "graph-hit-target", r: Math.max(24, radius + 8) }));
+                group.appendChild(createSvgElement("circle", { class: "graph-hit-target", r: graphHitRadius(node) }));
 
                 const title = createSvgElement("title");
                 title.textContent = node.path || "Vault";
@@ -1254,11 +1271,11 @@
         graphSvg.addEventListener("wheel", (event) => {
             event.preventDefault();
             const rect = graphSvg.getBoundingClientRect();
-            const zoomFactor = event.deltaY < 0 ? 1.13 : 0.88;
+            const zoomFactor = event.deltaY < 0 ? 1.22 : 0.74;
             setGraphZoom(graphZoom * zoomFactor, event.clientX - rect.left, event.clientY - rect.top);
         }, { passive: false });
-        zoomOutGraph.addEventListener("click", () => setGraphZoom(graphZoom * 0.82));
-        zoomInGraph.addEventListener("click", () => setGraphZoom(graphZoom * 1.22));
+        zoomOutGraph.addEventListener("click", () => setGraphZoom(graphZoom * 0.68));
+        zoomInGraph.addEventListener("click", () => setGraphZoom(graphZoom * 1.42));
         vaultTree.addEventListener("click", (event) => {
             if (event.target.closest(".tree-folder summary, .tree-file")) return;
             clearFocusAndPreview();
