@@ -1039,16 +1039,13 @@ body.brain-minimal {
 }
 
 .brain-workspace {
+    position: relative;
     display: grid;
-    grid-template-columns: minmax(260px, 20vw) minmax(420px, 1fr) minmax(340px, 33vw);
+    grid-template-columns: minmax(260px, 32vw) minmax(420px, 1fr);
     height: 100vh;
     min-height: 0;
     background: var(--bg);
     overflow: hidden;
-}
-
-.brain-workspace:not(.has-open-page) {
-    grid-template-columns: minmax(260px, 21vw) minmax(420px, 1fr);
 }
 
 .vault-tree-panel,
@@ -1370,6 +1367,14 @@ body.brain-minimal {
     height: 100%;
     display: block;
     background: var(--bg);
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+
+.graph-canvas.is-ready-to-drag,
+.graph-canvas.is-dragging {
+    cursor: grabbing;
 }
 
 .graph-edge {
@@ -1572,14 +1577,24 @@ body.brain-minimal {
 }
 
 .graph-inspector {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
+    width: min(430px, 44vw);
     min-width: 0;
     min-height: 0;
     overflow: hidden;
     border-left: 0;
     background: var(--bg);
     padding: 18px 22px;
+}
+
+.graph-inspector[hidden] {
+    display: none;
 }
 
 .inspector-head {
@@ -1854,14 +1869,9 @@ body.brain-minimal {
 
     .brain-minimal .brain-workspace {
         grid-template-columns: 1fr;
-        grid-template-rows: 32vh 30vh 38vh;
+        grid-template-rows: 36vh 64vh;
         height: 100vh;
         overflow: hidden;
-    }
-
-    .brain-minimal .brain-workspace:not(.has-open-page) {
-        grid-template-columns: 1fr;
-        grid-template-rows: 36vh 64vh;
     }
 
     .brain-minimal .vault-tree-panel,
@@ -1901,16 +1911,11 @@ body.brain-minimal {
 
 @media (max-width: 920px) and (orientation: landscape) {
     .brain-workspace {
-        grid-template-columns: minmax(150px, 22vw) minmax(260px, 1fr) minmax(210px, 30vw);
+        grid-template-columns: minmax(170px, 28vw) minmax(280px, 1fr);
         grid-template-rows: 1fr;
         height: 100vh;
         min-height: 0;
         overflow: hidden;
-    }
-
-    .brain-workspace:not(.has-open-page) {
-        grid-template-columns: minmax(170px, 28vw) minmax(280px, 1fr);
-        grid-template-rows: 1fr;
     }
 
     .brain-workspace .panel-head {
@@ -1969,6 +1974,7 @@ body.brain-minimal {
     .graph-inspector {
         border-top: 0;
         border-left: 0;
+        width: min(380px, 48vw);
     }
 
     .graph-inspector {
@@ -2048,6 +2054,7 @@ body.brain-minimal {
 
     .graph-inspector {
         padding: 18px 26px 22px;
+        width: min(420px, 92vw);
     }
 
     .brain-minimal .action-row {

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-tree-focus">
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-drag-pan">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -136,6 +136,10 @@
         let selectedPath = "";
         let focusedNodeId = "";
         let graphMode = readLocalValue(`${cachePrefix}graph-mode`) === "3d" ? "3d" : "2d";
+        let graphViewport = null;
+        let graphPan = { x: 0, y: 0 };
+        let graphDrag = null;
+        let graphSuppressClick = false;
 
         function escapeHtml(value) {
             return String(value).replace(/[&<>"']/g, (char) => ({
@@ -236,6 +240,7 @@
         }
 
         function showGraphSkeleton() {
+            graphViewport = null;
             graphSvg.replaceChildren();
             graphEmpty.hidden = false;
             graphEmpty.innerHTML = `
@@ -771,6 +776,11 @@
             return output.join("") || `<p class="empty">Empty page.</p>`;
         }
 
+        function applyGraphPan() {
+            if (!graphViewport) return;
+            graphViewport.setAttribute("transform", `translate(${graphPan.x} ${graphPan.y})`);
+        }
+
         function upsertNode(nodeMap, node) {
             if (!nodeMap.has(node.id)) nodeMap.set(node.id, node);
             return nodeMap.get(node.id);
@@ -948,6 +958,10 @@
 
             layoutGraph(graphData.nodes, graphData.edges, width, height);
 
+            const viewportLayer = createSvgElement("g", { class: "graph-viewport" });
+            graphViewport = viewportLayer;
+            applyGraphPan();
+
             const edgeLayer = createSvgElement("g", { class: "graph-edges" });
             graphData.edges.forEach((edge) => {
                 const source = nodeById.get(edge.source);
@@ -966,7 +980,7 @@
                 });
                 edgeLayer.appendChild(line);
             });
-            graphSvg.appendChild(edgeLayer);
+            viewportLayer.appendChild(edgeLayer);
 
             const nodeLayer = createSvgElement("g", { class: "graph-nodes" });
             graphData.nodes.forEach((node) => {
@@ -992,18 +1006,21 @@
                 if (node.type === "file") {
                     group.addEventListener("click", (event) => {
                         event.stopPropagation();
+                        if (graphSuppressClick) return;
                         loadPage(node.path);
                     });
                 } else {
                     group.addEventListener("click", (event) => {
                         event.stopPropagation();
+                        if (graphSuppressClick) return;
                         focusFolder(node.path);
                     });
                 }
 
                 nodeLayer.appendChild(group);
             });
-            graphSvg.appendChild(nodeLayer);
+            viewportLayer.appendChild(nodeLayer);
+            graphSvg.appendChild(viewportLayer);
         }
 
         async function loadAllPageContent() {
@@ -1125,7 +1142,57 @@
             renderGraph();
             graphStatus.textContent = "Rebuilt";
         });
+        graphSvg.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0) return;
+            graphDrag = {
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+                originX: graphPan.x,
+                originY: graphPan.y,
+                moved: false
+            };
+            graphSvg.setPointerCapture(event.pointerId);
+            graphSvg.classList.add("is-ready-to-drag");
+        });
+        graphSvg.addEventListener("pointermove", (event) => {
+            if (!graphDrag || graphDrag.pointerId !== event.pointerId) return;
+            const dx = event.clientX - graphDrag.startX;
+            const dy = event.clientY - graphDrag.startY;
+            if (Math.abs(dx) + Math.abs(dy) > 3) {
+                graphDrag.moved = true;
+                graphSvg.classList.add("is-dragging");
+            }
+            if (!graphDrag.moved) return;
+            graphPan = {
+                x: graphDrag.originX + dx,
+                y: graphDrag.originY + dy
+            };
+            applyGraphPan();
+        });
+        graphSvg.addEventListener("pointerup", (event) => {
+            if (!graphDrag || graphDrag.pointerId !== event.pointerId) return;
+            const wasMoved = graphDrag.moved;
+            graphDrag = null;
+            graphSvg.classList.remove("is-ready-to-drag", "is-dragging");
+            if (graphSvg.hasPointerCapture(event.pointerId)) graphSvg.releasePointerCapture(event.pointerId);
+            if (wasMoved) {
+                graphSuppressClick = true;
+                window.setTimeout(() => {
+                    graphSuppressClick = false;
+                }, 0);
+            }
+        });
+        graphSvg.addEventListener("pointercancel", (event) => {
+            graphDrag = null;
+            graphSvg.classList.remove("is-ready-to-drag", "is-dragging");
+            if (graphSvg.hasPointerCapture(event.pointerId)) graphSvg.releasePointerCapture(event.pointerId);
+        });
         graphSvg.addEventListener("click", (event) => {
+            if (graphSuppressClick) {
+                event.preventDefault();
+                return;
+            }
             if (event.target.closest(".graph-node")) return;
             clearFocusAndPreview();
         });
