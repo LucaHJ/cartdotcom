@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>YouTube Synthesis Intake</title>
     <link rel="stylesheet" href="/dashboard.css?v=20260525-youtube">
-    <link rel="stylesheet" href="/youtube-synthesis.css?v=20260525-retry">
+    <link rel="stylesheet" href="/youtube-synthesis.css?v=20260525-icon-retry">
 </head>
 <body>
     <header class="topbar">
@@ -29,7 +29,12 @@
                 <label class="composer-label" for="youtubeUrl">YouTube URL</label>
                 <div class="youtube-url-row">
                     <input id="youtubeUrl" class="youtube-url-input" type="url" inputmode="url" autocomplete="off" placeholder="https://www.youtube.com/watch?v=..." required>
-                    <button id="submitYoutube" type="submit">Queue</button>
+                    <button id="submitYoutube" class="icon-button youtube-submit" type="submit" aria-label="Queue YouTube synthesis" title="Queue YouTube synthesis">
+                        <svg aria-hidden="true" viewBox="0 0 24 24">
+                            <path d="M22 2 11 13"></path>
+                            <path d="m22 2-7 20-4-9-9-4Z"></path>
+                        </svg>
+                    </button>
                 </div>
                 <p id="submitStatus" class="copy-status" aria-live="polite"></p>
             </form>
@@ -108,7 +113,14 @@
                     </div>
                     <a href="${escapeHtml(job.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(job.videoId || job.url)}</a>
                     <small>${escapeHtml(formatDate(job.createdAt))}${job.retryOf ? " - retry of " + escapeHtml(job.retryOf) : ""}${job.note ? " - " + escapeHtml(job.note) : ""}</small>
-                    ${job.canRetry ? `<button class="youtube-retry" type="button" data-job-id="${escapeHtml(job.jobId)}">Retry</button>` : ""}
+                    ${job.canRetry ? `<button class="icon-button youtube-retry" type="button" data-job-id="${escapeHtml(job.jobId)}" aria-label="Retry job ${escapeHtml(job.jobId)}" title="Retry job ${escapeHtml(job.jobId)}">
+                        <svg aria-hidden="true" viewBox="0 0 24 24">
+                            <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path>
+                            <path d="M3 21v-5h5"></path>
+                            <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"></path>
+                            <path d="M21 3v5h-5"></path>
+                        </svg>
+                    </button>` : ""}
                 </article>
             `).join("");
         }

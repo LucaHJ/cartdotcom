@@ -28,6 +28,12 @@
     font-size: 17px;
 }
 
+.youtube-submit {
+    width: 46px;
+    height: 46px;
+    min-height: 46px;
+}
+
 .youtube-jobs-head {
     display: flex;
     align-items: center;
@@ -90,8 +96,9 @@
 
 .youtube-retry {
     justify-self: start;
-    padding: 7px 11px;
-    font-size: 13px;
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
 }
 
 @media (max-width: 520px) {
@@ -99,5 +106,9 @@
         align-items: stretch;
         display: flex;
         flex-direction: column;
+    }
+
+    .youtube-submit {
+        align-self: flex-end;
     }
 }
