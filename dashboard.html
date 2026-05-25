@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Small Notes</title>
-    <link rel="stylesheet" href="dashboard.css?v=20260525-youtube">
+    <link rel="stylesheet" href="dashboard.css?v=20260526-refresh">
     <link rel="stylesheet" href="dashboard-small-notes.css?v=20260526-synthesis-cache">
 </head>
 <body class="small-notes-dashboard">
@@ -36,6 +36,7 @@
         </section>
     </main>
 
+    <script src="/refresh-button.js?v=20260526-refresh"></script>
     <script>
         const notesStatus = document.getElementById("notesStatus");
         const smallNotes = document.getElementById("smallNotes");
@@ -266,7 +267,7 @@
             await Promise.allSettled([loadSmallNotes(), loadSynthesisStatus()]);
         }
 
-        refreshNotes.addEventListener("click", loadDashboard);
+        refreshNotes.addEventListener("click", () => runRefreshButton(refreshNotes, loadDashboard));
         loadDashboard();
     </script>
 </body>

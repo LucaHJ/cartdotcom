@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>YouTube Synthesis Intake</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-youtube">
+    <link rel="stylesheet" href="/dashboard.css?v=20260526-refresh">
     <link rel="stylesheet" href="/youtube-synthesis.css?v=20260526-cache">
 </head>
 <body>
@@ -54,6 +54,7 @@
         </section>
     </main>
 
+    <script src="/refresh-button.js?v=20260526-refresh"></script>
     <script>
         const form = document.getElementById("youtubeForm");
         const youtubeUrl = document.getElementById("youtubeUrl");
@@ -200,7 +201,7 @@
             }
         });
 
-        refreshJobs.addEventListener("click", loadJobs);
+        refreshJobs.addEventListener("click", () => runRefreshButton(refreshJobs, loadJobs));
         jobList.addEventListener("click", async (event) => {
             const button = event.target.closest(".youtube-retry");
             if (!button) return;

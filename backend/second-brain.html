@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-asset-tree">
+    <link rel="stylesheet" href="/dashboard.css?v=20260526-refresh">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -119,6 +119,7 @@
         </section>
     </main>
 
+    <script src="/refresh-button.js?v=20260526-refresh"></script>
     <script>
         const pageFilter = document.getElementById("pageFilter");
         const searchToggle = document.getElementById("searchToggle");
@@ -1302,16 +1303,18 @@
             window.location.href = "/login.html";
         });
 
-        document.getElementById("refreshPages").addEventListener("click", () => refreshPages({
+        const refreshPagesButton = document.getElementById("refreshPages");
+        const rebuildGraphButton = document.getElementById("rebuildGraph");
+        refreshPagesButton.addEventListener("click", () => runRefreshButton(refreshPagesButton, () => refreshPages({
             forceNetwork: true,
             keepSelection: selectedPath,
             keepFocus: focusedNodeId
-        }));
-        document.getElementById("rebuildGraph").addEventListener("click", () => {
+        })));
+        rebuildGraphButton.addEventListener("click", () => runRefreshButton(rebuildGraphButton, () => {
             buildGraph();
             renderGraph();
             graphStatus.textContent = "Rebuilt";
-        });
+        }));
         graphSvg.addEventListener("pointerdown", (event) => {
             if (event.button !== 0) return;
             if (event.target.closest(".graph-node")) return;
