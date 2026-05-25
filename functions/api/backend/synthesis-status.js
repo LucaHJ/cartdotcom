@@ -123,13 +123,43 @@ function youtubeIdFromUrl(value) {
     return "";
 }
 
+function youtubeUrlsFromRecord(approval) {
+    const values = [
+        approval?.youtube?.url,
+        approval?.url,
+        approval?.source_url,
+        approval?.target,
+        approval?.prompt,
+        approval?.handling_note,
+        ...collectStringValues(approval?.attachments || [])
+    ].filter(Boolean);
+    const urls = [];
+    const youtubeUrlPattern = /https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\s"'`<>)]+/gi;
+
+    for (const value of values) {
+        const text = String(value);
+        for (const match of text.matchAll(youtubeUrlPattern)) {
+            const url = match[0].replace(/[),.;]+$/, "");
+            if (!urls.includes(url)) urls.push(url);
+        }
+    }
+
+    return urls;
+}
+
 function youtubeSubmissionKey(approval) {
     const video = approval?.youtube || {};
-    const videoKey = normalizeString(video.video_key, 240);
-    if (videoKey) return `youtube:${videoKey}`;
+    const urls = youtubeUrlsFromRecord(approval);
+    for (const url of urls) {
+        const urlVideoId = youtubeIdFromUrl(url);
+        if (urlVideoId) return `youtube:id:${urlVideoId}`;
+    }
 
     const videoId = normalizeString(video.video_id, 80) || youtubeIdFromUrl(video.url);
     if (videoId) return `youtube:id:${videoId}`;
+
+    const videoKey = normalizeString(video.video_key, 240);
+    if (videoKey) return `youtube:${videoKey}`;
 
     const urlKey = normalizedUrl(video.url);
     if (urlKey) return `youtube:url:${urlKey}`;
