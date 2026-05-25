@@ -135,6 +135,86 @@ async function createApprovedYouTubeJob(context, input, actor) {
     });
 }
 
+async function retryYouTubeJob(context, input, actor) {
+    const kv = getQueueKV(context.env);
+    if (!kv) {
+        return json({ error: "MOBILE_AUTH_KV binding is required for the synthesis queue." }, 503);
+    }
+
+    const retryJobId = normalizeString(input.retryJobId || input.retry_job_id, 120);
+    if (!retryJobId || !retryJobId.startsWith(JOB_PREFIX)) {
+        return json({ error: "A valid failed YouTube job id is required." }, 400);
+    }
+
+    const original = await kv.get(approvalKey(retryJobId), "json");
+    if (!original || original.action_class !== "youtube_synthesis") {
+        return json({ error: "YouTube synthesis job was not found." }, 404);
+    }
+    if (original.owner && original.owner !== actor.email && context.env.MOBILE_APPROVAL_ALLOW_ALL !== "true") {
+        return json({ error: "This YouTube synthesis job belongs to another backend user." }, 403);
+    }
+    if (!["failed", "waiting_git_publish"].includes(original.status)) {
+        return json({ error: "Only failed or waiting YouTube jobs can be retried." }, 400);
+    }
+
+    const url = original.youtube?.url || "";
+    if (!url) {
+        return json({ error: "The failed job does not include a retryable YouTube URL." }, 400);
+    }
+
+    const { normalizedUrl, videoId } = normalizeYouTubeUrl(url);
+    const jobId = `${JOB_PREFIX}${crypto.randomUUID().slice(0, 8)}`;
+    const prompt = buildPrompt({ url: normalizedUrl, jobId });
+    const promptHash = await sha256Hex(JSON.stringify({ prompt, url: normalizedUrl, retryOf: retryJobId }));
+    const now = new Date().toISOString();
+    const approval = {
+        job_id: jobId,
+        owner: actor.email,
+        status: "approved",
+        action_class: "youtube_synthesis",
+        target: "WAR ROOM YouTube synthesis pipeline",
+        prompt,
+        attachments: [],
+        prompt_hash: promptHash,
+        success_criteria: original.success_criteria || [
+            "Raw YouTube metadata and transcript capture exists under Vault/raw/videos/youtube/.",
+            "Expansion research and brain synthesis are complete.",
+            "Wiki index/log and relevant project history are updated.",
+            "Downloaded media files are discarded after analysis."
+        ].join(" "),
+        risk_level: original.risk_level || "medium",
+        approval_level: "backend_authenticated_intake",
+        approval_required: false,
+        result_channel: "mobile_auth_kv",
+        created_at: now,
+        approved_at: now,
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        retry_of: retryJobId,
+        backend_approval: {
+            actor: actor.email,
+            method: "backend-session-retry",
+            verified_at: now
+        },
+        youtube: {
+            url: normalizedUrl,
+            video_id: videoId || original.youtube?.video_id || ""
+        }
+    };
+
+    await kv.put(approvalKey(jobId), JSON.stringify(approval), { expirationTtl: 30 * 24 * 60 * 60 });
+    return json({
+        ok: true,
+        jobId,
+        retryOf: retryJobId,
+        promptHash,
+        status: approval.status,
+        url: normalizedUrl,
+        videoId: approval.youtube.video_id,
+        queueBackend: "mobile_auth_kv",
+        approvalRequired: false
+    });
+}
+
 async function listRecentYouTubeJobs(context, actor) {
     const kv = getQueueKV(context.env);
     if (!kv) {
@@ -154,6 +234,8 @@ async function listRecentYouTubeJobs(context, actor) {
             videoId: approval.youtube?.video_id || "",
             createdAt: approval.created_at || "",
             handledAt: approval.handled_at || "",
+            retryOf: approval.retry_of || "",
+            canRetry: ["failed", "waiting_git_publish"].includes(approval.status),
             note: approval.handling_note || ""
         });
     }
@@ -189,6 +271,9 @@ export async function onRequestPost(context) {
     if (!input) return json({ error: "JSON body is required." }, 400);
 
     try {
+        if (input.retryJobId || input.retry_job_id) {
+            return await retryYouTubeJob(context, input, actor);
+        }
         return await createApprovedYouTubeJob(context, input, actor);
     } catch (error) {
         return json({ error: error.message || "YouTube synthesis job could not be created." }, 400);

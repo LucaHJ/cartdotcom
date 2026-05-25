@@ -88,6 +88,12 @@
     color: var(--muted);
 }
 
+.youtube-retry {
+    justify-self: start;
+    padding: 7px 11px;
+    font-size: 13px;
+}
+
 @media (max-width: 520px) {
     .youtube-url-row {
         align-items: stretch;

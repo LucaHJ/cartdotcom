@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>YouTube Synthesis Intake</title>
     <link rel="stylesheet" href="/dashboard.css?v=20260525-youtube">
-    <link rel="stylesheet" href="/youtube-synthesis.css?v=20260525">
+    <link rel="stylesheet" href="/youtube-synthesis.css?v=20260525-retry">
 </head>
 <body>
     <header class="topbar">
@@ -107,7 +107,8 @@
                         <span>${escapeHtml(job.status || "queued")}</span>
                     </div>
                     <a href="${escapeHtml(job.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(job.videoId || job.url)}</a>
-                    <small>${escapeHtml(formatDate(job.createdAt))}${job.note ? " - " + escapeHtml(job.note) : ""}</small>
+                    <small>${escapeHtml(formatDate(job.createdAt))}${job.retryOf ? " - retry of " + escapeHtml(job.retryOf) : ""}${job.note ? " - " + escapeHtml(job.note) : ""}</small>
+                    ${job.canRetry ? `<button class="youtube-retry" type="button" data-job-id="${escapeHtml(job.jobId)}">Retry</button>` : ""}
                 </article>
             `).join("");
         }
@@ -148,6 +149,24 @@
         });
 
         refreshJobs.addEventListener("click", loadJobs);
+        jobList.addEventListener("click", async (event) => {
+            const button = event.target.closest(".youtube-retry");
+            if (!button) return;
+
+            button.disabled = true;
+            submitStatus.textContent = `Retrying ${button.dataset.jobId}`;
+            try {
+                const payload = await api("/api/backend/youtube-synthesis", {
+                    method: "POST",
+                    body: JSON.stringify({ retryJobId: button.dataset.jobId })
+                });
+                submitStatus.textContent = `Queued retry ${payload.jobId}`;
+                await loadJobs();
+            } catch (error) {
+                submitStatus.textContent = error.message;
+                button.disabled = false;
+            }
+        });
         document.getElementById("logoutButton").addEventListener("click", async () => {
             await fetch("/api/auth/logout", { method: "POST" });
             window.location.href = "/login.html";
