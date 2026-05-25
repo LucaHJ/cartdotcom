@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-drag-pan">
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-zoom-pan">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -61,10 +61,21 @@
                 <div class="graph-toolbar">
                     <h2 id="graphTitle" class="sr-only">Vault Map</h2>
                     <div class="graph-actions">
-                        <div class="graph-mode-toggle" role="group" aria-label="Graph mode">
-                            <button id="mode2d" class="graph-mode is-active" type="button" aria-pressed="true">2D</button>
-                            <button id="mode3d" class="graph-mode" type="button" aria-pressed="false">3D</button>
-                        </div>
+                        <button id="zoomOutGraph" class="icon-button zoom-button" type="button" aria-label="Zoom out" title="Zoom out">
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <circle cx="11" cy="11" r="7"></circle>
+                                <path d="M8 11h6"></path>
+                                <path d="M16.5 16.5L21 21"></path>
+                            </svg>
+                        </button>
+                        <button id="zoomInGraph" class="icon-button zoom-button" type="button" aria-label="Zoom in" title="Zoom in">
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <circle cx="11" cy="11" r="7"></circle>
+                                <path d="M11 8v6"></path>
+                                <path d="M8 11h6"></path>
+                                <path d="M16.5 16.5L21 21"></path>
+                            </svg>
+                        </button>
                         <button id="rebuildGraph" class="icon-button refresh-button" type="button" aria-label="Rebuild graph" title="Rebuild graph">
                             <svg aria-hidden="true" viewBox="0 0 24 24">
                                 <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path>
@@ -120,8 +131,8 @@
         const graphEmpty = document.getElementById("graphEmpty");
         const editorDrawer = document.getElementById("editorDrawer");
         const brainWorkspace = document.getElementById("brainWorkspace");
-        const mode2d = document.getElementById("mode2d");
-        const mode3d = document.getElementById("mode3d");
+        const zoomOutGraph = document.getElementById("zoomOutGraph");
+        const zoomInGraph = document.getElementById("zoomInGraph");
         const svgNamespace = "http://www.w3.org/2000/svg";
 
         const cachePrefix = "cartdotcom:second-brain:";
@@ -135,9 +146,11 @@
         let graphData = { nodes: [], edges: [] };
         let selectedPath = "";
         let focusedNodeId = "";
-        let graphMode = readLocalValue(`${cachePrefix}graph-mode`) === "3d" ? "3d" : "2d";
         let graphViewport = null;
         let graphPan = { x: 0, y: 0 };
+        let graphZoom = 1;
+        let graphHasUserTransform = false;
+        let graphLayoutSize = { width: 0, height: 0 };
         let graphDrag = null;
         let graphSuppressClick = false;
 
@@ -241,6 +254,7 @@
 
         function showGraphSkeleton() {
             graphViewport = null;
+            graphHasUserTransform = false;
             graphSvg.replaceChildren();
             graphEmpty.hidden = false;
             graphEmpty.innerHTML = `
@@ -778,7 +792,25 @@
 
         function applyGraphPan() {
             if (!graphViewport) return;
-            graphViewport.setAttribute("transform", `translate(${graphPan.x} ${graphPan.y})`);
+            graphViewport.setAttribute("transform", `matrix(${graphZoom} 0 0 ${graphZoom} ${graphPan.x} ${graphPan.y})`);
+        }
+
+        function setGraphZoom(nextZoom, originX = null, originY = null) {
+            const previousZoom = graphZoom;
+            const boundedZoom = Math.max(0.32, Math.min(3.4, nextZoom));
+            if (Math.abs(boundedZoom - previousZoom) < 0.001) return;
+
+            const width = Math.max(360, Math.round(graphSvg.clientWidth || graphSvg.parentElement.clientWidth || 720));
+            const height = Math.max(460, Math.round(graphSvg.clientHeight || graphSvg.parentElement.clientHeight || 620));
+            const focusX = originX ?? width / 2;
+            const focusY = originY ?? height / 2;
+            graphPan = {
+                x: focusX - ((focusX - graphPan.x) * boundedZoom) / previousZoom,
+                y: focusY - ((focusY - graphPan.y) * boundedZoom) / previousZoom
+            };
+            graphZoom = boundedZoom;
+            graphHasUserTransform = true;
+            applyGraphPan();
         }
 
         function upsertNode(nodeMap, node) {
@@ -853,7 +885,7 @@
 
             nodes.forEach((node, index) => {
                 const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2 + (hashString(node.id) % 80) / 80;
-                const ring = node.type === "root" ? 0 : node.type === "folder" ? 0.26 : 0.42 + ((hashString(node.path) % 100) / 420);
+                const ring = node.type === "root" ? 0 : node.type === "folder" ? 0.34 : 0.62 + ((hashString(node.path) % 100) / 360);
                 const radius = minDimension * ring;
                 positions.set(node.id, {
                     x: centerX + Math.cos(angle) * radius,
@@ -876,7 +908,7 @@
                         const dy = b.y - a.y || 0.01;
                         const distanceSquared = dx * dx + dy * dy;
                         const distance = Math.sqrt(distanceSquared);
-                        const force = Math.min(2.2, 5200 / Math.max(80, distanceSquared));
+                        const force = Math.min(3.8, 26000 / Math.max(140, distanceSquared));
                         const fx = (dx / distance) * force;
                         const fy = (dy / distance) * force;
                         a.vx -= fx;
@@ -896,8 +928,8 @@
                     const dx = target.x - source.x || 0.01;
                     const dy = target.y - source.y || 0.01;
                     const distance = Math.sqrt(dx * dx + dy * dy);
-                    const desired = edge.type === "folder" ? 86 + nodeRadius(targetNode) * 2 : 145;
-                    const force = (distance - desired) * (edge.type === "folder" ? 0.018 : 0.012);
+                    const desired = edge.type === "folder" ? 290 + nodeRadius(targetNode) * 4 : 520;
+                    const force = (distance - desired) * (edge.type === "folder" ? 0.004 : 0.003);
                     const fx = (dx / distance) * force;
                     const fy = (dy / distance) * force;
                     source.vx += fx;
@@ -908,7 +940,7 @@
 
                 nodes.forEach((node) => {
                     const position = positions.get(node.id);
-                    const gravity = node.type === "root" ? 0.045 : 0.003;
+                    const gravity = node.type === "root" ? 0.012 : 0.0004;
                     position.vx += (centerX - position.x) * gravity;
                     position.vy += (centerY - position.y) * gravity;
                     position.vx *= 0.82;
@@ -922,12 +954,9 @@
 
             nodes.forEach((node) => {
                 const position = positions.get(node.id);
-                const z = graphMode === "3d" ? ((hashString(node.id) % 200) - 100) / 100 : 0;
-                const perspective = graphMode === "3d" ? 1 + z * 0.16 : 1;
-                node.x = centerX + (position.x - centerX) * perspective;
-                node.y = centerY + (position.y - centerY) * perspective - (graphMode === "3d" ? z * 24 : 0);
-                node.depth = z;
-                node.scale = graphMode === "3d" ? 0.88 + ((z + 1) * 0.13) : 1;
+                node.x = position.x;
+                node.y = position.y;
+                node.scale = 1;
             });
         }
 
@@ -945,18 +974,27 @@
         function renderGraph() {
             const width = Math.max(360, Math.round(graphSvg.clientWidth || graphSvg.parentElement.clientWidth || 720));
             const height = Math.max(460, Math.round(graphSvg.clientHeight || graphSvg.parentElement.clientHeight || 620));
+            const layoutWidth = Math.max(width * 3.8, 2600);
+            const layoutHeight = Math.max(height * 3.35, 2200);
             const filter = pageFilter.value.trim().toLowerCase();
             const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
             const focusedIds = getFocusedNodeIds();
 
             graphSvg.replaceChildren();
-            graphSvg.classList.toggle("is-3d", graphMode === "3d");
             graphSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
             graphEmpty.hidden = graphData.nodes.length > 1;
 
             if (graphData.nodes.length <= 1) return;
 
-            layoutGraph(graphData.nodes, graphData.edges, width, height);
+            graphLayoutSize = { width: layoutWidth, height: layoutHeight };
+            layoutGraph(graphData.nodes, graphData.edges, layoutWidth, layoutHeight);
+            if (!graphHasUserTransform) {
+                graphZoom = 0.55;
+                graphPan = {
+                    x: (width - layoutWidth * graphZoom) / 2,
+                    y: (height - layoutHeight * graphZoom) / 2
+                };
+            }
 
             const viewportLayer = createSvgElement("g", { class: "graph-viewport" });
             graphViewport = viewportLayer;
@@ -1144,6 +1182,7 @@
         });
         graphSvg.addEventListener("pointerdown", (event) => {
             if (event.button !== 0) return;
+            if (event.target.closest(".graph-node")) return;
             graphDrag = {
                 pointerId: event.pointerId,
                 startX: event.clientX,
@@ -1168,6 +1207,7 @@
                 x: graphDrag.originX + dx,
                 y: graphDrag.originY + dy
             };
+            graphHasUserTransform = true;
             applyGraphPan();
         });
         graphSvg.addEventListener("pointerup", (event) => {
@@ -1196,6 +1236,14 @@
             if (event.target.closest(".graph-node")) return;
             clearFocusAndPreview();
         });
+        graphSvg.addEventListener("wheel", (event) => {
+            event.preventDefault();
+            const rect = graphSvg.getBoundingClientRect();
+            const zoomFactor = event.deltaY < 0 ? 1.13 : 0.88;
+            setGraphZoom(graphZoom * zoomFactor, event.clientX - rect.left, event.clientY - rect.top);
+        }, { passive: false });
+        zoomOutGraph.addEventListener("click", () => setGraphZoom(graphZoom * 0.82));
+        zoomInGraph.addEventListener("click", () => setGraphZoom(graphZoom * 1.22));
         vaultTree.addEventListener("click", (event) => {
             if (event.target.closest(".tree-folder summary, .tree-file")) return;
             clearFocusAndPreview();
@@ -1226,25 +1274,12 @@
         pageFilter.addEventListener("blur", () => {
             if (!pageFilter.value.trim()) setSearchOpen(false);
         });
-        function setGraphMode(mode) {
-            graphMode = mode === "3d" ? "3d" : "2d";
-            writeLocalValue(`${cachePrefix}graph-mode`, graphMode);
-            mode2d.classList.toggle("is-active", graphMode === "2d");
-            mode2d.setAttribute("aria-pressed", graphMode === "2d" ? "true" : "false");
-            mode3d.classList.toggle("is-active", graphMode === "3d");
-            mode3d.setAttribute("aria-pressed", graphMode === "3d" ? "true" : "false");
-            renderGraph();
-        }
-        mode2d.addEventListener("click", () => setGraphMode("2d"));
-        mode3d.addEventListener("click", () => setGraphMode("3d"));
-
         let resizeTimer = 0;
         window.addEventListener("resize", () => {
             window.clearTimeout(resizeTimer);
             resizeTimer = window.setTimeout(renderGraph, 120);
         });
 
-        setGraphMode(graphMode);
         refreshPages();
     </script>
 </body>
