@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Small Notes</title>
     <link rel="stylesheet" href="dashboard.css?v=20260525-youtube">
-    <link rel="stylesheet" href="dashboard-small-notes.css?v=20260525-icons">
+    <link rel="stylesheet" href="dashboard-small-notes.css?v=20260526-synthesis">
 </head>
 <body class="small-notes-dashboard">
     <header class="topbar notes-topbar">
@@ -31,6 +31,7 @@
             <p class="eyebrow">second brain</p>
             <h1 id="notesTitle">Small Notes</h1>
             <p id="notesStatus" class="notes-status" aria-live="polite">Loading</p>
+            <div id="synthesisStatus" class="synthesis-status-board" aria-label="Reel and YouTube synthesis status counts" aria-live="polite"></div>
             <ul id="smallNotes" class="small-notes-list" aria-live="polite"></ul>
         </section>
     </main>
@@ -39,6 +40,7 @@
         const notesStatus = document.getElementById("notesStatus");
         const smallNotes = document.getElementById("smallNotes");
         const refreshNotes = document.getElementById("refreshNotes");
+        const synthesisStatus = document.getElementById("synthesisStatus");
 
         function stripMarkdown(value) {
             return String(value || "")
@@ -76,6 +78,52 @@
             return notes.filter(note => note.text);
         }
 
+        function renderSynthesisStatus(payload) {
+            synthesisStatus.innerHTML = "";
+            const groups = Array.isArray(payload?.groups) ? payload.groups : [];
+            if (!groups.length) {
+                synthesisStatus.textContent = "Synthesis counts unavailable";
+                return;
+            }
+
+            const fragment = document.createDocumentFragment();
+            for (const group of groups) {
+                const section = document.createElement("section");
+                section.className = "synthesis-status-group";
+
+                const header = document.createElement("div");
+                header.className = "synthesis-status-header";
+
+                const label = document.createElement("span");
+                label.textContent = group.label || "Synthesis";
+
+                const total = document.createElement("strong");
+                total.textContent = String(group.total ?? 0);
+                total.setAttribute("aria-label", `${group.total ?? 0} total`);
+
+                header.append(label, total);
+                section.appendChild(header);
+
+                const list = document.createElement("ul");
+                list.className = "synthesis-stage-list";
+
+                for (const stage of group.stages || []) {
+                    const item = document.createElement("li");
+                    const stageLabel = document.createElement("span");
+                    stageLabel.textContent = stage.label || stage.id || "Status";
+                    const count = document.createElement("strong");
+                    count.textContent = String(stage.count ?? 0);
+                    item.append(stageLabel, count);
+                    list.appendChild(item);
+                }
+
+                section.appendChild(list);
+                fragment.appendChild(section);
+            }
+
+            synthesisStatus.appendChild(fragment);
+        }
+
         function renderNotes(notes) {
             smallNotes.innerHTML = "";
             if (!notes.length) {
@@ -111,7 +159,7 @@
             try {
                 payload = JSON.parse(text);
             } catch (error) {
-                throw new Error("Small notes response was not valid JSON");
+                throw new Error("Dashboard response was not valid JSON");
             }
 
             if (!response.ok || payload.error) {
@@ -119,6 +167,16 @@
             }
 
             return payload;
+        }
+
+        async function loadSynthesisStatus() {
+            synthesisStatus.textContent = "Loading synthesis counts";
+            try {
+                const payload = await api("/api/backend/synthesis-status");
+                renderSynthesisStatus(payload);
+            } catch (error) {
+                synthesisStatus.textContent = error.message || "Synthesis counts unavailable";
+            }
         }
 
         async function loadSmallNotes() {
@@ -133,8 +191,12 @@
             }
         }
 
-        refreshNotes.addEventListener("click", loadSmallNotes);
-        loadSmallNotes();
+        async function loadDashboard() {
+            await Promise.allSettled([loadSmallNotes(), loadSynthesisStatus()]);
+        }
+
+        refreshNotes.addEventListener("click", loadDashboard);
+        loadDashboard();
     </script>
 </body>
 </html>
