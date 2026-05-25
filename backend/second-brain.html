@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-zoom-lines">
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-tree-actions">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -52,6 +52,11 @@
                             <span id="graphStatus">Loading</span>
                         </div>
                     </details>
+                </div>
+
+                <div class="tree-actions" aria-label="File tree controls">
+                    <button id="collapseTree" type="button">Collapse all</button>
+                    <button id="openTree" type="button">Open all</button>
                 </div>
 
                 <div id="vaultTree" class="vault-tree" aria-live="polite"></div>
@@ -133,6 +138,8 @@
         const brainWorkspace = document.getElementById("brainWorkspace");
         const zoomOutGraph = document.getElementById("zoomOutGraph");
         const zoomInGraph = document.getElementById("zoomInGraph");
+        const collapseTree = document.getElementById("collapseTree");
+        const openTree = document.getElementById("openTree");
         const svgNamespace = "http://www.w3.org/2000/svg";
 
         const cachePrefix = "cartdotcom:second-brain:";
@@ -146,6 +153,7 @@
         let graphData = { nodes: [], edges: [] };
         let selectedPath = "";
         let focusedNodeId = "";
+        let vaultTreeOpen = true;
         let graphViewport = null;
         let graphPan = { x: 0, y: 0 };
         let graphZoom = 1;
@@ -436,11 +444,18 @@
             renderGraph();
         }
 
+        function setVaultTreeOpen(open) {
+            vaultTreeOpen = open;
+            vaultTree.querySelectorAll("details.tree-folder").forEach((details) => {
+                details.open = open;
+            });
+        }
+
         function renderTreeNode(node, container) {
             if (node.type === "folder") {
                 const details = document.createElement("details");
                 details.className = `tree-folder${focusedNodeId && !isTreeNodeFocused(node) ? " is-dimmed" : ""}${nodeIdForTreeNode(node) === focusedNodeId ? " is-focused" : ""}`;
-                details.open = true;
+                details.open = vaultTreeOpen;
 
                 const summary = document.createElement("summary");
                 summary.textContent = node.name;
@@ -1276,6 +1291,8 @@
         }, { passive: false });
         zoomOutGraph.addEventListener("click", () => setGraphZoom(graphZoom * 0.68));
         zoomInGraph.addEventListener("click", () => setGraphZoom(graphZoom * 1.42));
+        collapseTree.addEventListener("click", () => setVaultTreeOpen(false));
+        openTree.addEventListener("click", () => setVaultTreeOpen(true));
         vaultTree.addEventListener("click", (event) => {
             if (event.target.closest(".tree-folder summary, .tree-file")) return;
             clearFocusAndPreview();
