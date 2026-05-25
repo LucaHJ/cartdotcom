@@ -24,6 +24,16 @@ async function sha256Hex(value) {
     return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function getApprovalJson(kv, keyName) {
+    const text = await kv.get(keyName, "text");
+    if (!text) return null;
+    try {
+        return JSON.parse(text.replace(/^\uFEFF/, ""));
+    } catch (error) {
+        return null;
+    }
+}
+
 function videoKeyFor({ normalizedUrl, videoId }) {
     return videoId ? `id:${videoId}` : `url:${normalizedUrl}`;
 }
@@ -193,7 +203,7 @@ async function findDuplicateVideoJob(context, actor, video, options = {}) {
     const keys = await listApprovalKeys(kv);
     const matches = [];
     for (const key of keys) {
-        const approval = await kv.get(key.name, "json");
+        const approval = await getApprovalJson(kv, key.name);
         if (!approvalMatchesVideo(approval, video)) continue;
         if (excludeJobIds.has(approval.job_id)) continue;
         if (allowedStatuses && !allowedStatuses.has(approval.status)) continue;
@@ -223,7 +233,7 @@ async function createApprovedYouTubeJob(context, input, actor) {
     }
 
     const jobId = await stableJobId(videoKey);
-    const stableExisting = await kv.get(approvalKey(jobId), "json");
+    const stableExisting = await getApprovalJson(kv, approvalKey(jobId));
     if (approvalMatchesVideo(stableExisting, { normalizedUrl, videoId, videoKey })) {
         if (!actorCanSeeApproval(context, stableExisting, actor)) {
             return hiddenDuplicateResponse();
@@ -293,7 +303,7 @@ async function retryYouTubeJob(context, input, actor) {
         return json({ error: "A valid failed YouTube job id is required." }, 400);
     }
 
-    const original = await kv.get(approvalKey(retryJobId), "json");
+    const original = await getApprovalJson(kv, approvalKey(retryJobId));
     if (!original || original.action_class !== "youtube_synthesis") {
         return json({ error: "YouTube synthesis job was not found." }, 404);
     }
@@ -324,7 +334,7 @@ async function retryYouTubeJob(context, input, actor) {
     }
 
     const jobId = await stableRetryJobId(videoKey, retryJobId);
-    const stableExisting = await kv.get(approvalKey(jobId), "json");
+    const stableExisting = await getApprovalJson(kv, approvalKey(jobId));
     if (approvalMatchesVideo(stableExisting, { normalizedUrl, videoId, videoKey })) {
         if (!actorCanSeeApproval(context, stableExisting, actor)) {
             return hiddenDuplicateResponse();
@@ -394,7 +404,7 @@ async function listRecentYouTubeJobs(context, actor) {
     const listedKeys = await listApprovalKeys(kv);
     const jobs = [];
     for (const key of listedKeys) {
-        const approval = await kv.get(key.name, "json");
+        const approval = await getApprovalJson(kv, key.name);
         if (!approval || approval.action_class !== "youtube_synthesis") continue;
         if (approval.owner && approval.owner !== actor.email && context.env.MOBILE_APPROVAL_ALLOW_ALL !== "true") continue;
         jobs.push(summarizeApproval(approval));
