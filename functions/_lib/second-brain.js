@@ -33,6 +33,12 @@ export function contentTypeForPath(path) {
     return IMAGE_CONTENT_TYPES[fileExtension(path)] || "application/octet-stream";
 }
 
+export function isSupportedCloudFile(path) {
+    const kind = fileKind(path);
+    if (kind === "markdown") return true;
+    return kind === "image" && String(path || "").startsWith("80-Attachments/");
+}
+
 export function normalizeVaultPath(value, options = {}) {
     const { requireMarkdown = true } = options;
     let path = normalizeString(value, 260).replace(/\\/g, "/").replace(/^\/+/, "");
@@ -43,7 +49,7 @@ export function normalizeVaultPath(value, options = {}) {
     if (path.includes("../") || path.includes("/..") || path === "..") throw new Error("Path cannot traverse directories.");
     const kind = fileKind(path);
     if (requireMarkdown && kind !== "markdown") throw new Error("Only Markdown files can be edited in this phase.");
-    if (!requireMarkdown && kind === "unsupported") throw new Error("Only Markdown and image files can be loaded in this phase.");
+    if (!requireMarkdown && !isSupportedCloudFile(path)) throw new Error("Only Markdown and attachment image files can be loaded in this phase.");
 
     return path;
 }
@@ -108,7 +114,7 @@ export async function listPages(kv) {
                 }
             }
             const type = fileKind(path);
-            if (type === "unsupported") continue;
+            if (!isSupportedCloudFile(path)) continue;
             pages.push({
                 key: key.name,
                 path,
