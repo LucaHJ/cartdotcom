@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Small Notes</title>
     <link rel="stylesheet" href="/dashboard.css?v=20260525-youtube">
-    <link rel="stylesheet" href="/dashboard-small-notes.css?v=20260526-synthesis">
+    <link rel="stylesheet" href="/dashboard-small-notes.css?v=20260526-synthesis-cache">
 </head>
 <body class="small-notes-dashboard">
     <header class="topbar notes-topbar">
@@ -42,6 +42,26 @@
         const smallNotes = document.getElementById("smallNotes");
         const refreshNotes = document.getElementById("refreshNotes");
         const synthesisStatus = document.getElementById("synthesisStatus");
+        const cachePrefix = "cartdotcom:dashboard:";
+        const cacheTtlMs = 5 * 60 * 1000;
+
+        function readCache(key) {
+            try {
+                const cached = JSON.parse(localStorage.getItem(cachePrefix + key) || "null");
+                if (!cached || !cached.savedAt || Date.now() - cached.savedAt > cacheTtlMs) return null;
+                return cached.value;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function writeCache(key, value) {
+            try {
+                localStorage.setItem(cachePrefix + key, JSON.stringify({ savedAt: Date.now(), value }));
+            } catch (error) {
+                // Cache failures should not block dashboard rendering.
+            }
+        }
 
         function stripMarkdown(value) {
             return String(value || "")
@@ -77,6 +97,31 @@
             }
 
             return notes.filter(note => note.text);
+        }
+
+        function renderSynthesisSkeleton() {
+            synthesisStatus.innerHTML = "";
+            const fragment = document.createDocumentFragment();
+            for (const groupLabel of ["Instagram reels", "YouTube videos"]) {
+                const section = document.createElement("section");
+                section.className = "synthesis-status-group skeleton-group";
+
+                const header = document.createElement("div");
+                header.className = "synthesis-status-header";
+                header.innerHTML = `<span>${groupLabel}</span><strong class="skeleton-number">&nbsp;</strong>`;
+                section.appendChild(header);
+
+                const list = document.createElement("ul");
+                list.className = "synthesis-stage-list";
+                for (let index = 0; index < 5; index += 1) {
+                    const item = document.createElement("li");
+                    item.innerHTML = `<span class="skeleton-line">&nbsp;</span><strong class="skeleton-count">&nbsp;</strong>`;
+                    list.appendChild(item);
+                }
+                section.appendChild(list);
+                fragment.appendChild(section);
+            }
+            synthesisStatus.appendChild(fragment);
         }
 
         function renderSynthesisStatus(payload) {
@@ -125,6 +170,18 @@
             synthesisStatus.appendChild(fragment);
         }
 
+        function renderNotesSkeleton() {
+            smallNotes.innerHTML = "";
+            const fragment = document.createDocumentFragment();
+            for (let index = 0; index < 4; index += 1) {
+                const item = document.createElement("li");
+                item.className = "note-line skeleton-note";
+                item.innerHTML = "&nbsp;";
+                fragment.appendChild(item);
+            }
+            smallNotes.appendChild(fragment);
+        }
+
         function renderNotes(notes) {
             smallNotes.innerHTML = "";
             if (!notes.length) {
@@ -171,24 +228,38 @@
         }
 
         async function loadSynthesisStatus() {
-            synthesisStatus.textContent = "Loading synthesis counts";
+            const cached = readCache("synthesis-status");
+            if (cached) {
+                renderSynthesisStatus(cached);
+            } else {
+                renderSynthesisSkeleton();
+            }
             try {
                 const payload = await api("/api/backend/synthesis-status");
+                writeCache("synthesis-status", payload);
                 renderSynthesisStatus(payload);
             } catch (error) {
-                synthesisStatus.textContent = error.message || "Synthesis counts unavailable";
+                if (!cached) synthesisStatus.textContent = error.message || "Synthesis counts unavailable";
             }
         }
 
         async function loadSmallNotes() {
-            notesStatus.textContent = "Loading";
-            smallNotes.innerHTML = "";
+            const cached = readCache("small-notes");
+            if (cached) {
+                notesStatus.textContent = cached.length === 1 ? "1 note" : cached.length + " notes";
+                renderNotes(cached);
+            } else {
+                notesStatus.textContent = "Loading";
+                renderNotesSkeleton();
+            }
 
             try {
                 const payload = await api("/api/second-brain/page?path=wiki%2Fsmall-notes.md");
-                renderNotes(parseSmallNotes(payload.page?.content || ""));
+                const notes = parseSmallNotes(payload.page?.content || "");
+                writeCache("small-notes", notes);
+                renderNotes(notes);
             } catch (error) {
-                notesStatus.textContent = error.message || "Small notes unavailable";
+                if (!cached) notesStatus.textContent = error.message || "Small notes unavailable";
             }
         }
 

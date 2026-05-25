@@ -145,6 +145,68 @@ body.small-notes-dashboard {
     font-size: 14px;
 }
 
+.skeleton-number,
+.skeleton-line,
+.skeleton-count,
+.skeleton-note {
+    position: relative;
+    overflow: hidden;
+    border-radius: 4px;
+    background: rgba(156, 163, 175, 0.16);
+    color: transparent;
+}
+
+.skeleton-number::after,
+.skeleton-line::after,
+.skeleton-count::after,
+.skeleton-note::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+    content: "";
+    transform: translateX(-100%);
+    animation: dashboard-skeleton 1.4s ease-in-out infinite;
+}
+
+.skeleton-number {
+    width: 36px;
+    height: 22px;
+}
+
+.skeleton-line {
+    width: min(60%, 150px);
+    height: 14px;
+}
+
+.skeleton-count {
+    width: 20px;
+    height: 14px;
+}
+
+.skeleton-note {
+    width: 100%;
+    max-width: 620px;
+    height: 28px;
+}
+
+.skeleton-note:nth-child(2) {
+    width: 82%;
+}
+
+.skeleton-note:nth-child(3) {
+    width: 92%;
+}
+
+.skeleton-note:nth-child(4) {
+    width: 68%;
+}
+
+@keyframes dashboard-skeleton {
+    100% {
+        transform: translateX(100%);
+    }
+}
+
 .small-notes-list {
     display: grid;
     gap: 13px;
