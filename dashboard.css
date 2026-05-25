@@ -1047,6 +1047,10 @@ body.brain-minimal {
     overflow: hidden;
 }
 
+.brain-workspace:not(.has-open-page) {
+    grid-template-columns: minmax(260px, 21vw) minmax(420px, 1fr);
+}
+
 .vault-tree-panel,
 .graph-panel,
 .graph-inspector {
@@ -1261,9 +1265,16 @@ body.brain-minimal {
 }
 
 .tree-folder summary:hover,
+.tree-folder.is-focused > summary,
 .tree-file:hover,
+.tree-file.is-focused,
 .tree-file.is-active {
     color: var(--ink-strong);
+}
+
+.tree-folder.is-dimmed,
+.tree-file.is-dimmed {
+    opacity: 0.22;
 }
 
 .tree-children {
@@ -1323,12 +1334,35 @@ body.brain-minimal {
 .graph-actions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
     justify-content: flex-end;
 }
 
 .graph-actions button {
     padding: 0;
+}
+
+.graph-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    min-height: 34px;
+}
+
+.graph-mode {
+    min-width: 30px;
+    min-height: 30px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: 0;
+}
+
+.graph-mode:hover,
+.graph-mode:focus-visible,
+.graph-mode.is-active {
+    color: var(--ink-strong);
 }
 
 .graph-canvas {
@@ -1348,6 +1382,11 @@ body.brain-minimal {
     stroke: var(--accent);
     stroke-width: 1.6;
     opacity: 0.68;
+}
+
+.graph-canvas.is-3d .graph-edge {
+    stroke-width: 1;
+    opacity: 0.48;
 }
 
 .graph-node circle {
@@ -1372,9 +1411,14 @@ body.brain-minimal {
     stroke-width: 2;
 }
 
+.graph-node.focused circle {
+    stroke: var(--accent-strong);
+    stroke-width: 2.25;
+}
+
 .graph-node.dimmed,
 .graph-edge.dimmed {
-    opacity: 0.16;
+    opacity: 0.11;
 }
 
 .graph-node text {
@@ -1408,6 +1452,123 @@ body.brain-minimal {
     transform: translate(-50%, -50%);
     color: var(--muted);
     text-align: center;
+}
+
+.skeleton-line {
+    display: block;
+    height: 11px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(156, 163, 175, 0.08), rgba(201, 209, 226, 0.2), rgba(156, 163, 175, 0.08));
+    background-size: 220% 100%;
+    animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.tree-skeleton {
+    margin: 9px 6px;
+}
+
+.tree-skeleton.line-1 {
+    width: 78%;
+}
+
+.tree-skeleton.line-2 {
+    width: 58%;
+    margin-left: 18px;
+}
+
+.tree-skeleton.line-3 {
+    width: 66%;
+    margin-left: 32px;
+}
+
+.tree-skeleton.line-4 {
+    width: 44%;
+    margin-left: 18px;
+}
+
+.preview-skeleton {
+    margin-bottom: 15px;
+}
+
+.preview-skeleton.line-1 {
+    width: 62%;
+    height: 19px;
+}
+
+.preview-skeleton.line-2 {
+    width: 96%;
+}
+
+.preview-skeleton.line-3 {
+    width: 88%;
+}
+
+.preview-skeleton.line-4 {
+    width: 72%;
+}
+
+.preview-skeleton.line-5 {
+    width: 54%;
+}
+
+.graph-skeleton {
+    position: relative;
+    display: block;
+    width: min(360px, 60vw);
+    height: min(360px, 44vh);
+}
+
+.graph-skeleton span {
+    position: absolute;
+    display: block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: rgba(201, 209, 226, 0.22);
+    animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.graph-skeleton span:nth-child(1) {
+    top: 45%;
+    left: 46%;
+    width: 24px;
+    height: 24px;
+}
+
+.graph-skeleton span:nth-child(2) {
+    top: 16%;
+    left: 28%;
+}
+
+.graph-skeleton span:nth-child(3) {
+    top: 24%;
+    right: 19%;
+}
+
+.graph-skeleton span:nth-child(4) {
+    bottom: 20%;
+    left: 20%;
+}
+
+.graph-skeleton span:nth-child(5) {
+    right: 30%;
+    bottom: 15%;
+}
+
+@keyframes skeleton-pulse {
+    0% {
+        background-position: 120% 0;
+        opacity: 0.45;
+    }
+
+    50% {
+        opacity: 0.88;
+    }
+
+    100% {
+        background-position: -120% 0;
+        opacity: 0.45;
+    }
 }
 
 .graph-inspector {
@@ -1698,6 +1859,11 @@ body.brain-minimal {
         overflow: hidden;
     }
 
+    .brain-minimal .brain-workspace:not(.has-open-page) {
+        grid-template-columns: 1fr;
+        grid-template-rows: 36vh 64vh;
+    }
+
     .brain-minimal .vault-tree-panel,
     .brain-minimal .graph-panel,
     .brain-minimal .graph-inspector {
@@ -1740,6 +1906,11 @@ body.brain-minimal {
         height: 100vh;
         min-height: 0;
         overflow: hidden;
+    }
+
+    .brain-workspace:not(.has-open-page) {
+        grid-template-columns: minmax(170px, 28vw) minmax(280px, 1fr);
+        grid-template-rows: 1fr;
     }
 
     .brain-workspace .panel-head {
@@ -1857,6 +2028,10 @@ body.brain-minimal {
 
     .graph-actions {
         justify-content: flex-start;
+    }
+
+    .graph-mode-toggle {
+        min-height: 30px;
     }
 
     .graph-panel {

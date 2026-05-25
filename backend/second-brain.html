@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-youtube">
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-tree-focus">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
-        <section class="brain-workspace" aria-label="Second brain vault graph">
+        <section id="brainWorkspace" class="brain-workspace" aria-label="Second brain vault graph">
             <aside class="panel vault-tree-panel">
                 <header class="topbar">
                     <div>
@@ -61,6 +61,10 @@
                 <div class="graph-toolbar">
                     <h2 id="graphTitle" class="sr-only">Vault Map</h2>
                     <div class="graph-actions">
+                        <div class="graph-mode-toggle" role="group" aria-label="Graph mode">
+                            <button id="mode2d" class="graph-mode is-active" type="button" aria-pressed="true">2D</button>
+                            <button id="mode3d" class="graph-mode" type="button" aria-pressed="false">3D</button>
+                        </div>
                         <button id="rebuildGraph" class="icon-button refresh-button" type="button" aria-label="Rebuild graph" title="Rebuild graph">
                             <svg aria-hidden="true" viewBox="0 0 24 24">
                                 <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path>
@@ -76,7 +80,7 @@
                 <p id="graphEmpty" class="graph-empty" hidden>No cloud Markdown pages found.</p>
             </section>
 
-            <section id="editorDrawer" class="panel graph-inspector" aria-label="Markdown editor">
+            <section id="editorDrawer" class="panel graph-inspector" aria-label="Markdown preview" hidden>
                 <div class="inspector-head">
                     <span id="currentPath">Select a page</span>
                     <span id="saveStatus" class="copy-status" aria-live="polite"></span>
@@ -115,12 +119,23 @@
         const graphSvg = document.getElementById("graphSvg");
         const graphEmpty = document.getElementById("graphEmpty");
         const editorDrawer = document.getElementById("editorDrawer");
+        const brainWorkspace = document.getElementById("brainWorkspace");
+        const mode2d = document.getElementById("mode2d");
+        const mode3d = document.getElementById("mode3d");
         const svgNamespace = "http://www.w3.org/2000/svg";
+
+        const cachePrefix = "cartdotcom:second-brain:";
+        const pagesCacheKey = `${cachePrefix}pages:v2`;
+        const contentCachePrefix = `${cachePrefix}content:v2:`;
+        const pagesCacheTtl = 10 * 60 * 1000;
+        const contentCacheTtl = 30 * 60 * 1000;
 
         let pages = [];
         let pageContentByPath = new Map();
         let graphData = { nodes: [], edges: [] };
         let selectedPath = "";
+        let focusedNodeId = "";
+        let graphMode = readLocalValue(`${cachePrefix}graph-mode`) === "3d" ? "3d" : "2d";
 
         function escapeHtml(value) {
             return String(value).replace(/[&<>"']/g, (char) => ({
@@ -175,6 +190,75 @@
             return payload;
         }
 
+        function readLocalValue(key) {
+            try {
+                return window.localStorage?.getItem(key) || null;
+            } catch {
+                return null;
+            }
+        }
+
+        function writeLocalValue(key, value) {
+            try {
+                window.localStorage?.setItem(key, value);
+            } catch {
+                /* Preference persistence is optional. */
+            }
+        }
+
+        function readCache(key, ttl = Infinity) {
+            try {
+                const cached = JSON.parse(readLocalValue(key) || "null");
+                if (!cached || typeof cached !== "object") return null;
+                if (Date.now() - Number(cached.cachedAt || 0) > ttl) return null;
+                return cached.value;
+            } catch {
+                return null;
+            }
+        }
+
+        function writeCache(key, value) {
+            try {
+                writeLocalValue(key, JSON.stringify({ cachedAt: Date.now(), value }));
+            } catch {
+                /* Local storage can be full or disabled; network reads still work. */
+            }
+        }
+
+        function pageCacheKey(path) {
+            return `${contentCachePrefix}${encodeURIComponent(path)}`;
+        }
+
+        function showTreeSkeleton() {
+            vaultTree.innerHTML = Array.from({ length: 18 }, (_, index) => (
+                `<span class="skeleton-line tree-skeleton line-${(index % 4) + 1}"></span>`
+            )).join("");
+        }
+
+        function showGraphSkeleton() {
+            graphSvg.replaceChildren();
+            graphEmpty.hidden = false;
+            graphEmpty.innerHTML = `
+                <span class="graph-skeleton">
+                    <span></span><span></span><span></span><span></span><span></span>
+                </span>
+            `;
+        }
+
+        function showPreviewSkeleton(path) {
+            selectedPath = path;
+            focusedNodeId = fileNodeId(path);
+            pathInput.disabled = false;
+            pathInput.value = path;
+            currentPath.textContent = path;
+            contentPreview.innerHTML = Array.from({ length: 14 }, (_, index) => (
+                `<span class="skeleton-line preview-skeleton line-${(index % 5) + 1}"></span>`
+            )).join("");
+            openPreview();
+            renderTree();
+            renderGraph();
+        }
+
         async function mapLimit(items, limit, worker) {
             const results = new Array(items.length);
             let index = 0;
@@ -223,14 +307,126 @@
             });
         }
 
+        function folderNodeId(path) {
+            return `folder:${path || ""}`;
+        }
+
+        function fileNodeId(path) {
+            return `file:${path}`;
+        }
+
+        function nodeIdForTreeNode(node) {
+            return node.type === "file" ? fileNodeId(node.path) : folderNodeId(node.path);
+        }
+
+        function isDescendantPath(path, parentPath) {
+            if (!parentPath) return true;
+            return path === parentPath || path.startsWith(`${parentPath}/`);
+        }
+
+        function pathAncestorIds(path) {
+            const ids = [folderNodeId("")];
+            const segments = String(path || "").split("/").filter(Boolean);
+            let current = "";
+            segments.slice(0, -1).forEach((segment) => {
+                current = current ? `${current}/${segment}` : segment;
+                ids.push(folderNodeId(current));
+            });
+            return ids;
+        }
+
+        function getFocusedNode() {
+            if (!focusedNodeId) return null;
+            return graphData.nodes.find((node) => node.id === focusedNodeId) || null;
+        }
+
+        function getFocusedNodeIds() {
+            const focusedNode = getFocusedNode();
+            if (!focusedNode) return new Set();
+            if (focusedNode.type === "root") return new Set(graphData.nodes.map((node) => node.id));
+
+            const related = new Set([focusedNode.id, ...pathAncestorIds(focusedNode.path)]);
+
+            if (focusedNode.type === "folder") {
+                graphData.nodes.forEach((node) => {
+                    if (node.path && isDescendantPath(node.path, focusedNode.path)) related.add(node.id);
+                });
+                return related;
+            }
+
+            if (focusedNode.type === "file") {
+                graphData.edges.forEach((edge) => {
+                    if (edge.source === focusedNode.id) related.add(edge.target);
+                    if (edge.target === focusedNode.id) related.add(edge.source);
+                });
+                Array.from(related).forEach((nodeId) => {
+                    const node = graphData.nodes.find((item) => item.id === nodeId);
+                    if (node?.path) pathAncestorIds(node.path).forEach((id) => related.add(id));
+                });
+            }
+
+            return related;
+        }
+
+        function isTreeNodeFocused(node) {
+            if (!focusedNodeId) return false;
+            const focusedNode = getFocusedNode();
+            if (!focusedNode) return false;
+            if (focusedNode.type === "root") return true;
+
+            if (focusedNode.type === "folder") {
+                if (node.type === "folder") {
+                    return isDescendantPath(node.path, focusedNode.path) || isDescendantPath(focusedNode.path, node.path);
+                }
+                return isDescendantPath(node.path, focusedNode.path);
+            }
+
+            return getFocusedNodeIds().has(nodeIdForTreeNode(node));
+        }
+
+        function openPreview() {
+            editorDrawer.hidden = false;
+            editorDrawer.classList.add("has-page");
+            brainWorkspace.classList.add("has-open-page");
+        }
+
+        function closePreview() {
+            selectedPath = "";
+            pathInput.value = "";
+            contentPreview.innerHTML = "";
+            pathInput.disabled = true;
+            currentPath.textContent = "Select a page";
+            saveStatus.textContent = "";
+            editorDrawer.classList.remove("has-page");
+            editorDrawer.hidden = true;
+            brainWorkspace.classList.remove("has-open-page");
+        }
+
+        function clearFocusAndPreview() {
+            focusedNodeId = "";
+            closePreview();
+            renderTree();
+            renderGraph();
+        }
+
+        function focusFolder(path) {
+            focusedNodeId = folderNodeId(path);
+            closePreview();
+            graphStatus.textContent = path ? "Focused" : "Ready";
+            renderTree();
+            renderGraph();
+        }
+
         function renderTreeNode(node, container) {
             if (node.type === "folder") {
                 const details = document.createElement("details");
-                details.className = "tree-folder";
+                details.className = `tree-folder${focusedNodeId && !isTreeNodeFocused(node) ? " is-dimmed" : ""}${nodeIdForTreeNode(node) === focusedNodeId ? " is-focused" : ""}`;
                 details.open = true;
 
                 const summary = document.createElement("summary");
                 summary.textContent = node.name;
+                summary.title = node.path || "Vault";
+                summary.addEventListener("click", () => focusFolder(node.path));
                 details.appendChild(summary);
 
                 const children = document.createElement("div");
@@ -243,7 +439,10 @@
 
             const button = document.createElement("button");
             button.type = "button";
-            button.className = "tree-file" + (node.path === selectedPath ? " is-active" : "");
+            button.className = "tree-file" +
+                (node.path === selectedPath ? " is-active" : "") +
+                (focusedNodeId && !isTreeNodeFocused(node) ? " is-dimmed" : "") +
+                (nodeIdForTreeNode(node) === focusedNodeId ? " is-focused" : "");
             button.textContent = node.name;
             button.title = node.path;
             button.addEventListener("click", () => loadPage(node.path));
@@ -590,7 +789,7 @@
             const edges = [];
             const edgeKeys = new Set();
             const resolver = createWikiResolver();
-            const rootId = "folder:";
+            const rootId = folderNodeId("");
 
             upsertNode(nodeMap, { id: rootId, label: "Vault", type: "root", path: "" });
 
@@ -602,24 +801,24 @@
                 segments.forEach((segment, index) => {
                     const isFile = index === segments.length - 1;
                     if (isFile) {
-                        const fileId = `file:${page.path}`;
+                        const fileId = fileNodeId(page.path);
                         upsertNode(nodeMap, { id: fileId, label: segment.replace(/\.md$/i, ""), type: "file", path: page.path });
                         addEdge(edges, edgeKeys, parentId, fileId, "folder");
                         return;
                     }
 
                     folderPath = folderPath ? `${folderPath}/${segment}` : segment;
-                    const folderId = `folder:${folderPath}`;
+                    const folderId = folderNodeId(folderPath);
                     upsertNode(nodeMap, { id: folderId, label: segment, type: "folder", path: folderPath });
                     addEdge(edges, edgeKeys, parentId, folderId, "folder");
                     parentId = folderId;
                 });
 
-                const sourceId = `file:${page.path}`;
+                const sourceId = fileNodeId(page.path);
                 const content = pageContentByPath.get(page.path) || "";
                 extractWikiTargets(content).forEach((target) => {
                     const resolved = resolver(target, page.path);
-                    if (resolved) addEdge(edges, edgeKeys, sourceId, `file:${resolved}`, "wikilink");
+                    if (resolved) addEdge(edges, edgeKeys, sourceId, fileNodeId(resolved), "wikilink");
                 });
             });
 
@@ -713,8 +912,12 @@
 
             nodes.forEach((node) => {
                 const position = positions.get(node.id);
-                node.x = position.x;
-                node.y = position.y;
+                const z = graphMode === "3d" ? ((hashString(node.id) % 200) - 100) / 100 : 0;
+                const perspective = graphMode === "3d" ? 1 + z * 0.16 : 1;
+                node.x = centerX + (position.x - centerX) * perspective;
+                node.y = centerY + (position.y - centerY) * perspective - (graphMode === "3d" ? z * 24 : 0);
+                node.depth = z;
+                node.scale = graphMode === "3d" ? 0.88 + ((z + 1) * 0.13) : 1;
             });
         }
 
@@ -734,8 +937,10 @@
             const height = Math.max(460, Math.round(graphSvg.clientHeight || graphSvg.parentElement.clientHeight || 620));
             const filter = pageFilter.value.trim().toLowerCase();
             const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
+            const focusedIds = getFocusedNodeIds();
 
             graphSvg.replaceChildren();
+            graphSvg.classList.toggle("is-3d", graphMode === "3d");
             graphSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
             graphEmpty.hidden = graphData.nodes.length > 1;
 
@@ -751,8 +956,9 @@
 
                 const sourceMatches = !filter || source.type !== "file" || source.path.toLowerCase().includes(filter);
                 const targetMatches = !filter || target.type !== "file" || target.path.toLowerCase().includes(filter);
+                const focusMatches = !focusedNodeId || (focusedIds.has(edge.source) && focusedIds.has(edge.target));
                 const line = createSvgElement("line", {
-                    class: `graph-edge ${edge.type}${sourceMatches && targetMatches ? "" : " dimmed"}`,
+                    class: `graph-edge ${edge.type}${sourceMatches && targetMatches && focusMatches ? "" : " dimmed"}`,
                     x1: source.x,
                     y1: source.y,
                     x2: target.x,
@@ -765,11 +971,12 @@
             const nodeLayer = createSvgElement("g", { class: "graph-nodes" });
             graphData.nodes.forEach((node) => {
                 const matches = !filter || node.type !== "file" || node.path.toLowerCase().includes(filter);
+                const focusMatches = !focusedNodeId || focusedIds.has(node.id);
                 const group = createSvgElement("g", {
-                    class: `graph-node ${node.type}${node.path === selectedPath ? " selected" : ""}${matches ? "" : " dimmed"}`,
-                    transform: `translate(${node.x} ${node.y})`
+                    class: `graph-node ${node.type}${node.id === focusedNodeId ? " focused" : ""}${node.path === selectedPath ? " selected" : ""}${matches && focusMatches ? "" : " dimmed"}`,
+                    transform: `translate(${node.x} ${node.y}) scale(${node.scale || 1})`
                 });
-                group.style.cursor = node.type === "file" || node.type === "folder" ? "pointer" : "default";
+                group.style.cursor = "pointer";
 
                 const radius = node.type === "root" ? 16 : node.type === "folder" ? 11 : 7;
                 group.appendChild(createSvgElement("circle", { r: radius }));
@@ -783,12 +990,14 @@
                 group.appendChild(text);
 
                 if (node.type === "file") {
-                    group.addEventListener("click", () => loadPage(node.path));
-                } else if (node.type === "folder" && node.path) {
-                    group.addEventListener("click", () => {
-                        pageFilter.value = `${node.path}/`;
-                        renderTree();
-                        renderGraph();
+                    group.addEventListener("click", (event) => {
+                        event.stopPropagation();
+                        loadPage(node.path);
+                    });
+                } else {
+                    group.addEventListener("click", (event) => {
+                        event.stopPropagation();
+                        focusFolder(node.path);
                     });
                 }
 
@@ -798,13 +1007,26 @@
         }
 
         async function loadAllPageContent() {
-            pageContentByPath = new Map();
+            const cachedContent = new Map();
+            pages.forEach((page) => {
+                const cached = readCache(pageCacheKey(page.path), contentCacheTtl);
+                if (typeof cached === "string") cachedContent.set(page.path, cached);
+            });
+            pageContentByPath = cachedContent;
+            if (cachedContent.size) {
+                buildGraph();
+                renderTree();
+                renderGraph();
+            }
+
             await mapLimit(pages, 8, async (page) => {
                 try {
                     const payload = await api(`/api/second-brain/page?path=${encodeURIComponent(page.path)}`);
-                    pageContentByPath.set(page.path, payload.page.content || "");
+                    const content = payload.page.content || "";
+                    pageContentByPath.set(page.path, content);
+                    writeCache(pageCacheKey(page.path), content);
                 } catch (error) {
-                    pageContentByPath.set(page.path, "");
+                    if (!pageContentByPath.has(page.path)) pageContentByPath.set(page.path, "");
                 }
             });
         }
@@ -812,23 +1034,41 @@
         async function refreshPages(options = {}) {
             graphStatus.textContent = "Loading";
             saveStatus.textContent = "";
+            if (!options.forceNetwork) {
+                const cachedPages = readCache(pagesCacheKey, pagesCacheTtl);
+                if (Array.isArray(cachedPages) && cachedPages.length) {
+                    pages = cachedPages;
+                    pageCount.textContent = `${pages.length} page${pages.length === 1 ? "" : "s"}`;
+                    graphStatus.textContent = "Cached";
+                    buildGraph();
+                    renderTree();
+                    renderGraph();
+                } else {
+                    showTreeSkeleton();
+                    showGraphSkeleton();
+                }
+            } else {
+                showTreeSkeleton();
+                showGraphSkeleton();
+                closePreview();
+                focusedNodeId = "";
+            }
+
             try {
                 const payload = await api("/api/second-brain/pages");
                 pages = payload.pages || [];
+                writeCache(pagesCacheKey, pages);
                 pageCount.textContent = `${pages.length} page${pages.length === 1 ? "" : "s"}`;
                 graphStatus.textContent = "Reading";
                 await loadAllPageContent();
                 if (options.keepSelection && pages.some((page) => page.path === options.keepSelection)) {
-                    selectedPath = options.keepSelection;
+                    await loadPage(options.keepSelection);
+                } else if (options.keepFocus && graphData.nodes.some((node) => node.id === options.keepFocus)) {
+                    focusedNodeId = options.keepFocus;
                 }
                 buildGraph();
-                const defaultPage = pages.find((page) => page.path === "wiki/index.md") || pages[0];
-                if (!selectedPath && defaultPage) {
-                    await loadPage(defaultPage.path);
-                } else {
-                    renderTree();
-                    renderGraph();
-                }
+                renderTree();
+                renderGraph();
                 graphStatus.textContent = "Ready";
                 graphTitle.textContent = pages.length ? "Vault Map" : "Empty Vault";
             } catch (error) {
@@ -840,7 +1080,13 @@
         }
 
         async function loadPage(path) {
+            const cached = readCache(pageCacheKey(path), Infinity);
+            if (typeof cached === "string" && !pageContentByPath.has(path)) {
+                pageContentByPath.set(path, cached);
+            }
+
             selectedPath = path;
+            focusedNodeId = fileNodeId(path);
             graphStatus.textContent = "Ready";
             saveStatus.textContent = "Loaded";
             pathInput.disabled = false;
@@ -849,38 +1095,43 @@
 
             if (!pageContentByPath.has(path)) {
                 saveStatus.textContent = "Loading";
+                showPreviewSkeleton(path);
                 const payload = await api(`/api/second-brain/page?path=${encodeURIComponent(path)}`);
-                pageContentByPath.set(path, payload.page.content || "");
+                const content = payload.page.content || "";
+                pageContentByPath.set(path, content);
+                writeCache(pageCacheKey(path), content);
             }
 
             contentPreview.innerHTML = renderMarkdown(pageContentByPath.get(path) || "", path);
-            editorDrawer.classList.add("has-page");
+            openPreview();
             renderTree();
             renderGraph();
         }
 
-        document.getElementById("closeEditor").addEventListener("click", () => {
-            selectedPath = "";
-            pathInput.value = "";
-            contentPreview.innerHTML = "";
-            pathInput.disabled = true;
-            currentPath.textContent = "Select a page";
-            saveStatus.textContent = "";
-            editorDrawer.classList.remove("has-page");
-            renderTree();
-            renderGraph();
-        });
+        document.getElementById("closeEditor").addEventListener("click", clearFocusAndPreview);
 
         document.getElementById("logoutButton").addEventListener("click", async () => {
             await fetch("/api/auth/logout", { method: "POST" });
             window.location.href = "/login.html";
         });
 
-        document.getElementById("refreshPages").addEventListener("click", () => refreshPages({ keepSelection: selectedPath }));
+        document.getElementById("refreshPages").addEventListener("click", () => refreshPages({
+            forceNetwork: true,
+            keepSelection: selectedPath,
+            keepFocus: focusedNodeId
+        }));
         document.getElementById("rebuildGraph").addEventListener("click", () => {
             buildGraph();
             renderGraph();
             graphStatus.textContent = "Rebuilt";
+        });
+        graphSvg.addEventListener("click", (event) => {
+            if (event.target.closest(".graph-node")) return;
+            clearFocusAndPreview();
+        });
+        vaultTree.addEventListener("click", (event) => {
+            if (event.target.closest(".tree-folder summary, .tree-file")) return;
+            clearFocusAndPreview();
         });
         contentPreview.addEventListener("click", (event) => {
             const link = event.target.closest("a[data-wiki-path]");
@@ -908,6 +1159,17 @@
         pageFilter.addEventListener("blur", () => {
             if (!pageFilter.value.trim()) setSearchOpen(false);
         });
+        function setGraphMode(mode) {
+            graphMode = mode === "3d" ? "3d" : "2d";
+            writeLocalValue(`${cachePrefix}graph-mode`, graphMode);
+            mode2d.classList.toggle("is-active", graphMode === "2d");
+            mode2d.setAttribute("aria-pressed", graphMode === "2d" ? "true" : "false");
+            mode3d.classList.toggle("is-active", graphMode === "3d");
+            mode3d.setAttribute("aria-pressed", graphMode === "3d" ? "true" : "false");
+            renderGraph();
+        }
+        mode2d.addEventListener("click", () => setGraphMode("2d"));
+        mode3d.addEventListener("click", () => setGraphMode("3d"));
 
         let resizeTimer = 0;
         window.addEventListener("resize", () => {
@@ -915,6 +1177,7 @@
             resizeTimer = window.setTimeout(renderGraph, 120);
         });
 
+        setGraphMode(graphMode);
         refreshPages();
     </script>
 </body>
