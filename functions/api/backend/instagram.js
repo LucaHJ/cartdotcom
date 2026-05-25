@@ -118,6 +118,14 @@ function summarizeDiagnostic(record) {
         eventCount: Number(record?.event_count) || 0,
         storedCount: Number(record?.stored_count) || 0,
         readyCount: Number(record?.ready_count) || 0,
+        entryCount: Number(record?.entry_count) || 0,
+        messagingCount: Number(record?.messaging_count) || 0,
+        messageTextCount: Number(record?.message_text_count) || 0,
+        attachmentCount: Number(record?.attachment_count) || 0,
+        changeCount: Number(record?.change_count) || 0,
+        changeFields: Array.isArray(record?.change_fields)
+            ? record.change_fields.map(value => normalizeString(value, 80)).filter(Boolean).slice(0, 20)
+            : [],
         bodyBytes: Number(record?.body_bytes) || 0,
         error: normalizeString(record?.error, 300)
     };

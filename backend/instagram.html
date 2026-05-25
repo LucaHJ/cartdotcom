@@ -159,6 +159,7 @@
                             <span>${escapeHtml(formatDate(record.receivedAt))}</span>
                         </div>
                         <small>events ${escapeHtml(record.eventCount)} - stored ${escapeHtml(record.storedCount)} - signature ${record.signatureVerified ? "verified" : record.signaturePresent ? "failed" : "missing"} - ${escapeHtml(record.bodyBytes)} bytes</small>
+                        <small>entries ${escapeHtml(record.entryCount)} - messaging ${escapeHtml(record.messagingCount)} - attachments ${escapeHtml(record.attachmentCount)} - changes ${escapeHtml(record.changeCount)}${record.changeFields?.length ? " - fields " + escapeHtml(record.changeFields.join(", ")) : ""}</small>
                         ${record.error ? `<p>${escapeHtml(record.error)}</p>` : ""}
                     </div>
                 </article>

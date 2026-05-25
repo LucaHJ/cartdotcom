@@ -230,6 +230,51 @@ function messageEventsFromPayload(payload) {
     return events;
 }
 
+function summarizePayloadShape(payload) {
+    const entries = Array.isArray(payload?.entry) ? payload.entry : [];
+    const changeFields = [];
+    let messagingCount = 0;
+    let messageTextCount = 0;
+    let attachmentCount = 0;
+    let changeCount = 0;
+
+    for (const entry of entries) {
+        const messaging = Array.isArray(entry?.messaging) ? entry.messaging : [];
+        messagingCount += messaging.length;
+        for (const item of messaging) {
+            if (normalizeString(item?.message?.text, 1)) messageTextCount += 1;
+            const attachments = Array.isArray(item?.message?.attachments)
+                ? item.message.attachments
+                : Array.isArray(item?.message?.attachments?.data)
+                    ? item.message.attachments.data
+                    : [];
+            attachmentCount += attachments.length;
+        }
+
+        const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+        changeCount += changes.length;
+        for (const change of changes) {
+            const field = normalizeString(change?.field, 80);
+            if (field && !changeFields.includes(field)) changeFields.push(field);
+        }
+    }
+
+    if (payload?.field) {
+        changeCount += 1;
+        const field = normalizeString(payload.field, 80);
+        if (field && !changeFields.includes(field)) changeFields.push(field);
+    }
+
+    return {
+        entry_count: entries.length,
+        messaging_count: messagingCount,
+        message_text_count: messageTextCount,
+        attachment_count: attachmentCount,
+        change_count: changeCount,
+        change_fields: changeFields.slice(0, 20)
+    };
+}
+
 function buildIntakeRecord(event, env, requestUrl) {
     const attachmentUrls = event.attachments.map(attachment => attachment.url).filter(Boolean);
     const attachmentStrings = event.attachments.flatMap(attachment => attachment.payload_strings || []);
@@ -355,6 +400,7 @@ export async function onRequestPost(context) {
     }
 
     const events = messageEventsFromPayload(payload);
+    const payloadShape = summarizePayloadShape(payload);
     const records = [];
     for (const event of events) {
         if (!event.senderId && !event.messageId && !event.text && !event.attachments.length) continue;
@@ -376,6 +422,7 @@ export async function onRequestPost(context) {
         status: "accepted",
         signature_verified: signature.verified,
         object: normalizeString(payload?.object, 80),
+        ...payloadShape,
         event_count: events.length,
         stored_count: records.length,
         ready_count: records.filter(record => record.status === "ready").length,
