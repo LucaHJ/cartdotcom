@@ -6,7 +6,7 @@ This repository exposes a Meta webhook endpoint for WAR ROOM Instagram Reel capt
 https://cartdotcom.com/api/instagram/webhook
 ```
 
-The endpoint receives Instagram Messaging webhook events, extracts Instagram Reel/post URLs from message text, attachment URLs, and nested shared-media payloads, and stores structured intake records in `MOBILE_AUTH_KV` under the `instagram:intake:` prefix. It does not execute DM text as a Codex prompt.
+The endpoint receives Instagram Messaging webhook events, extracts Instagram Reel/post URLs from message text, attachment URLs, and nested shared-media payloads, and stores structured intake records in `MOBILE_AUTH_KV` under the `instagram:intake:` prefix. It supports both older Messenger-style `entry[].messaging[]` webhook payloads and Instagram API `entry[].changes[].field = "messages"` payloads. It does not execute DM text as a Codex prompt.
 
 The intended user action is still native Instagram sharing: send a Reel/post to the inbox account as an Instagram attachment. Plain pasted URLs are a fallback for diagnosis, not the target workflow.
 
@@ -61,3 +61,12 @@ The local processor calls `Tools\AddInstagramReelToBrain.ps1`, creating raw capt
 If a record has `needs_sender_allowlist`, copy the non-secret sender id into the `INSTAGRAM_ALLOWED_SENDER_IDS` Cloudflare Pages variable before allowing automated processing.
 
 If a record has `needs_manual_review` with `native_attachment_detected=true`, Meta delivered a native share but did not expose a canonical URL in the webhook payload. Preserve the record and use the attachment metadata as the source capture until a more precise resolver is available.
+
+## Diagnostics
+
+If native Instagram shares are visible in the Instagram web inbox but do not appear in `instagram:intake:`, check these before adding personal accounts as testers:
+
+1. Confirm Meta's API setup page does not show a warning that webhooks require the app to be published.
+2. Confirm the `messages` webhook field is subscribed.
+3. Send a signed test payload using the `entry[].changes[].field = "messages"` shape, because Instagram API setup samples use this shape.
+4. If signed change-style tests store records but real DMs do not, the next blocker is Meta app publish/review/live-data access rather than the WAR ROOM parser.
