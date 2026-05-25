@@ -1,6 +1,7 @@
 import { json, normalizeString, requireBackendSession } from "../../_lib/backend-auth.js";
 
 const DEFAULT_INSTAGRAM_PREFIX = "instagram:intake:";
+const DEFAULT_DIAGNOSTIC_PREFIX = "instagram:webhook-diagnostic:";
 const CONFIRM_STATUS = "confirm_existence";
 const CONFIRMABLE_STATUSES = new Set(["confirm_existence", "failed", "retry_queued"]);
 
@@ -16,6 +17,10 @@ function getQueueKV(env) {
 
 function configuredInstagramPrefix(env) {
     return normalizeString(env.INSTAGRAM_INTAKE_KV_PREFIX, 80) || DEFAULT_INSTAGRAM_PREFIX;
+}
+
+function configuredDiagnosticPrefix(env) {
+    return normalizeString(env.INSTAGRAM_WEBHOOK_DIAGNOSTIC_PREFIX, 120) || DEFAULT_DIAGNOSTIC_PREFIX;
 }
 
 async function listKeys(kv, prefix) {
@@ -102,6 +107,22 @@ function summarizeRecord(record) {
     };
 }
 
+function summarizeDiagnostic(record) {
+    return {
+        id: normalizeString(record?.id, 160),
+        receivedAt: normalizeString(record?.received_at, 80),
+        status: normalizeString(record?.status, 80),
+        signaturePresent: Boolean(record?.signature_present),
+        signatureVerified: Boolean(record?.signature_verified),
+        object: normalizeString(record?.object, 80),
+        eventCount: Number(record?.event_count) || 0,
+        storedCount: Number(record?.stored_count) || 0,
+        readyCount: Number(record?.ready_count) || 0,
+        bodyBytes: Number(record?.body_bytes) || 0,
+        error: normalizeString(record?.error, 300)
+    };
+}
+
 function removeQueueMetadata(record) {
     delete record.handled_at;
     delete record.processing_started_at;
@@ -137,6 +158,8 @@ async function listConfirmExistence(context) {
 
     const prefix = configuredInstagramPrefix(context.env);
     const keys = await listKeys(kv, prefix);
+    const diagnosticPrefix = configuredDiagnosticPrefix(context.env);
+    const diagnosticKeys = await listKeys(kv, diagnosticPrefix);
     const records = [];
     for (const key of keys) {
         const record = await getJson(kv, key.name);
@@ -145,12 +168,21 @@ async function listConfirmExistence(context) {
     }
     records.sort((left, right) => String(left.receivedAt).localeCompare(String(right.receivedAt)));
 
+    const diagnostics = [];
+    for (const key of diagnosticKeys) {
+        const record = await getJson(kv, key.name);
+        if (!record) continue;
+        diagnostics.push(summarizeDiagnostic(record));
+    }
+    diagnostics.sort((left, right) => String(right.receivedAt).localeCompare(String(left.receivedAt)));
+
     return json({
         ok: true,
         updatedAt: new Date().toISOString(),
         queue: "confirm_existence",
         prefix,
-        records
+        records,
+        diagnostics: diagnostics.slice(0, 20)
     });
 }
 

@@ -101,6 +101,10 @@
     color: var(--danger);
 }
 
+.diagnostic-item {
+    grid-template-columns: 1fr;
+}
+
 .instagram-skeleton {
     position: relative;
     overflow: hidden;

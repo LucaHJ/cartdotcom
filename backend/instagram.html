@@ -44,12 +44,22 @@
             <p id="queueStatus" class="instagram-status" aria-live="polite">Loading</p>
             <div id="queueList" class="instagram-list" aria-live="polite"></div>
         </section>
+        <section class="instagram-panel" aria-label="Instagram webhook diagnostics">
+            <div class="instagram-head">
+                <div>
+                    <p class="eyebrow">webhook diagnostics</p>
+                    <h2>Recent POSTs</h2>
+                </div>
+            </div>
+            <div id="diagnosticList" class="instagram-list"></div>
+        </section>
     </main>
 
     <script src="/refresh-button.js?v=20260526-refresh"></script>
     <script>
         const queueStatus = document.getElementById("queueStatus");
         const queueList = document.getElementById("queueList");
+        const diagnosticList = document.getElementById("diagnosticList");
         const refreshQueue = document.getElementById("refreshQueue");
 
         function escapeHtml(value) {
@@ -136,14 +146,35 @@
             `).join("");
         }
 
+        function renderDiagnostics(records) {
+            if (!records.length) {
+                diagnosticList.innerHTML = "<p class='empty'>No webhook POST diagnostics recorded yet.</p>";
+                return;
+            }
+            diagnosticList.innerHTML = records.map((record) => `
+                <article class="instagram-item diagnostic-item">
+                    <div class="instagram-item-main">
+                        <div class="instagram-id-row">
+                            <strong>${escapeHtml(record.status || "unknown")}</strong>
+                            <span>${escapeHtml(formatDate(record.receivedAt))}</span>
+                        </div>
+                        <small>events ${escapeHtml(record.eventCount)} - stored ${escapeHtml(record.storedCount)} - signature ${record.signatureVerified ? "verified" : record.signaturePresent ? "failed" : "missing"} - ${escapeHtml(record.bodyBytes)} bytes</small>
+                        ${record.error ? `<p>${escapeHtml(record.error)}</p>` : ""}
+                    </div>
+                </article>
+            `).join("");
+        }
+
         async function loadQueue() {
             renderSkeletons();
             try {
                 const payload = await api("/api/backend/instagram");
                 renderQueue(payload.records || []);
+                renderDiagnostics(payload.diagnostics || []);
             } catch (error) {
                 queueStatus.textContent = "Error";
                 queueList.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+                diagnosticList.innerHTML = "";
             }
         }
 

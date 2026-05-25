@@ -1,9 +1,11 @@
 const DEFAULT_PREFIX = "instagram:intake:";
+const DEFAULT_DIAGNOSTIC_PREFIX = "instagram:webhook-diagnostic:";
 const MAX_TEXT_LENGTH = 2000;
 const MAX_URLS = 5;
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_STRINGS = 40;
 const TTL_SECONDS = 30 * 24 * 60 * 60;
+const DIAGNOSTIC_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 function json(data, status = 200, extraHeaders = {}) {
     return new Response(JSON.stringify(data), {
@@ -41,6 +43,11 @@ function configuredAppSecret(env) {
 function configuredPrefix(env) {
     const prefix = normalizeString(env.INSTAGRAM_INTAKE_KV_PREFIX, 80);
     return prefix || DEFAULT_PREFIX;
+}
+
+function configuredDiagnosticPrefix(env) {
+    const prefix = normalizeString(env.INSTAGRAM_WEBHOOK_DIAGNOSTIC_PREFIX, 120);
+    return prefix || DEFAULT_DIAGNOSTIC_PREFIX;
 }
 
 function timingSafeEqual(left, right) {
@@ -279,6 +286,26 @@ async function storeRecord(env, record) {
     return key;
 }
 
+async function storeWebhookDiagnostic(env, diagnostic) {
+    const kv = env.MOBILE_AUTH_KV;
+    if (!kv) return "";
+    const now = new Date().toISOString();
+    const key = `${configuredDiagnosticPrefix(env)}${now}:${crypto.randomUUID().slice(0, 8)}`;
+    const record = {
+        id: key.slice(configuredDiagnosticPrefix(env).length),
+        received_at: now,
+        source: "instagram_webhook",
+        ...diagnostic
+    };
+    try {
+        await kv.put(key, JSON.stringify(record), { expirationTtl: DIAGNOSTIC_TTL_SECONDS });
+        return key;
+    } catch (error) {
+        console.warn("Instagram webhook diagnostic write failed", error?.message || error);
+        return "";
+    }
+}
+
 export async function onRequestGet(context) {
     const url = new URL(context.request.url);
     const mode = url.searchParams.get("hub.mode") || "";
@@ -297,8 +324,21 @@ export async function onRequestGet(context) {
 
 export async function onRequestPost(context) {
     const bodyText = await context.request.text();
+    const baseDiagnostic = {
+        method: context.request.method,
+        content_type: normalizeString(context.request.headers.get("content-type"), 160),
+        user_agent: normalizeString(context.request.headers.get("user-agent"), 260),
+        signature_present: Boolean(context.request.headers.get("x-hub-signature-256")),
+        body_bytes: new TextEncoder().encode(bodyText).length
+    };
     const signature = await verifySignature(context.request, context.env, bodyText);
     if (!signature.ok) {
+        await storeWebhookDiagnostic(context.env, {
+            ...baseDiagnostic,
+            status: "signature_failed",
+            signature_verified: false,
+            error: normalizeString(signature.error, 300)
+        });
         return json({ error: signature.error || "Instagram webhook signature verification failed." }, 403);
     }
 
@@ -306,6 +346,11 @@ export async function onRequestPost(context) {
     try {
         payload = JSON.parse(bodyText);
     } catch (error) {
+        await storeWebhookDiagnostic(context.env, {
+            ...baseDiagnostic,
+            status: "invalid_json",
+            signature_verified: signature.verified
+        });
         return json({ error: "Invalid JSON body." }, 400);
     }
 
@@ -325,6 +370,17 @@ export async function onRequestPost(context) {
             signatureVerified: signature.verified
         });
     }
+
+    await storeWebhookDiagnostic(context.env, {
+        ...baseDiagnostic,
+        status: "accepted",
+        signature_verified: signature.verified,
+        object: normalizeString(payload?.object, 80),
+        event_count: events.length,
+        stored_count: records.length,
+        ready_count: records.filter(record => record.status === "ready").length,
+        record_statuses: records.map(record => record.status).slice(0, 20)
+    });
 
     return json({
         ok: true,
