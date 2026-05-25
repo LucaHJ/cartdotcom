@@ -15,9 +15,11 @@ const INSTAGRAM_STAGE_DEFINITIONS = [
     { id: "detected", label: "Detected", kind: "total" },
     { id: "queued", label: "Queued", statuses: ["ready", "needs_manual_review"] },
     { id: "retry_queued", label: "Retry queued", statuses: ["retry_queued"] },
+    { id: "confirm_existence", label: "Confirm existence", statuses: ["confirm_existence"] },
     { id: "claimed", label: "Claimed", statuses: ["running"] },
     { id: "sender_gate", label: "Sender gate", statuses: ["needs_sender_allowlist"] },
     { id: "failed", label: "Failed", statuses: ["failed"] },
+    { id: "removed", label: "Removed", statuses: ["removed"] },
     { id: "handled", label: "Handled", statuses: ["handled"] }
 ];
 

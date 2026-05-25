@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Instagram</title>
+    <link rel="stylesheet" href="/dashboard.css?v=20260526-refresh">
+    <link rel="stylesheet" href="/instagram.css?v=20260526-confirm">
+</head>
+<body>
+    <header class="topbar">
+        <div>
+            <p class="eyebrow">cartdotcom control surface</p>
+            <h1>Instagram</h1>
+        </div>
+        <nav class="topnav" aria-label="Main navigation">
+            <a href="/home.html">Home</a>
+            <a href="/backend/dashboard.html">Dashboard</a>
+            <a href="/backend/prompting.html">Prompting</a>
+            <a href="/backend/second-brain.html">Second Brain</a>
+            <a href="/backend/youtube-synthesis.html">YouTube</a>
+            <a href="/backend/instagram.html">Instagram</a>
+            <a href="/mobile-approval.html">Mobile Approval</a>
+            <button class="nav-button" id="logoutButton" type="button">Logout</button>
+        </nav>
+    </header>
+
+    <main class="shell instagram-shell">
+        <section class="instagram-panel" aria-label="Instagram confirm existence queue">
+            <div class="instagram-head">
+                <div>
+                    <p class="eyebrow">confirm existence</p>
+                    <h2>Empty-media Reels</h2>
+                </div>
+                <button class="icon-button refresh-button" id="refreshQueue" type="button" aria-label="Refresh Instagram queue" title="Refresh Instagram queue">
+                    <svg aria-hidden="true" viewBox="0 0 24 24">
+                        <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path>
+                        <path d="M3 21v-5h5"></path>
+                        <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"></path>
+                        <path d="M21 3v5h-5"></path>
+                    </svg>
+                </button>
+            </div>
+            <p id="queueStatus" class="instagram-status" aria-live="polite">Loading</p>
+            <div id="queueList" class="instagram-list" aria-live="polite"></div>
+        </section>
+    </main>
+
+    <script src="/refresh-button.js?v=20260526-refresh"></script>
+    <script>
+        const queueStatus = document.getElementById("queueStatus");
+        const queueList = document.getElementById("queueList");
+        const refreshQueue = document.getElementById("refreshQueue");
+
+        function escapeHtml(value) {
+            return String(value || "").replace(/[&<>"']/g, (char) => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#039;"
+            }[char]));
+        }
+
+        function formatDate(value) {
+            if (!value) return "";
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+        }
+
+        async function api(path, options = {}) {
+            const response = await fetch(path, {
+                credentials: "same-origin",
+                ...options,
+                headers: {
+                    accept: "application/json",
+                    "Content-Type": "application/json",
+                    ...(options.headers || {})
+                }
+            });
+            const contentType = response.headers.get("content-type") || "";
+            const payload = contentType.includes("application/json") ? await response.json().catch(() => ({})) : {};
+            if (!contentType.includes("application/json")) {
+                throw new Error("Backend login required");
+            }
+            if (!response.ok || payload.error) {
+                throw new Error(payload.error || "Request failed");
+            }
+            return payload;
+        }
+
+        function renderSkeletons() {
+            queueList.innerHTML = Array.from({ length: 3 }, () => `
+                <article class="instagram-item instagram-skeleton-item" aria-hidden="true">
+                    <div class="instagram-item-main">
+                        <span class="instagram-skeleton skeleton-id">&nbsp;</span>
+                        <span class="instagram-skeleton skeleton-url">&nbsp;</span>
+                        <span class="instagram-skeleton skeleton-note">&nbsp;</span>
+                    </div>
+                </article>
+            `).join("");
+        }
+
+        function renderQueue(records) {
+            queueStatus.textContent = `${records.length} to confirm`;
+            if (!records.length) {
+                queueList.innerHTML = "<p class='empty'>No Instagram links need existence confirmation.</p>";
+                return;
+            }
+
+            queueList.innerHTML = records.map((record) => `
+                <article class="instagram-item" data-id="${escapeHtml(record.id)}">
+                    <div class="instagram-item-main">
+                        <div class="instagram-id-row">
+                            <strong>${escapeHtml(record.id)}</strong>
+                            <span>${escapeHtml(record.status || "confirm_existence")}</span>
+                        </div>
+                        ${record.url ? `<a class="instagram-link" href="${escapeHtml(record.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(record.url)}</a>` : "<span class='instagram-link'>No URL captured</span>"}
+                        ${record.title ? `<p>${escapeHtml(record.title)}</p>` : ""}
+                        <small>${escapeHtml(formatDate(record.receivedAt))}${record.note ? " - " + escapeHtml(record.note) : ""}</small>
+                    </div>
+                    <div class="instagram-actions">
+                        <button class="icon-button instagram-decision" type="button" data-decision="exists" aria-label="Confirm ${escapeHtml(record.id)} exists" title="Confirm exists">
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <path d="M20 6 9 17l-5-5"></path>
+                            </svg>
+                        </button>
+                        <button class="icon-button instagram-decision danger" type="button" data-decision="removed" aria-label="Mark ${escapeHtml(record.id)} removed" title="Mark removed">
+                            <svg aria-hidden="true" viewBox="0 0 24 24">
+                                <path d="M18 6 6 18"></path>
+                                <path d="m6 6 12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </article>
+            `).join("");
+        }
+
+        async function loadQueue() {
+            renderSkeletons();
+            try {
+                const payload = await api("/api/backend/instagram");
+                renderQueue(payload.records || []);
+            } catch (error) {
+                queueStatus.textContent = "Error";
+                queueList.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        async function decideRecord(id, decision, button) {
+            button.disabled = true;
+            queueStatus.textContent = decision === "exists" ? `Confirming ${id}` : `Removing ${id}`;
+            try {
+                await api("/api/backend/instagram", {
+                    method: "POST",
+                    body: JSON.stringify({ id, decision })
+                });
+                await loadQueue();
+            } catch (error) {
+                queueStatus.textContent = error.message;
+                button.disabled = false;
+            }
+        }
+
+        refreshQueue.addEventListener("click", () => runRefreshButton(refreshQueue, loadQueue));
+        queueList.addEventListener("click", (event) => {
+            const button = event.target.closest(".instagram-decision");
+            if (!button) return;
+            const item = button.closest(".instagram-item");
+            if (!item) return;
+            decideRecord(item.dataset.id, button.dataset.decision, button);
+        });
+        document.getElementById("logoutButton").addEventListener("click", async () => {
+            await fetch("/api/auth/logout", { method: "POST" });
+            window.location.href = "/login.html";
+        });
+
+        loadQueue();
+    </script>
+</body>
+</html>

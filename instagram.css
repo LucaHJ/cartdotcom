@@ -1,0 +1,150 @@
+.instagram-shell {
+    max-width: 1040px;
+    min-height: calc(100vh - 92px);
+    display: grid;
+    align-items: start;
+}
+
+.instagram-panel {
+    display: grid;
+    gap: 16px;
+    padding-top: 18px;
+}
+
+.instagram-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 12px;
+}
+
+.instagram-head h2 {
+    margin: 4px 0 0;
+    color: var(--ink-strong);
+    font-size: 22px;
+}
+
+.instagram-status {
+    min-height: 20px;
+    margin: 0;
+    color: var(--muted);
+}
+
+.instagram-list {
+    display: grid;
+    gap: 12px;
+}
+
+.instagram-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: start;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 12px;
+}
+
+.instagram-item-main {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+
+.instagram-id-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.instagram-id-row strong {
+    color: var(--ink-strong);
+    font-size: 15px;
+}
+
+.instagram-id-row span {
+    color: var(--accent-strong);
+    font-size: 12px;
+    font-weight: 750;
+    text-transform: uppercase;
+}
+
+.instagram-link,
+.instagram-item p,
+.instagram-item small {
+    overflow-wrap: anywhere;
+}
+
+.instagram-item p {
+    margin: 0;
+    color: var(--ink);
+}
+
+.instagram-item small {
+    color: var(--muted);
+}
+
+.instagram-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.instagram-actions .icon-button {
+    width: 38px;
+    height: 38px;
+    min-height: 38px;
+}
+
+.instagram-actions .danger {
+    color: var(--danger);
+}
+
+.instagram-skeleton {
+    position: relative;
+    overflow: hidden;
+    border-radius: 4px;
+    background: rgba(156, 163, 175, 0.16);
+    color: transparent;
+}
+
+.instagram-skeleton::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+    content: "";
+    transform: translateX(-100%);
+    animation: instagram-skeleton 1.4s ease-in-out infinite;
+}
+
+.skeleton-id {
+    width: 120px;
+    height: 17px;
+}
+
+.skeleton-url {
+    width: min(100%, 520px);
+    height: 16px;
+}
+
+.skeleton-note {
+    width: min(82%, 420px);
+    height: 13px;
+}
+
+@keyframes instagram-skeleton {
+    100% {
+        transform: translateX(100%);
+    }
+}
+
+@media (max-width: 620px) {
+    .instagram-item {
+        grid-template-columns: 1fr;
+    }
+
+    .instagram-actions {
+        justify-content: flex-start;
+    }
+}

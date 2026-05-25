@@ -13,6 +13,8 @@ const BACKEND_STATIC_PATHS = new Set([
     "/backend/second-brain.html",
     "/backend/youtube-synthesis",
     "/backend/youtube-synthesis.html",
+    "/backend/instagram",
+    "/backend/instagram.html",
     "/dashboard",
     "/dashboard.html",
     "/prompting",
@@ -20,7 +22,9 @@ const BACKEND_STATIC_PATHS = new Set([
     "/second-brain",
     "/second-brain.html",
     "/youtube-synthesis",
-    "/youtube-synthesis.html"
+    "/youtube-synthesis.html",
+    "/instagram",
+    "/instagram.html"
 ]);
 const REDIRECTS = new Map([
     ["/dashboard", "/backend/dashboard.html"],
@@ -30,7 +34,9 @@ const REDIRECTS = new Map([
     ["/second-brain", "/backend/second-brain.html"],
     ["/second-brain.html", "/backend/second-brain.html"],
     ["/youtube-synthesis", "/backend/youtube-synthesis.html"],
-    ["/youtube-synthesis.html", "/backend/youtube-synthesis.html"]
+    ["/youtube-synthesis.html", "/backend/youtube-synthesis.html"],
+    ["/instagram", "/backend/instagram.html"],
+    ["/instagram.html", "/backend/instagram.html"]
 ]);
 const MOBILE_ACCESS_PATHS = new Set(["/mobile-approval", "/mobile-approval.html"]);
 
