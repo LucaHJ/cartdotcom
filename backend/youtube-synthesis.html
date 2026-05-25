@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>YouTube Synthesis Intake</title>
     <link rel="stylesheet" href="/dashboard.css?v=20260525-youtube">
-    <link rel="stylesheet" href="/youtube-synthesis.css?v=20260525-dedupe">
+    <link rel="stylesheet" href="/youtube-synthesis.css?v=20260526-cache">
 </head>
 <body>
     <header class="topbar">
@@ -61,6 +61,26 @@
         const submitStatus = document.getElementById("submitStatus");
         const jobList = document.getElementById("jobList");
         const refreshJobs = document.getElementById("refreshJobs");
+        const cacheKey = "cartdotcom:youtube-synthesis:recent-jobs";
+        const cacheTtlMs = 5 * 60 * 1000;
+
+        function readJobsCache() {
+            try {
+                const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
+                if (!cached || !cached.savedAt || Date.now() - cached.savedAt > cacheTtlMs) return null;
+                return Array.isArray(cached.jobs) ? cached.jobs : null;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function writeJobsCache(jobs) {
+            try {
+                localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), jobs }));
+            } catch (error) {
+                // Cache failures should not block the recent-jobs UI.
+            }
+        }
 
         function escapeHtml(value) {
             return String(value || "").replace(/[&<>"']/g, (char) => ({
@@ -76,6 +96,19 @@
             if (!value) return "";
             const date = new Date(value);
             return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+        }
+
+        function renderJobSkeletons() {
+            jobList.innerHTML = Array.from({ length: 4 }, () => `
+                <article class="youtube-job youtube-job-skeleton" aria-hidden="true">
+                    <div>
+                        <strong class="youtube-skeleton skeleton-job-id">&nbsp;</strong>
+                        <span class="youtube-skeleton skeleton-job-status">&nbsp;</span>
+                    </div>
+                    <span class="youtube-skeleton skeleton-job-url">&nbsp;</span>
+                    <small class="youtube-skeleton skeleton-job-note">&nbsp;</small>
+                </article>
+            `).join("");
         }
 
         async function api(path, options = {}) {
@@ -126,12 +159,19 @@
         }
 
         async function loadJobs() {
-            jobList.innerHTML = "<p class='empty'>Loading</p>";
+            const cached = readJobsCache();
+            if (cached) {
+                renderJobs(cached);
+            } else {
+                renderJobSkeletons();
+            }
             try {
                 const payload = await api("/api/backend/youtube-synthesis");
-                renderJobs(payload.jobs || []);
+                const jobs = payload.jobs || [];
+                writeJobsCache(jobs);
+                renderJobs(jobs);
             } catch (error) {
-                jobList.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+                if (!cached) jobList.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
             }
         }
 

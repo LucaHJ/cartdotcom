@@ -101,6 +101,49 @@
     min-height: 34px;
 }
 
+.youtube-skeleton {
+    position: relative;
+    overflow: hidden;
+    border-radius: 4px;
+    background: rgba(156, 163, 175, 0.16);
+    color: transparent;
+}
+
+.youtube-skeleton::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+    content: "";
+    transform: translateX(-100%);
+    animation: youtube-skeleton 1.4s ease-in-out infinite;
+}
+
+.skeleton-job-id {
+    width: 132px;
+    height: 17px;
+}
+
+.skeleton-job-status {
+    width: 78px;
+    height: 14px;
+}
+
+.skeleton-job-url {
+    width: min(100%, 420px);
+    height: 16px;
+}
+
+.skeleton-job-note {
+    width: min(82%, 360px);
+    height: 13px;
+}
+
+@keyframes youtube-skeleton {
+    100% {
+        transform: translateX(100%);
+    }
+}
+
 @media (max-width: 520px) {
     .youtube-url-row {
         align-items: stretch;

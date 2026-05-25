@@ -81,6 +81,97 @@ function normalizeYouTubeUrl(value) {
     return { normalizedUrl, videoId };
 }
 
+function collectStringValues(value, output = [], depth = 0) {
+    if (output.length >= 60 || depth > 8 || value == null) return output;
+    if (typeof value === "string" || typeof value === "number") {
+        const normalized = normalizeString(value, 1200);
+        if (normalized && !output.includes(normalized)) output.push(normalized);
+        return output;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            collectStringValues(item, output, depth + 1);
+            if (output.length >= 60) break;
+        }
+        return output;
+    }
+    if (typeof value === "object") {
+        for (const item of Object.values(value)) {
+            collectStringValues(item, output, depth + 1);
+            if (output.length >= 60) break;
+        }
+    }
+    return output;
+}
+
+function youtubeUrlsFromRecord(approval) {
+    const values = [
+        approval?.youtube?.url,
+        approval?.url,
+        approval?.source_url,
+        approval?.target,
+        approval?.prompt,
+        approval?.handling_note,
+        ...collectStringValues(approval?.attachments || [])
+    ].filter(Boolean);
+    const urls = [];
+    const youtubeUrlPattern = /https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\s"'`<>)]+/gi;
+
+    for (const value of values) {
+        const text = String(value);
+        for (const match of text.matchAll(youtubeUrlPattern)) {
+            const url = match[0].replace(/[),.;]+$/, "");
+            if (!urls.includes(url)) urls.push(url);
+        }
+    }
+
+    return urls;
+}
+
+function youtubeIdentity(approval) {
+    const urls = youtubeUrlsFromRecord(approval);
+    for (const url of urls) {
+        try {
+            const normalized = normalizeYouTubeUrl(url);
+            if (normalized.videoId) {
+                return {
+                    key: `id:${normalized.videoId}`,
+                    url: normalized.normalizedUrl,
+                    videoId: normalized.videoId
+                };
+            }
+        } catch (error) {
+            // Historical records may contain non-canonical text; keep scanning.
+        }
+    }
+
+    const video = approval?.youtube || {};
+    const videoId = normalizeString(video.video_id, 80);
+    if (videoId) {
+        return {
+            key: `id:${videoId}`,
+            url: video.url || `https://www.youtube.com/watch?v=${videoId}`,
+            videoId
+        };
+    }
+
+    const videoKey = normalizeString(video.video_key, 240);
+    if (videoKey) {
+        return {
+            key: videoKey,
+            url: normalizeString(video.url, 1000),
+            videoId: videoKey.startsWith("id:") ? videoKey.slice(3) : ""
+        };
+    }
+
+    const url = normalizeString(video.url, 1000);
+    return {
+        key: url ? `url:${url}` : `job:${normalizeString(approval?.job_id, 120)}`,
+        url,
+        videoId: ""
+    };
+}
+
 function buildPrompt({ url, jobId }) {
     return [
         "Run the unattended long-form YouTube video synthesis pipeline.",
@@ -147,11 +238,13 @@ function duplicateRank(status) {
 }
 
 function summarizeApproval(approval) {
+    const identity = youtubeIdentity(approval);
     return {
         jobId: approval.job_id,
         status: approval.status,
-        url: approval.youtube?.url || "",
-        videoId: approval.youtube?.video_id || "",
+        url: identity.url || approval.youtube?.url || "",
+        videoId: identity.videoId || approval.youtube?.video_id || "",
+        videoKey: identity.key || "",
         createdAt: approval.created_at || "",
         handledAt: approval.handled_at || "",
         retryOf: approval.retry_of || "",
@@ -402,14 +495,26 @@ async function listRecentYouTubeJobs(context, actor) {
     }
 
     const listedKeys = await listApprovalKeys(kv);
-    const jobs = [];
+    const approvalsByVideo = new Map();
     for (const key of listedKeys) {
         const approval = await getApprovalJson(kv, key.name);
         if (!approval || approval.action_class !== "youtube_synthesis") continue;
         if (approval.owner && approval.owner !== actor.email && context.env.MOBILE_APPROVAL_ALLOW_ALL !== "true") continue;
-        jobs.push(summarizeApproval(approval));
+
+        const identity = youtubeIdentity(approval);
+        const existing = approvalsByVideo.get(identity.key);
+        if (!existing) {
+            approvalsByVideo.set(identity.key, approval);
+            continue;
+        }
+
+        const rankDelta = duplicateRank(approval.status) - duplicateRank(existing.status);
+        if (rankDelta < 0 || (rankDelta === 0 && String(approval.created_at || "").localeCompare(String(existing.created_at || "")) > 0)) {
+            approvalsByVideo.set(identity.key, approval);
+        }
     }
 
+    const jobs = Array.from(approvalsByVideo.values()).map(summarizeApproval);
     jobs.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
     return json({ ok: true, jobs: jobs.slice(0, MAX_RECENT_JOBS) });
 }
