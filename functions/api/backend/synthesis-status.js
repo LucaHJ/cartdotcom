@@ -55,9 +55,18 @@ function actorCanSeeApproval(context, approval, actor) {
     return !approval.owner || approval.owner === actor.email || context.env.MOBILE_APPROVAL_ALLOW_ALL === "true";
 }
 
-function incrementStatus(statusCounts, status) {
-    const key = normalizeString(status, 80) || "unknown";
-    statusCounts[key] = (statusCounts[key] || 0) + 1;
+function addStatusIdentity(statusSets, status, submissionKey) {
+    const statusKey = normalizeString(status, 80) || "unknown";
+    if (!statusSets[statusKey]) statusSets[statusKey] = new Set();
+    statusSets[statusKey].add(submissionKey);
+}
+
+function statusSetCounts(statusSets) {
+    const counts = {};
+    for (const [status, identities] of Object.entries(statusSets)) {
+        counts[status] = identities.size;
+    }
+    return counts;
 }
 
 function collectStringValues(value, output = [], depth = 0) {
@@ -197,10 +206,32 @@ function suppressResolvedFailures(items, keyForItem) {
 
     return items.map((item) => ({
         ...item,
+        submissionKey: keyForItem(item.record),
         effectiveStatus: item.record.status === "failed" && handledKeys.has(keyForItem(item.record))
             ? "failed_resolved"
             : item.record.status
     }));
+}
+
+function summarizeEffectiveStatuses(effectiveRecords) {
+    const statusSets = {};
+    const totalIdentities = new Set();
+    const resolvedFailedIdentities = new Set();
+
+    for (const item of effectiveRecords) {
+        if (!item.submissionKey) continue;
+        totalIdentities.add(item.submissionKey);
+        addStatusIdentity(statusSets, item.effectiveStatus, item.submissionKey);
+        if (item.effectiveStatus === "failed_resolved") {
+            resolvedFailedIdentities.add(item.submissionKey);
+        }
+    }
+
+    return {
+        total: totalIdentities.size,
+        statusCounts: statusSetCounts(statusSets),
+        resolvedFailed: resolvedFailedIdentities.size
+    };
 }
 
 function buildStages(definitions, statusCounts, total) {
@@ -219,24 +250,18 @@ function buildStages(definitions, statusCounts, total) {
 
 async function summarizeYouTube(kv, context, actor) {
     const keys = await listKeys(kv, APPROVAL_PREFIX);
-    const statusCounts = {};
     const records = [];
-    let total = 0;
 
     for (const key of keys) {
         const approval = await getJson(kv, key.name);
         if (!approval || approval.action_class !== "youtube_synthesis") continue;
         if (!actorCanSeeApproval(context, approval, actor)) continue;
 
-        total += 1;
         records.push({ record: approval });
     }
 
     const effectiveRecords = suppressResolvedFailures(records, youtubeSubmissionKey);
-    const resolvedFailed = effectiveRecords.filter((item) => item.effectiveStatus === "failed_resolved").length;
-    for (const item of effectiveRecords) {
-        incrementStatus(statusCounts, item.effectiveStatus);
-    }
+    const { total, statusCounts, resolvedFailed } = summarizeEffectiveStatuses(effectiveRecords);
 
     return {
         id: "youtube",
@@ -251,23 +276,17 @@ async function summarizeYouTube(kv, context, actor) {
 async function summarizeInstagram(kv, context) {
     const prefix = configuredInstagramPrefix(context.env);
     const keys = await listKeys(kv, prefix);
-    const statusCounts = {};
     const records = [];
-    let total = 0;
 
     for (const key of keys) {
         const record = await getJson(kv, key.name);
         if (!record) continue;
 
-        total += 1;
         records.push({ record });
     }
 
     const effectiveRecords = suppressResolvedFailures(records, instagramSubmissionKey);
-    const resolvedFailed = effectiveRecords.filter((item) => item.effectiveStatus === "failed_resolved").length;
-    for (const item of effectiveRecords) {
-        incrementStatus(statusCounts, item.effectiveStatus);
-    }
+    const { total, statusCounts, resolvedFailed } = summarizeEffectiveStatuses(effectiveRecords);
 
     return {
         id: "instagram",
