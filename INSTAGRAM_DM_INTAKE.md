@@ -6,7 +6,9 @@ This repository exposes a Meta webhook endpoint for WAR ROOM Instagram Reel capt
 https://cartdotcom.com/api/instagram/webhook
 ```
 
-The endpoint receives Instagram Messaging webhook events, extracts Instagram Reel/post URLs from message text or attachment URLs, and stores structured intake records in `MOBILE_AUTH_KV` under the `instagram:intake:` prefix. It does not execute DM text as a Codex prompt.
+The endpoint receives Instagram Messaging webhook events, extracts Instagram Reel/post URLs from message text, attachment URLs, and nested shared-media payloads, and stores structured intake records in `MOBILE_AUTH_KV` under the `instagram:intake:` prefix. It does not execute DM text as a Codex prompt.
+
+The intended user action is still native Instagram sharing: send a Reel/post to the inbox account as an Instagram attachment. Plain pasted URLs are a fallback for diagnosis, not the target workflow.
 
 ## Required Cloudflare Pages Variables
 
@@ -57,3 +59,5 @@ powershell -ExecutionPolicy Bypass -File C:\Users\User\Desktop\WAR-ROOM\Tools\Pr
 The local processor calls `Tools\AddInstagramReelToBrain.ps1`, creating raw captures, wiki source pages, and description queue rows.
 
 If a record has `needs_sender_allowlist`, copy the non-secret sender id into the `INSTAGRAM_ALLOWED_SENDER_IDS` Cloudflare Pages variable before allowing automated processing.
+
+If a record has `needs_manual_review` with `native_attachment_detected=true`, Meta delivered a native share but did not expose a canonical URL in the webhook payload. Preserve the record and use the attachment metadata as the source capture until a more precise resolver is available.
