@@ -149,6 +149,7 @@
         const contentCachePrefix = `${cachePrefix}content:v2:`;
         const pagesCacheTtl = 10 * 60 * 1000;
         const contentCacheTtl = 30 * 60 * 1000;
+        const minGraphZoom = 0.06;
         const rootFolderLabelByName = new Map();
 
         let pages = [];
@@ -889,7 +890,7 @@
 
         function setGraphZoom(nextZoom, originX = null, originY = null) {
             const previousZoom = graphZoom;
-            const boundedZoom = Math.max(0.06, Math.min(8, nextZoom));
+            const boundedZoom = Math.max(minGraphZoom, Math.min(8, nextZoom));
             if (Math.abs(boundedZoom - previousZoom) < 0.001) return;
 
             const width = Math.max(360, Math.round(graphSvg.clientWidth || graphSvg.parentElement.clientWidth || 720));
@@ -1107,7 +1108,7 @@
             graphLayoutSize = { width: layoutWidth, height: layoutHeight };
             layoutGraph(graphData.nodes, graphData.edges, layoutWidth, layoutHeight);
             if (!graphHasUserTransform) {
-                graphZoom = 0.55;
+                graphZoom = minGraphZoom;
                 graphPan = {
                     x: (width - layoutWidth * graphZoom) / 2,
                     y: (height - layoutHeight * graphZoom) / 2
