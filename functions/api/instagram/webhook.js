@@ -145,8 +145,12 @@ function collectStringValues(value, output = [], depth = 0) {
 }
 
 function summarizeAttachments(attachments) {
-    if (!Array.isArray(attachments)) return [];
-    return attachments.slice(0, MAX_ATTACHMENTS).map((attachment) => {
+    const attachmentList = Array.isArray(attachments)
+        ? attachments
+        : Array.isArray(attachments?.data)
+            ? attachments.data
+            : [];
+    return attachmentList.slice(0, MAX_ATTACHMENTS).map((attachment) => {
         const payloadStrings = collectStringValues(attachment?.payload || attachment, []);
         return {
             type: normalizeString(attachment?.type, 80),
@@ -155,6 +159,27 @@ function summarizeAttachments(attachments) {
             payload_strings: payloadStrings.slice(0, 12)
         };
     });
+}
+
+function eventFromMessageValue(value, entry, rawSource) {
+    const message = value?.message || {};
+    const sender = value?.sender || message?.sender || {};
+    const recipient = value?.recipient || message?.recipient || {};
+    const referral = value?.referral || message?.referral || {};
+    const postback = value?.postback || message?.postback || {};
+
+    return {
+        entryId: normalizeString(entry?.id, 120),
+        senderId: normalizeString(sender?.id, 120),
+        recipientId: normalizeString(recipient?.id, 120),
+        timestamp: value?.timestamp || message?.timestamp || entry?.time || Date.now(),
+        messageId: normalizeString(message?.mid || message?.id || value?.mid || value?.id, 200),
+        text: normalizeString(message?.text || value?.text, MAX_TEXT_LENGTH),
+        attachments: summarizeAttachments(message?.attachments || value?.attachments),
+        referral: normalizeString(referral?.ref || referral?.source || referral?.type || "", 1000),
+        postback: normalizeString(postback?.payload || "", 1000),
+        raw_strings: collectStringValues(rawSource || value, [])
+    };
 }
 
 function removeUrls(value) {
@@ -180,6 +205,19 @@ function messageEventsFromPayload(payload) {
                 postback: normalizeString(item?.postback?.payload, 1000),
                 raw_strings: collectStringValues(item, [])
             });
+        }
+
+        for (const change of entry?.changes || []) {
+            const field = normalizeString(change?.field, 80);
+            if (field && !field.includes("message")) continue;
+            events.push(eventFromMessageValue(change?.value || {}, entry, change));
+        }
+    }
+
+    if (payload?.field && payload?.value) {
+        const field = normalizeString(payload.field, 80);
+        if (!field || field.includes("message")) {
+            events.push(eventFromMessageValue(payload.value, {}, payload));
         }
     }
     return events;
