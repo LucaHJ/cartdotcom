@@ -3,19 +3,47 @@ import { json, normalizeString } from "./mobile-auth.js";
 const KEY_PREFIX = "second-brain:file:";
 const MANIFEST_KEY = "second-brain:manifest";
 const MAX_PAGE_BYTES = 256 * 1024;
+const IMAGE_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml"
+};
 
 export function getSecondBrainKV(env) {
     return env.SECOND_BRAIN_KV || null;
 }
 
-export function normalizeVaultPath(value) {
+export function fileExtension(path) {
+    const match = String(path || "").toLowerCase().match(/\.[a-z0-9]+$/);
+    return match ? match[0] : "";
+}
+
+export function fileKind(path) {
+    const extension = fileExtension(path);
+    if (extension === ".md") return "markdown";
+    if (IMAGE_CONTENT_TYPES[extension]) return "image";
+    return "unsupported";
+}
+
+export function contentTypeForPath(path) {
+    if (fileKind(path) === "markdown") return "text/markdown; charset=utf-8";
+    return IMAGE_CONTENT_TYPES[fileExtension(path)] || "application/octet-stream";
+}
+
+export function normalizeVaultPath(value, options = {}) {
+    const { requireMarkdown = true } = options;
     let path = normalizeString(value, 260).replace(/\\/g, "/").replace(/^\/+/, "");
     if (path.toLowerCase().startsWith("vault/")) path = path.slice(6);
     path = path.split("/").filter(Boolean).join("/");
 
     if (!path) throw new Error("Path is required.");
     if (path.includes("../") || path.includes("/..") || path === "..") throw new Error("Path cannot traverse directories.");
-    if (!/\.md$/i.test(path)) throw new Error("Only Markdown files can be edited in this phase.");
+    const kind = fileKind(path);
+    if (requireMarkdown && kind !== "markdown") throw new Error("Only Markdown files can be edited in this phase.");
+    if (!requireMarkdown && kind === "unsupported") throw new Error("Only Markdown and image files can be loaded in this phase.");
 
     return path;
 }
@@ -38,8 +66,8 @@ export function fromBase64Url(value) {
     return new TextDecoder().decode(bytes);
 }
 
-export function keyForPath(path) {
-    return `${KEY_PREFIX}${toBase64Url(normalizeVaultPath(path))}`;
+export function keyForPath(path, options = {}) {
+    return `${KEY_PREFIX}${toBase64Url(normalizeVaultPath(path, options))}`;
 }
 
 async function sha256Hex(value) {
@@ -79,9 +107,13 @@ export async function listPages(kv) {
                     path = key.name;
                 }
             }
+            const type = fileKind(path);
+            if (type === "unsupported") continue;
             pages.push({
                 key: key.name,
                 path,
+                type,
+                content_type: metadata.content_type || contentTypeForPath(path),
                 bytes: metadata.bytes || null,
                 sha256: metadata.sha256 || "",
                 updated_at: metadata.updated_at || "",
@@ -95,14 +127,38 @@ export async function listPages(kv) {
     return pages;
 }
 
+function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+    }
+    return btoa(binary);
+}
+
 export async function getPage(kv, pathValue) {
-    const path = normalizeVaultPath(pathValue);
-    const result = await kv.getWithMetadata(keyForPath(path), "text");
+    const path = normalizeVaultPath(pathValue, { requireMarkdown: false });
+    const kind = fileKind(path);
+    const result = await kv.getWithMetadata(keyForPath(path, { requireMarkdown: false }), kind === "markdown" ? "text" : "arrayBuffer");
     if (result.value === null) return null;
+    const metadata = result.metadata || {};
+    if (kind === "image") {
+        const contentType = metadata.content_type || contentTypeForPath(path);
+        return {
+            path,
+            type: kind,
+            content_type: contentType,
+            data_url: `data:${contentType};base64,${arrayBufferToBase64(result.value)}`,
+            metadata
+        };
+    }
+
     return {
         path,
+        type: kind,
         content: result.value,
-        metadata: result.metadata || {}
+        metadata
     };
 }
 
@@ -120,6 +176,8 @@ export async function putManifest(kv, pages) {
         file_count: pages.length,
         pages: pages.map(page => ({
             path: page.path,
+            type: page.type || fileKind(page.path),
+            content_type: page.content_type || contentTypeForPath(page.path),
             bytes: page.bytes || null,
             sha256: page.sha256 || "",
             updated_at: page.updated_at || ""

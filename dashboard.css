@@ -1058,7 +1058,7 @@ body.brain-minimal {
 
 .vault-tree-panel {
     display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto minmax(0, 1fr);
     min-height: 0;
     overflow: hidden;
     border-right: 0;
@@ -1217,9 +1217,10 @@ body.brain-minimal {
 }
 
 .vault-tree {
+    align-self: stretch;
     min-height: 0;
     height: auto;
-    margin-top: 14px;
+    margin-top: 6px;
     overflow: auto;
     padding-left: 4px;
     padding-right: 0;
@@ -1823,6 +1824,26 @@ body.brain-minimal {
 .markdown-preview .markdown-image {
     color: var(--muted);
     font-style: italic;
+}
+
+.asset-preview {
+    display: grid;
+    gap: 12px;
+    margin: 0;
+}
+
+.asset-preview img {
+    display: block;
+    max-width: 100%;
+    max-height: calc(100vh - 170px);
+    object-fit: contain;
+}
+
+.asset-preview figcaption {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
 }
 
 @media (max-width: 920px) {

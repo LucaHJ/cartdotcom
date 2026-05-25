@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-tree-actions">
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-asset-tree">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -47,7 +47,7 @@
                     <details class="diagnostics-menu" hidden>
                         <summary>Diagnostics</summary>
                         <div class="vault-stats" aria-live="polite">
-                            <span id="pageCount">0 pages</span>
+                            <span id="pageCount">0 files</span>
                             <span id="edgeCount">0 links</span>
                             <span id="graphStatus">Loading</span>
                         </div>
@@ -93,7 +93,7 @@
                 </div>
 
                 <svg id="graphSvg" class="graph-canvas" role="img" aria-label="Second brain file structure graph"></svg>
-                <p id="graphEmpty" class="graph-empty" hidden>No cloud Markdown pages found.</p>
+                <p id="graphEmpty" class="graph-empty" hidden>No cloud files found.</p>
             </section>
 
             <section id="editorDrawer" class="panel graph-inspector" aria-label="Markdown preview" hidden>
@@ -143,10 +143,11 @@
         const svgNamespace = "http://www.w3.org/2000/svg";
 
         const cachePrefix = "cartdotcom:second-brain:";
-        const pagesCacheKey = `${cachePrefix}pages:v2`;
+        const pagesCacheKey = `${cachePrefix}pages:v3`;
         const contentCachePrefix = `${cachePrefix}content:v2:`;
         const pagesCacheTtl = 10 * 60 * 1000;
         const contentCacheTtl = 30 * 60 * 1000;
+        const rootFolderLabelByName = new Map();
 
         let pages = [];
         let pageContentByPath = new Map();
@@ -254,6 +255,73 @@
             return `${contentCachePrefix}${encodeURIComponent(path)}`;
         }
 
+        function fileTypeForPath(path) {
+            if (/\.md$/i.test(path)) return "markdown";
+            if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) return "image";
+            return "file";
+        }
+
+        function isMarkdownFile(file) {
+            return (file?.type || fileTypeForPath(file?.path || file)) === "markdown";
+        }
+
+        function isImageFile(file) {
+            return (file?.type || fileTypeForPath(file?.path || file)) === "image";
+        }
+
+        function fileRecordForPath(path) {
+            return pages.find((page) => page.path === path) || { path, type: fileTypeForPath(path) };
+        }
+
+        function rootFolderBaseLabel(name) {
+            return String(name || "")
+                .replace(/^\d{2}-/, "")
+                .replace(/-/g, " ");
+        }
+
+        function rootFolderSortValue(name) {
+            const match = String(name || "").match(/^(\d{2})-/u);
+            return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+        }
+
+        function refreshRootFolderLabels() {
+            rootFolderLabelByName.clear();
+            const roots = Array.from(new Set(
+                pages
+                    .map((page) => String(page.path || "").split("/").filter(Boolean)[0])
+                    .filter((root) => /^\d{2}-/u.test(root))
+            )).sort((left, right) => {
+                const numeric = rootFolderSortValue(left) - rootFolderSortValue(right);
+                return numeric || left.localeCompare(right);
+            });
+
+            roots.forEach((root, index) => {
+                const number = String(index * 10).padStart(2, "0");
+                rootFolderLabelByName.set(root, `${number} ${rootFolderBaseLabel(root)}`);
+            });
+        }
+
+        function displayFolderLabel(name, path) {
+            if (!String(path || "").includes("/")) {
+                return (rootFolderLabelByName.get(String(name || "")) || String(name || ""))
+                    .replace(/^(\d{2})-(.+)$/u, (_, number, label) => `${number} ${label.replace(/-/g, " ")}`)
+                    .replace(/^(raw|wiki)$/u, (_, label) => label.charAt(0).toUpperCase() + label.slice(1));
+            }
+            return String(name || "").replace(/-/g, " ");
+        }
+
+        function displayVaultPath(path) {
+            const segments = String(path || "").split("/").filter(Boolean);
+            if (!segments.length) return "";
+            const [root, ...rest] = segments;
+            return [displayFolderLabel(root, root), ...rest].join("/");
+        }
+
+        function displayFileLabel(name, type = "markdown") {
+            const label = String(name || "");
+            return type === "markdown" ? label.replace(/\.md$/i, "") : label;
+        }
+
         function showTreeSkeleton() {
             vaultTree.innerHTML = Array.from({ length: 18 }, (_, index) => (
                 `<span class="skeleton-line tree-skeleton line-${(index % 4) + 1}"></span>`
@@ -275,9 +343,10 @@
         function showPreviewSkeleton(path) {
             selectedPath = path;
             focusedNodeId = fileNodeId(path);
+            const visiblePath = displayVaultPath(path);
             pathInput.disabled = false;
-            pathInput.value = path;
-            currentPath.textContent = path;
+            pathInput.value = visiblePath;
+            currentPath.textContent = visiblePath;
             contentPreview.innerHTML = Array.from({ length: 14 }, (_, index) => (
                 `<span class="skeleton-line preview-skeleton line-${(index % 5) + 1}"></span>`
             )).join("");
@@ -321,6 +390,10 @@
                     currentPath = currentPath ? `${currentPath}/${segment}` : segment;
                     const isFile = index === segments.length - 1;
                     parent = ensureChild(parent, isFile ? "file" : "folder", segment, currentPath);
+                    if (isFile) {
+                        parent.fileType = page.type || fileTypeForPath(page.path);
+                        parent.contentType = page.content_type || "";
+                    }
                 });
             });
 
@@ -458,7 +531,7 @@
                 details.open = vaultTreeOpen;
 
                 const summary = document.createElement("summary");
-                summary.textContent = node.name;
+                summary.textContent = displayFolderLabel(node.name, node.path);
                 summary.title = node.path || "Vault";
                 summary.addEventListener("click", () => focusFolder(node.path));
                 details.appendChild(summary);
@@ -477,7 +550,7 @@
                 (node.path === selectedPath ? " is-active" : "") +
                 (focusedNodeId && !isTreeNodeFocused(node) ? " is-dimmed" : "") +
                 (nodeIdForTreeNode(node) === focusedNodeId ? " is-focused" : "");
-            button.textContent = node.name;
+            button.textContent = displayFileLabel(node.name, node.fileType);
             button.title = node.path;
             button.addEventListener("click", () => loadPage(node.path));
             container.appendChild(button);
@@ -489,7 +562,7 @@
             vaultTree.innerHTML = "";
 
             if (!filtered.length) {
-                vaultTree.innerHTML = `<p class="empty">${filter ? "No matching pages." : "No cloud Markdown pages found."}</p>`;
+                vaultTree.innerHTML = `<p class="empty">${filter ? "No matching files." : "No cloud files found."}</p>`;
                 return;
             }
 
@@ -559,6 +632,7 @@
             const duplicateNames = new Set();
 
             pages.forEach((page) => {
+                if (!isMarkdownFile(page)) return;
                 const pathKey = normalizeLinkKey(page.path);
                 const nameKey = normalizeLinkKey(page.path.split("/").pop());
                 byPath.set(pathKey, page.path);
@@ -843,6 +917,7 @@
         }
 
         function buildGraph() {
+            refreshRootFolderLabels();
             const nodeMap = new Map();
             const edges = [];
             const edgeKeys = new Set();
@@ -859,14 +934,14 @@
                     const isFile = index === segments.length - 1;
                     if (isFile) {
                         const fileId = fileNodeId(page.path);
-                        upsertNode(nodeMap, { id: fileId, label: segment.replace(/\.md$/i, ""), type: "file", path: page.path });
+                        upsertNode(nodeMap, { id: fileId, label: displayFileLabel(segment, page.type || fileTypeForPath(page.path)), type: "file", path: page.path });
                         addEdge(edges, edgeKeys, parentId, fileId, "folder");
                         return;
                     }
 
                     folderPath = folderPath ? `${folderPath}/${segment}` : segment;
                     const folderId = folderNodeId(folderPath);
-                    upsertNode(nodeMap, { id: folderId, label: segment, type: "folder", path: folderPath });
+                    upsertNode(nodeMap, { id: folderId, label: displayFolderLabel(segment, folderPath), type: "folder", path: folderPath });
                     addEdge(edges, edgeKeys, parentId, folderId, "folder");
                     parentId = folderId;
                 });
@@ -874,7 +949,7 @@
             });
 
             graphData = { nodes: Array.from(nodeMap.values()), edges };
-            pageCount.textContent = `${pages.length} page${pages.length === 1 ? "" : "s"}`;
+            pageCount.textContent = `${pages.length} file${pages.length === 1 ? "" : "s"}`;
             edgeCount.textContent = `${edges.length} connection${edges.length === 1 ? "" : "s"}`;
         }
 
@@ -1110,7 +1185,7 @@
 
         async function loadAllPageContent() {
             const cachedContent = new Map();
-            pages.forEach((page) => {
+            pages.filter(isMarkdownFile).forEach((page) => {
                 const cached = readCache(pageCacheKey(page.path), contentCacheTtl);
                 if (typeof cached === "string") cachedContent.set(page.path, cached);
             });
@@ -1121,7 +1196,7 @@
                 renderGraph();
             }
 
-            await mapLimit(pages, 8, async (page) => {
+            await mapLimit(pages.filter(isMarkdownFile), 8, async (page) => {
                 try {
                     const payload = await api(`/api/second-brain/page?path=${encodeURIComponent(page.path)}`);
                     const content = payload.page.content || "";
@@ -1140,7 +1215,7 @@
                 const cachedPages = readCache(pagesCacheKey, pagesCacheTtl);
                 if (Array.isArray(cachedPages) && cachedPages.length) {
                     pages = cachedPages;
-                    pageCount.textContent = `${pages.length} page${pages.length === 1 ? "" : "s"}`;
+                    pageCount.textContent = `${pages.length} file${pages.length === 1 ? "" : "s"}`;
                     graphStatus.textContent = "Cached";
                     buildGraph();
                     renderTree();
@@ -1160,7 +1235,7 @@
                 const payload = await api("/api/second-brain/pages");
                 pages = payload.pages || [];
                 writeCache(pagesCacheKey, pages);
-                pageCount.textContent = `${pages.length} page${pages.length === 1 ? "" : "s"}`;
+                pageCount.textContent = `${pages.length} file${pages.length === 1 ? "" : "s"}`;
                 graphStatus.textContent = "Reading";
                 await loadAllPageContent();
                 if (options.keepSelection && pages.some((page) => page.path === options.keepSelection)) {
@@ -1182,29 +1257,39 @@
         }
 
         async function loadPage(path) {
+            const fileRecord = fileRecordForPath(path);
             const cached = readCache(pageCacheKey(path), Infinity);
-            if (typeof cached === "string" && !pageContentByPath.has(path)) {
+            if ((typeof cached === "string" || (cached && typeof cached === "object")) && !pageContentByPath.has(path)) {
                 pageContentByPath.set(path, cached);
             }
 
             selectedPath = path;
             focusedNodeId = fileNodeId(path);
+            const visiblePath = displayVaultPath(path);
             graphStatus.textContent = "Ready";
             saveStatus.textContent = "Loaded";
             pathInput.disabled = false;
-            pathInput.value = path;
-            currentPath.textContent = path;
+            pathInput.value = visiblePath;
+            currentPath.textContent = visiblePath;
 
             if (!pageContentByPath.has(path)) {
                 saveStatus.textContent = "Loading";
                 showPreviewSkeleton(path);
                 const payload = await api(`/api/second-brain/page?path=${encodeURIComponent(path)}`);
-                const content = payload.page.content || "";
+                const content = payload.page.type === "image" ? payload.page : payload.page.content || "";
                 pageContentByPath.set(path, content);
                 writeCache(pageCacheKey(path), content);
             }
 
-            contentPreview.innerHTML = renderMarkdown(pageContentByPath.get(path) || "", path);
+            const previewContent = pageContentByPath.get(path);
+            if (isImageFile(fileRecord) || previewContent?.type === "image") {
+                const image = previewContent?.data_url ? previewContent : { path, data_url: "", content_type: fileRecord.content_type || "" };
+                contentPreview.innerHTML = image.data_url
+                    ? `<figure class="asset-preview"><img src="${escapeHtml(image.data_url)}" alt="${escapeHtml(visiblePath)}"><figcaption>${escapeHtml(visiblePath)}</figcaption></figure>`
+                    : `<p class="empty">Image preview unavailable.</p>`;
+            } else {
+                contentPreview.innerHTML = renderMarkdown(previewContent || "", path);
+            }
             openPreview();
             renderTree();
             renderGraph();
