@@ -43,13 +43,14 @@
         const smallNotes = document.getElementById("smallNotes");
         const refreshNotes = document.getElementById("refreshNotes");
         const synthesisStatus = document.getElementById("synthesisStatus");
-        const cachePrefix = "cartdotcom:dashboard:";
+        const cachePrefix = "cartdotcom:dashboard:20260526-reel-status:";
         const cacheTtlMs = 5 * 60 * 1000;
+        const synthesisCacheTtlMs = 60 * 1000;
 
-        function readCache(key) {
+        function readCache(key, ttlMs = cacheTtlMs) {
             try {
                 const cached = JSON.parse(localStorage.getItem(cachePrefix + key) || "null");
-                if (!cached || !cached.savedAt || Date.now() - cached.savedAt > cacheTtlMs) return null;
+                if (!cached || !cached.savedAt || Date.now() - cached.savedAt > ttlMs) return null;
                 return cached.value;
             } catch (error) {
                 return null;
@@ -61,6 +62,14 @@
                 localStorage.setItem(cachePrefix + key, JSON.stringify({ savedAt: Date.now(), value }));
             } catch (error) {
                 // Cache failures should not block dashboard rendering.
+            }
+        }
+
+        function clearCache(key) {
+            try {
+                localStorage.removeItem(cachePrefix + key);
+            } catch (error) {
+                // Cache cleanup failures should not block dashboard rendering.
             }
         }
 
@@ -228,14 +237,15 @@
             return payload;
         }
 
-        async function loadSynthesisStatus() {
-            const cached = readCache("synthesis-status");
+        async function loadSynthesisStatus(options = {}) {
+            const cached = options.forceNetwork ? null : readCache("synthesis-status", synthesisCacheTtlMs);
             if (cached) {
                 renderSynthesisStatus(cached);
             } else {
                 renderSynthesisSkeleton();
             }
             try {
+                if (options.forceNetwork) clearCache("synthesis-status");
                 const payload = await api("/api/backend/synthesis-status");
                 writeCache("synthesis-status", payload);
                 renderSynthesisStatus(payload);
@@ -244,8 +254,8 @@
             }
         }
 
-        async function loadSmallNotes() {
-            const cached = readCache("small-notes");
+        async function loadSmallNotes(options = {}) {
+            const cached = options.forceNetwork ? null : readCache("small-notes");
             if (cached) {
                 notesStatus.textContent = cached.length === 1 ? "1 note" : cached.length + " notes";
                 renderNotes(cached);
@@ -255,6 +265,7 @@
             }
 
             try {
+                if (options.forceNetwork) clearCache("small-notes");
                 const payload = await api("/api/second-brain/page?path=wiki%2Fsmall-notes.md");
                 const notes = parseSmallNotes(payload.page?.content || "");
                 writeCache("small-notes", notes);
@@ -264,11 +275,11 @@
             }
         }
 
-        async function loadDashboard() {
-            await Promise.allSettled([loadSmallNotes(), loadSynthesisStatus()]);
+        async function loadDashboard(options = {}) {
+            await Promise.allSettled([loadSmallNotes(options), loadSynthesisStatus(options)]);
         }
 
-        refreshNotes.addEventListener("click", () => runRefreshButton(refreshNotes, loadDashboard));
+        refreshNotes.addEventListener("click", () => runRefreshButton(refreshNotes, () => loadDashboard({ forceNetwork: true })));
 
         document.getElementById("logoutButton").addEventListener("click", async () => {
             await fetch("/api/auth/logout", { method: "POST" });
