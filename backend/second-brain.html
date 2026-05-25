@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260525-zoom-pan">
+    <link rel="stylesheet" href="/dashboard.css?v=20260525-structure-graph">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -87,7 +87,7 @@
                     </div>
                 </div>
 
-                <svg id="graphSvg" class="graph-canvas" role="img" aria-label="Second brain file and wikilink graph"></svg>
+                <svg id="graphSvg" class="graph-canvas" role="img" aria-label="Second brain file structure graph"></svg>
                 <p id="graphEmpty" class="graph-empty" hidden>No cloud Markdown pages found.</p>
             </section>
 
@@ -793,6 +793,7 @@
         function applyGraphPan() {
             if (!graphViewport) return;
             graphViewport.setAttribute("transform", `matrix(${graphZoom} 0 0 ${graphZoom} ${graphPan.x} ${graphPan.y})`);
+            updateGraphNodeScales();
         }
 
         function setGraphZoom(nextZoom, originX = null, originY = null) {
@@ -830,7 +831,6 @@
             const nodeMap = new Map();
             const edges = [];
             const edgeKeys = new Set();
-            const resolver = createWikiResolver();
             const rootId = folderNodeId("");
 
             upsertNode(nodeMap, { id: rootId, label: "Vault", type: "root", path: "" });
@@ -856,17 +856,11 @@
                     parentId = folderId;
                 });
 
-                const sourceId = fileNodeId(page.path);
-                const content = pageContentByPath.get(page.path) || "";
-                extractWikiTargets(content).forEach((target) => {
-                    const resolved = resolver(target, page.path);
-                    if (resolved) addEdge(edges, edgeKeys, sourceId, fileNodeId(resolved), "wikilink");
-                });
             });
 
             graphData = { nodes: Array.from(nodeMap.values()), edges };
             pageCount.textContent = `${pages.length} page${pages.length === 1 ? "" : "s"}`;
-            edgeCount.textContent = `${edges.length} link${edges.length === 1 ? "" : "s"}`;
+            edgeCount.textContent = `${edges.length} connection${edges.length === 1 ? "" : "s"}`;
         }
 
         function hashString(value) {
@@ -895,7 +889,7 @@
                 });
             });
 
-            const nodeRadius = (node) => node.type === "root" ? 16 : node.type === "folder" ? 11 : 7;
+            const nodeRadius = (node) => node.type === "root" ? 28 : node.type === "folder" ? 22 : 18;
 
             for (let iteration = 0; iteration < 130; iteration += 1) {
                 for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
@@ -928,8 +922,8 @@
                     const dx = target.x - source.x || 0.01;
                     const dy = target.y - source.y || 0.01;
                     const distance = Math.sqrt(dx * dx + dy * dy);
-                    const desired = edge.type === "folder" ? 290 + nodeRadius(targetNode) * 4 : 520;
-                    const force = (distance - desired) * (edge.type === "folder" ? 0.004 : 0.003);
+                    const desired = 320 + nodeRadius(targetNode) * 4;
+                    const force = (distance - desired) * 0.004;
                     const fx = (dx / distance) * force;
                     const fy = (dy / distance) * force;
                     source.vx += fx;
@@ -957,6 +951,20 @@
                 node.x = position.x;
                 node.y = position.y;
                 node.scale = 1;
+            });
+        }
+
+        function nodeScreenScale() {
+            return Math.max(0.3, Math.min(3.2, 1 / graphZoom));
+        }
+
+        function updateGraphNodeScales() {
+            if (!graphViewport) return;
+            const scale = nodeScreenScale();
+            graphViewport.querySelectorAll(".graph-node").forEach((group) => {
+                const node = graphData.nodes.find((item) => item.id === group.dataset.nodeId);
+                if (!node) return;
+                group.setAttribute("transform", `translate(${node.x} ${node.y}) scale(${scale})`);
             });
         }
 
@@ -1025,13 +1033,16 @@
                 const matches = !filter || node.type !== "file" || node.path.toLowerCase().includes(filter);
                 const focusMatches = !focusedNodeId || focusedIds.has(node.id);
                 const group = createSvgElement("g", {
-                    class: `graph-node ${node.type}${node.id === focusedNodeId ? " focused" : ""}${node.path === selectedPath ? " selected" : ""}${matches && focusMatches ? "" : " dimmed"}`,
-                    transform: `translate(${node.x} ${node.y}) scale(${node.scale || 1})`
+                    class: `graph-node ${node.type}${node.id === focusedNodeId ? " focused" : ""}${selectedPath && node.path === selectedPath ? " selected" : ""}${matches && focusMatches ? "" : " dimmed"}`,
+                    "data-node-id": node.id,
+                    transform: `translate(${node.x} ${node.y}) scale(${nodeScreenScale()})`
                 });
                 group.style.cursor = "pointer";
 
-                const radius = node.type === "root" ? 16 : node.type === "folder" ? 11 : 7;
+                const radius = node.type === "root" ? 20 : node.type === "folder" ? 16 : 13;
                 group.appendChild(createSvgElement("circle", { r: radius }));
+
+                group.appendChild(createSvgElement("circle", { class: "graph-hit-target", r: Math.max(24, radius + 8) }));
 
                 const title = createSvgElement("title");
                 title.textContent = node.path || "Vault";
