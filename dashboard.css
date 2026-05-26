@@ -1315,15 +1315,33 @@ body.brain-minimal {
     display: none;
 }
 
-.tree-folder summary::before {
-    content: ">";
-    margin-right: 6px;
+.tree-disclosure {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 14px;
+    min-width: 14px;
+    border: 0;
+    background: transparent;
     color: var(--muted-soft);
+    padding: 0;
+    margin-right: 6px;
+    font: inherit;
     font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
 }
 
-.tree-folder[open] > summary::before {
-    content: "v";
+.tree-disclosure:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.tree-summary-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .tree-folder summary:hover,

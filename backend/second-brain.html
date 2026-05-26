@@ -158,6 +158,7 @@
         let selectedPath = "";
         let focusedNodeId = "";
         let vaultTreeOpen = true;
+        const treeOpenPaths = new Map();
         let graphViewport = null;
         let graphPan = { x: 0, y: 0 };
         let graphZoom = 1;
@@ -346,6 +347,7 @@
         function showPreviewSkeleton(path) {
             selectedPath = path;
             focusedNodeId = fileNodeId(path);
+            treeOpenPaths.set(parentFolderPath(path), true);
             const visiblePath = displayVaultPath(path);
             pathInput.disabled = false;
             pathInput.value = visiblePath;
@@ -408,6 +410,40 @@
                 if (left.type !== right.type) return left.type === "folder" ? -1 : 1;
                 return left.name.localeCompare(right.name);
             });
+        }
+
+        function parentFolderPath(path) {
+            const segments = String(path || "").split("/").filter(Boolean);
+            segments.pop();
+            return segments.join("/");
+        }
+
+        function findTreeFolder(node, path) {
+            if (!path) return node;
+            if (node.type === "folder" && node.path === path) return node;
+            for (const child of node.children || []) {
+                if (child.type !== "folder") continue;
+                const match = findTreeFolder(child, path);
+                if (match) return match;
+            }
+            return null;
+        }
+
+        function cloneTreeNode(node, options = {}) {
+            const childFilter = options.childFilter || (() => true);
+            const clone = { ...node, childMap: new Map(), children: [] };
+            clone.children = (node.children || [])
+                .filter(childFilter)
+                .map((child) => cloneTreeNode(child, options));
+            return clone;
+        }
+
+        function immediateChildCount(node) {
+            return (node.children || []).length;
+        }
+
+        function folderLabelWithCount(node) {
+            return `${displayFolderLabel(node.name, node.path)} (${immediateChildCount(node)})`;
         }
 
         function folderNodeId(path) {
@@ -514,6 +550,7 @@
 
         function focusFolder(path) {
             focusedNodeId = folderNodeId(path);
+            if (path) treeOpenPaths.set(path, true);
             closePreview();
             graphStatus.textContent = path ? "Focused" : "Ready";
             renderTree();
@@ -522,21 +559,60 @@
 
         function setVaultTreeOpen(open) {
             vaultTreeOpen = open;
+            treeOpenPaths.clear();
             vaultTree.querySelectorAll("details.tree-folder").forEach((details) => {
                 details.open = open;
+                const disclosure = details.querySelector(":scope > summary .tree-disclosure");
+                if (disclosure) {
+                    disclosure.textContent = open ? "v" : ">";
+                    disclosure.setAttribute("aria-label", `${open ? "Collapse" : "Open"} ${disclosure.dataset.folderLabel || "folder"}`);
+                }
             });
+        }
+
+        function isTreeFolderOpen(path) {
+            return treeOpenPaths.has(path) ? treeOpenPaths.get(path) : vaultTreeOpen;
+        }
+
+        function setTreeFolderOpen(details, path, open) {
+            treeOpenPaths.set(path, open);
+            details.open = open;
+            const disclosure = details.querySelector(":scope > summary .tree-disclosure");
+            if (disclosure) disclosure.textContent = open ? "v" : ">";
         }
 
         function renderTreeNode(node, container) {
             if (node.type === "folder") {
                 const details = document.createElement("details");
                 details.className = `tree-folder${focusedNodeId && !isTreeNodeFocused(node) ? " is-dimmed" : ""}${nodeIdForTreeNode(node) === focusedNodeId ? " is-focused" : ""}`;
-                details.open = vaultTreeOpen;
+                details.open = isTreeFolderOpen(node.path);
 
                 const summary = document.createElement("summary");
-                summary.textContent = displayFolderLabel(node.name, node.path);
                 summary.title = node.path || "Vault";
-                summary.addEventListener("click", () => focusFolder(node.path));
+                summary.addEventListener("click", (event) => {
+                    if (event.target.closest(".tree-disclosure")) return;
+                    event.preventDefault();
+                    focusFolder(node.path);
+                });
+
+                const disclosure = document.createElement("button");
+                disclosure.type = "button";
+                disclosure.className = "tree-disclosure";
+                disclosure.textContent = details.open ? "v" : ">";
+                disclosure.dataset.folderLabel = displayFolderLabel(node.name, node.path);
+                disclosure.setAttribute("aria-label", `${details.open ? "Collapse" : "Open"} ${disclosure.dataset.folderLabel}`);
+                disclosure.addEventListener("click", (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setTreeFolderOpen(details, node.path, !details.open);
+                    disclosure.setAttribute("aria-label", `${details.open ? "Collapse" : "Open"} ${disclosure.dataset.folderLabel}`);
+                });
+                summary.appendChild(disclosure);
+
+                const label = document.createElement("span");
+                label.className = "tree-summary-label";
+                label.textContent = folderLabelWithCount(node);
+                summary.appendChild(label);
                 details.appendChild(summary);
 
                 const children = document.createElement("div");
@@ -561,16 +637,43 @@
 
         function renderTree() {
             const filter = pageFilter.value.trim().toLowerCase();
-            const filtered = pages.filter((page) => !filter || page.path.toLowerCase().includes(filter));
+            const focusedNode = getFocusedNode();
+            let visiblePages = pages.filter((page) => !filter || page.path.toLowerCase().includes(filter));
+            let visibleRoots = null;
+
+            if (focusedNode?.type === "folder" && focusedNode.path) {
+                visiblePages = pages.filter((page) => isDescendantPath(page.path, focusedNode.path));
+            } else if (focusedNode?.type === "file") {
+                const parentPath = parentFolderPath(focusedNode.path);
+                visiblePages = pages.filter((page) => parentFolderPath(page.path) === parentPath);
+            }
             vaultTree.innerHTML = "";
 
-            if (!filtered.length) {
+            if (!visiblePages.length) {
                 vaultTree.innerHTML = `<p class="empty">${filter ? "No matching files." : "No cloud files found."}</p>`;
                 return;
             }
 
-            const tree = createTree(filtered);
-            sortTreeChildren(tree.children).forEach((child) => renderTreeNode(child, vaultTree));
+            const tree = createTree(visiblePages);
+            if (focusedNode?.type === "folder" && focusedNode.path) {
+                const folder = findTreeFolder(tree, focusedNode.path);
+                visibleRoots = folder ? [folder] : [];
+            } else if (focusedNode?.type === "file") {
+                const parentPath = parentFolderPath(focusedNode.path);
+                const folder = findTreeFolder(tree, parentPath);
+                visibleRoots = folder
+                    ? [cloneTreeNode(folder, { childFilter: (child) => child.type === "file" })]
+                    : sortTreeChildren(tree.children).filter((child) => child.type === "file");
+            } else {
+                visibleRoots = sortTreeChildren(tree.children);
+            }
+
+            if (!visibleRoots.length) {
+                vaultTree.innerHTML = `<p class="empty">${filter ? "No matching files." : "No cloud files found."}</p>`;
+                return;
+            }
+
+            visibleRoots.forEach((child) => renderTreeNode(child, vaultTree));
         }
 
         function normalizeLinkKey(value) {
@@ -1268,6 +1371,7 @@
 
             selectedPath = path;
             focusedNodeId = fileNodeId(path);
+            treeOpenPaths.set(parentFolderPath(path), true);
             const visiblePath = displayVaultPath(path);
             graphStatus.textContent = "Ready";
             saveStatus.textContent = "Loaded";
