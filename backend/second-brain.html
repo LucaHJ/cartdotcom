@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260526-branch-reveal">
+    <link rel="stylesheet" href="/dashboard.css?v=20260526-zoom-fix">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -192,6 +192,7 @@
         let graphMode = "partial";
         let showGraphLabels = true;
         let partialGraphRootPath = "";
+        let renderedGraphNodeById = new Map();
 
         function escapeHtml(value) {
             return String(value).replace(/[&<>"']/g, (char) => ({
@@ -1261,7 +1262,7 @@
             if (!graphViewport) return;
             const scale = nodeScreenScale();
             graphViewport.querySelectorAll(".graph-node").forEach((group) => {
-                const node = graphData.nodes.find((item) => item.id === group.dataset.nodeId);
+                const node = renderedGraphNodeById.get(group.dataset.nodeId);
                 if (!node) return;
                 group.setAttribute("transform", `translate(${node.x} ${node.y}) scale(${scale})`);
                 const hitTarget = group.querySelector(".graph-hit-target");
@@ -1335,10 +1336,10 @@
             const displayGraph = graphForCurrentMode();
             const { width: layoutWidth, height: layoutHeight } = graphLayoutDimensions(width, height, displayGraph.nodes, displayGraph.edges, displayGraph.rootId);
             const filter = pageFilter.value.trim().toLowerCase();
-            const nodeById = new Map(displayGraph.nodes.map((node) => [node.id, node]));
             const focusedIds = getFocusedNodeIds();
 
             graphSvg.replaceChildren();
+            renderedGraphNodeById = new Map();
             graphSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
             graphEmpty.hidden = displayGraph.nodes.length > 1;
 
@@ -1346,6 +1347,8 @@
 
             graphLayoutSize = { width: layoutWidth, height: layoutHeight };
             layoutGraph(displayGraph.nodes, displayGraph.edges, layoutWidth, layoutHeight, displayGraph.rootId);
+            renderedGraphNodeById = new Map(displayGraph.nodes.map((node) => [node.id, node]));
+            const nodeById = renderedGraphNodeById;
             if (!graphHasUserTransform) {
                 graphZoom = graphMode === "partial"
                     ? Math.max(minGraphZoom, Math.min(1.1, Math.min(width / layoutWidth, height / layoutHeight) * 0.9))
