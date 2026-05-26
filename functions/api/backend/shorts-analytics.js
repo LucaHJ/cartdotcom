@@ -454,12 +454,25 @@ async function listSnapshots(kv) {
         .slice(-500);
 }
 
-function snapshotFromAnalytics(analytics) {
+function localDateId(date, timeZone = "Australia/Brisbane") {
+    try {
+        return new Intl.DateTimeFormat("en-CA", {
+            timeZone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit"
+        }).format(date);
+    } catch (error) {
+        return date.toISOString().slice(0, 10);
+    }
+}
+
+function snapshotFromAnalytics(analytics, env = {}) {
     const now = new Date();
     const totals = analytics?.totals || {};
     const full = analytics?.monetization?.full_ypp || {};
     return {
-        id: now.toISOString().slice(0, 10),
+        id: localDateId(now, env.SHORTS_ANALYTICS_TIME_ZONE || "Australia/Brisbane"),
         captured_at: now.toISOString(),
         views: Number(totals.views) || 0,
         likes: Number(totals.likes) || 0,
@@ -575,7 +588,7 @@ export async function onRequestPost(context) {
     const result = await buildShortsAnalytics(context, { includeSnapshots: false });
     if (result.response) return result.response;
 
-    const snapshot = snapshotFromAnalytics(result.payload);
+    const snapshot = snapshotFromAnalytics(result.payload, context.env);
     const keyName = `${SNAPSHOT_PREFIX}${snapshot.id}`;
     await snapshotKv.put(keyName, JSON.stringify(snapshot), {
         metadata: {
