@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260526-tree-nav">
+    <link rel="stylesheet" href="/dashboard.css?v=20260526-branch-graph">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -82,6 +82,26 @@
                                 <path d="M16.5 16.5L21 21"></path>
                             </svg>
                         </button>
+                        <details class="brain-settings-menu">
+                            <summary aria-label="Second brain settings" title="Second brain settings">
+                                <svg aria-hidden="true" viewBox="0 0 24 24">
+                                    <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path>
+                                    <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 4.6 15a1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 9 4.6a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.4 1Z"></path>
+                                </svg>
+                            </summary>
+                            <div class="brain-settings-panel">
+                                <label class="brain-setting-toggle">
+                                    <span>Partial tree</span>
+                                    <input id="treeModeToggle" type="checkbox" role="switch" aria-label="Use full tree">
+                                    <span>Full tree</span>
+                                </label>
+                                <label class="brain-setting-toggle">
+                                    <span>Show text</span>
+                                    <input id="labelModeToggle" type="checkbox" role="switch" aria-label="Show graph text" checked>
+                                    <span>Hide text</span>
+                                </label>
+                            </div>
+                        </details>
                         <button id="rebuildGraph" class="icon-button refresh-button" type="button" aria-label="Rebuild graph" title="Rebuild graph">
                             <svg aria-hidden="true" viewBox="0 0 24 24">
                                 <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path>
@@ -142,13 +162,16 @@
         const zoomInGraph = document.getElementById("zoomInGraph");
         const collapseTree = document.getElementById("collapseTree");
         const openTree = document.getElementById("openTree");
+        const treeModeToggle = document.getElementById("treeModeToggle");
+        const labelModeToggle = document.getElementById("labelModeToggle");
         const svgNamespace = "http://www.w3.org/2000/svg";
 
         const cachePrefix = "cartdotcom:second-brain:";
-        const pagesCacheKey = `${cachePrefix}pages:v3`;
-        const contentCachePrefix = `${cachePrefix}content:v2:`;
-        const pagesCacheTtl = 10 * 60 * 1000;
-        const contentCacheTtl = 30 * 60 * 1000;
+        const pagesCacheKey = `${cachePrefix}pages:v4`;
+        const contentCachePrefix = `${cachePrefix}content:v3:`;
+        const settingsCacheKey = `${cachePrefix}settings:v1`;
+        const pagesCacheTtl = 6 * 60 * 60 * 1000;
+        const contentCacheTtl = 12 * 60 * 60 * 1000;
         const minGraphZoom = 0.06;
         const rootFolderLabelByName = new Map();
 
@@ -166,6 +189,8 @@
         let graphLayoutSize = { width: 0, height: 0 };
         let graphDrag = null;
         let graphSuppressClick = false;
+        let graphMode = "partial";
+        let showGraphLabels = true;
 
         function escapeHtml(value) {
             return String(value).replace(/[&<>"']/g, (char) => ({
@@ -259,6 +284,42 @@
             return `${contentCachePrefix}${encodeURIComponent(path)}`;
         }
 
+        function readSettings() {
+            const settings = readCache(settingsCacheKey, Infinity) || {};
+            graphMode = settings.graphMode === "full" ? "full" : "partial";
+            showGraphLabels = settings.showGraphLabels !== false;
+            treeModeToggle.checked = graphMode === "full";
+            labelModeToggle.checked = showGraphLabels;
+            syncGraphSettings();
+        }
+
+        function writeSettings() {
+            writeCache(settingsCacheKey, { graphMode, showGraphLabels });
+        }
+
+        function syncGraphSettings() {
+            brainWorkspace.classList.toggle("is-graph-label-hidden", !showGraphLabels);
+            treeModeToggle.setAttribute("aria-checked", graphMode === "full" ? "true" : "false");
+            labelModeToggle.setAttribute("aria-checked", showGraphLabels ? "true" : "false");
+        }
+
+        function readContentCache(path) {
+            const cached = readCache(pageCacheKey(path), contentCacheTtl);
+            if (typeof cached === "string") return cached;
+            if (cached && typeof cached === "object" && "content" in cached) return cached.content;
+            if (cached && typeof cached === "object" && cached.type === "image") return cached;
+            return null;
+        }
+
+        function writeContentCache(path, content) {
+            const fileRecord = fileRecordForPath(path);
+            writeCache(pageCacheKey(path), {
+                content,
+                sha256: fileRecord.sha256 || "",
+                type: fileRecord.type || fileTypeForPath(path)
+            });
+        }
+
         function fileTypeForPath(path) {
             if (/\.md$/i.test(path)) return "markdown";
             if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) return "image";
@@ -348,6 +409,7 @@
             selectedPath = path;
             focusedNodeId = fileNodeId(path);
             treeOpenPaths.set(parentFolderPath(path), true);
+            graphHasUserTransform = false;
             const visiblePath = displayVaultPath(path);
             pathInput.disabled = false;
             pathInput.value = visiblePath;
@@ -543,6 +605,7 @@
 
         function clearFocusAndPreview() {
             focusedNodeId = "";
+            graphHasUserTransform = false;
             closePreview();
             renderTree();
             renderGraph();
@@ -551,6 +614,7 @@
         function focusFolder(path) {
             focusedNodeId = folderNodeId(path);
             if (path) treeOpenPaths.set(path, true);
+            graphHasUserTransform = false;
             closePreview();
             graphStatus.textContent = path ? "Focused" : "Ready";
             renderTree();
@@ -1059,7 +1123,7 @@
             edgeCount.textContent = `${edges.length} connection${edges.length === 1 ? "" : "s"}`;
         }
 
-        function buildGraphTree(nodes, edges) {
+        function buildGraphTree(nodes, edges, rootId = folderNodeId("")) {
             const nodeById = new Map(nodes.map((node) => [node.id, node]));
             const children = new Map(nodes.map((node) => [node.id, []]));
 
@@ -1077,11 +1141,11 @@
                 });
             });
 
-            return { nodeById, children, rootId: folderNodeId("") };
+            return { nodeById, children, rootId };
         }
 
-        function graphStructureStats(nodes, edges) {
-            const { children, rootId } = buildGraphTree(nodes, edges);
+        function graphStructureStats(nodes, edges, rootId = folderNodeId("")) {
+            const { children } = buildGraphTree(nodes, edges, rootId);
             let maxDepth = 0;
             let leafCount = 0;
 
@@ -1099,8 +1163,15 @@
             return { maxDepth: Math.max(1, maxDepth), leafCount: Math.max(1, leafCount) };
         }
 
-        function graphLayoutDimensions(viewportWidth, viewportHeight) {
-            const stats = graphStructureStats(graphData.nodes, graphData.edges);
+        function graphLayoutDimensions(viewportWidth, viewportHeight, nodes = graphData.nodes, edges = graphData.edges, rootId = folderNodeId("")) {
+            if (graphMode === "partial") {
+                return {
+                    width: Math.max(viewportWidth, 1200),
+                    height: Math.max(viewportHeight, 900)
+                };
+            }
+
+            const stats = graphStructureStats(nodes, edges, rootId);
             const levelDistance = 360;
             const leafArcGap = 220;
             const padding = 680;
@@ -1115,11 +1186,11 @@
             };
         }
 
-        function layoutGraph(nodes, edges, width, height) {
+        function layoutGraph(nodes, edges, width, height, rootId = folderNodeId("")) {
             const centerX = width / 2;
             const centerY = height / 2;
-            const { nodeById, children, rootId } = buildGraphTree(nodes, edges);
-            const stats = graphStructureStats(nodes, edges);
+            const { nodeById, children } = buildGraphTree(nodes, edges, rootId);
+            const stats = graphStructureStats(nodes, edges, rootId);
             const usableRadius = Math.max(360, Math.min(width, height) / 2 - 360);
             const levelDistance = Math.max(360, usableRadius / stats.maxDepth);
             const leafStep = stats.leafCount > 1 ? (Math.PI * 2) / stats.leafCount : 0;
@@ -1194,24 +1265,58 @@
             return label.length > 28 ? `${label.slice(0, 25)}...` : label;
         }
 
+        function graphNodeById(nodeId) {
+            return graphData.nodes.find((node) => node.id === nodeId) || null;
+        }
+
+        function partialGraphCenterNode() {
+            const focusedNode = getFocusedNode();
+            if (!focusedNode) return graphNodeById(folderNodeId(""));
+            if (focusedNode.type === "file") {
+                return graphNodeById(folderNodeId(parentFolderPath(focusedNode.path))) || graphNodeById(folderNodeId(""));
+            }
+            return focusedNode;
+        }
+
+        function graphForCurrentMode() {
+            if (graphMode === "full") {
+                return { nodes: graphData.nodes, edges: graphData.edges, rootId: folderNodeId("") };
+            }
+
+            const center = partialGraphCenterNode();
+            if (!center) return { nodes: [], edges: [], rootId: folderNodeId("") };
+
+            const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
+            const childEdges = graphData.edges.filter((edge) => edge.source === center.id && nodeById.has(edge.target));
+            const nodeIds = new Set([center.id, ...childEdges.map((edge) => edge.target)]);
+            return {
+                nodes: Array.from(nodeIds).map((nodeId) => ({ ...nodeById.get(nodeId), isCenter: nodeId === center.id })),
+                edges: childEdges,
+                rootId: center.id
+            };
+        }
+
         function renderGraph() {
             const width = Math.max(360, Math.round(graphSvg.clientWidth || graphSvg.parentElement.clientWidth || 720));
             const height = Math.max(460, Math.round(graphSvg.clientHeight || graphSvg.parentElement.clientHeight || 620));
-            const { width: layoutWidth, height: layoutHeight } = graphLayoutDimensions(width, height);
+            const displayGraph = graphForCurrentMode();
+            const { width: layoutWidth, height: layoutHeight } = graphLayoutDimensions(width, height, displayGraph.nodes, displayGraph.edges, displayGraph.rootId);
             const filter = pageFilter.value.trim().toLowerCase();
-            const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
+            const nodeById = new Map(displayGraph.nodes.map((node) => [node.id, node]));
             const focusedIds = getFocusedNodeIds();
 
             graphSvg.replaceChildren();
             graphSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-            graphEmpty.hidden = graphData.nodes.length > 1;
+            graphEmpty.hidden = displayGraph.nodes.length > 1;
 
-            if (graphData.nodes.length <= 1) return;
+            if (displayGraph.nodes.length <= 1) return;
 
             graphLayoutSize = { width: layoutWidth, height: layoutHeight };
-            layoutGraph(graphData.nodes, graphData.edges, layoutWidth, layoutHeight);
+            layoutGraph(displayGraph.nodes, displayGraph.edges, layoutWidth, layoutHeight, displayGraph.rootId);
             if (!graphHasUserTransform) {
-                graphZoom = minGraphZoom;
+                graphZoom = graphMode === "partial"
+                    ? Math.max(minGraphZoom, Math.min(1.1, Math.min(width / layoutWidth, height / layoutHeight) * 0.9))
+                    : minGraphZoom;
                 graphPan = {
                     x: (width - layoutWidth * graphZoom) / 2,
                     y: (height - layoutHeight * graphZoom) / 2
@@ -1223,7 +1328,7 @@
             applyGraphPan();
 
             const edgeLayer = createSvgElement("g", { class: "graph-edges" });
-            graphData.edges.forEach((edge) => {
+            displayGraph.edges.forEach((edge) => {
                 const source = nodeById.get(edge.source);
                 const target = nodeById.get(edge.target);
                 if (!source || !target) return;
@@ -1243,7 +1348,7 @@
             viewportLayer.appendChild(edgeLayer);
 
             const nodeLayer = createSvgElement("g", { class: "graph-nodes" });
-            graphData.nodes.slice().sort((left, right) => {
+            displayGraph.nodes.slice().sort((left, right) => {
                 const order = { root: 0, folder: 1, file: 2 };
                 return order[left.type] - order[right.type];
             }).forEach((node) => {
@@ -1289,31 +1394,6 @@
             graphSvg.appendChild(viewportLayer);
         }
 
-        async function loadAllPageContent() {
-            const cachedContent = new Map();
-            pages.filter(isMarkdownFile).forEach((page) => {
-                const cached = readCache(pageCacheKey(page.path), contentCacheTtl);
-                if (typeof cached === "string") cachedContent.set(page.path, cached);
-            });
-            pageContentByPath = cachedContent;
-            if (cachedContent.size) {
-                buildGraph();
-                renderTree();
-                renderGraph();
-            }
-
-            await mapLimit(pages.filter(isMarkdownFile), 8, async (page) => {
-                try {
-                    const payload = await api(`/api/second-brain/page?path=${encodeURIComponent(page.path)}`);
-                    const content = payload.page.content || "";
-                    pageContentByPath.set(page.path, content);
-                    writeCache(pageCacheKey(page.path), content);
-                } catch (error) {
-                    if (!pageContentByPath.has(page.path)) pageContentByPath.set(page.path, "");
-                }
-            });
-        }
-
         async function refreshPages(options = {}) {
             graphStatus.textContent = "Loading";
             saveStatus.textContent = "";
@@ -1338,18 +1418,17 @@
             }
 
             try {
-                const payload = await api("/api/second-brain/pages");
+                const payload = await api(`/api/second-brain/pages${options.forceNetwork ? "?refresh=1" : ""}`);
                 pages = payload.pages || [];
                 writeCache(pagesCacheKey, pages);
                 pageCount.textContent = `${pages.length} file${pages.length === 1 ? "" : "s"}`;
-                graphStatus.textContent = "Reading";
-                await loadAllPageContent();
+                graphStatus.textContent = payload.source === "manifest" ? "Cached" : "Ready";
+                buildGraph();
                 if (options.keepSelection && pages.some((page) => page.path === options.keepSelection)) {
                     await loadPage(options.keepSelection);
                 } else if (options.keepFocus && graphData.nodes.some((node) => node.id === options.keepFocus)) {
                     focusedNodeId = options.keepFocus;
                 }
-                buildGraph();
                 renderTree();
                 renderGraph();
                 graphStatus.textContent = "Ready";
@@ -1364,7 +1443,7 @@
 
         async function loadPage(path) {
             const fileRecord = fileRecordForPath(path);
-            const cached = readCache(pageCacheKey(path), Infinity);
+            const cached = readContentCache(path);
             if ((typeof cached === "string" || (cached && typeof cached === "object")) && !pageContentByPath.has(path)) {
                 pageContentByPath.set(path, cached);
             }
@@ -1385,7 +1464,7 @@
                 const payload = await api(`/api/second-brain/page?path=${encodeURIComponent(path)}`);
                 const content = payload.page.type === "image" ? payload.page : payload.page.content || "";
                 pageContentByPath.set(path, content);
-                writeCache(pageCacheKey(path), content);
+                writeContentCache(path, content);
             }
 
             const previewContent = pageContentByPath.get(path);
@@ -1485,6 +1564,18 @@
         }, { passive: false });
         zoomOutGraph.addEventListener("click", () => setGraphZoom(graphZoom * 0.68));
         zoomInGraph.addEventListener("click", () => setGraphZoom(graphZoom * 1.42));
+        treeModeToggle.addEventListener("change", () => {
+            graphMode = treeModeToggle.checked ? "full" : "partial";
+            graphHasUserTransform = false;
+            syncGraphSettings();
+            writeSettings();
+            renderGraph();
+        });
+        labelModeToggle.addEventListener("change", () => {
+            showGraphLabels = labelModeToggle.checked;
+            syncGraphSettings();
+            writeSettings();
+        });
         collapseTree.addEventListener("click", () => setVaultTreeOpen(false));
         openTree.addEventListener("click", () => setVaultTreeOpen(true));
         vaultTree.addEventListener("click", (event) => {
@@ -1523,6 +1614,7 @@
             resizeTimer = window.setTimeout(renderGraph, 120);
         });
 
+        readSettings();
         refreshPages();
     </script>
 </body>

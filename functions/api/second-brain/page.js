@@ -19,7 +19,7 @@ export async function onRequestGet(context) {
     }
 
     if (!page) return json({ error: "Markdown page was not found." }, 404);
-    return json({ ok: true, page });
+    return json({ ok: true, page }, 200, { "cache-control": "private, max-age=300" });
 }
 
 export async function onRequestPut(context) {

@@ -133,6 +133,16 @@ export async function listPages(kv) {
     return pages;
 }
 
+export async function getManifest(kv) {
+    const result = await kv.getWithMetadata(MANIFEST_KEY, "json");
+    if (!result.value || !Array.isArray(result.value.pages)) return null;
+    return {
+        ...result.value,
+        generated_at: result.value.generated_at || result.metadata?.generated_at || "",
+        file_count: result.value.file_count || result.value.pages.length
+    };
+}
+
 function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     const chunkSize = 0x8000;
