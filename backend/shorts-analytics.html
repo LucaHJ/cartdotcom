@@ -6,7 +6,7 @@
     <title>Shorts Analytics</title>
     <link rel="stylesheet" href="/dashboard.css?v=20260526-refresh">
     <link rel="stylesheet" href="/dashboard-small-notes.css?v=20260526-shorts">
-    <link rel="stylesheet" href="/shorts-analytics.css?v=20260526-widget">
+    <link rel="stylesheet" href="/shorts-analytics.css?v=20260527-detail">
 </head>
 <body class="small-notes-dashboard shorts-analytics-page">
     <header class="topbar notes-topbar">
@@ -27,12 +27,22 @@
             <p class="eyebrow">shortform</p>
             <h1 id="analyticsTitle">Shorts Analytics</h1>
             <section id="shortsPerformance" class="shorts-performance-widget" aria-label="Shorts performance" aria-live="polite"></section>
+            <section id="shortsHistory" class="shorts-analysis-section" aria-label="Shorts performance history"></section>
+            <section id="shortsRankings" class="shorts-analysis-section" aria-label="Individual video rankings"></section>
+            <section id="shortsSegments" class="shorts-analysis-section" aria-label="Shorts segment performance"></section>
+            <section id="shortsDecision" class="shorts-analysis-section" aria-label="Publishing selection guidance"></section>
         </section>
     </main>
 
-    <script src="/shorts-analytics.js?v=20260526-live-stats"></script>
+    <script src="/shorts-analytics.js?v=20260527-detail"></script>
     <script>
-        loadShortsPerformanceWidget(document.getElementById("shortsPerformance"));
+        loadShortsAnalyticsPage({
+            performance: document.getElementById("shortsPerformance"),
+            history: document.getElementById("shortsHistory"),
+            rankings: document.getElementById("shortsRankings"),
+            segments: document.getElementById("shortsSegments"),
+            decision: document.getElementById("shortsDecision")
+        });
 
         document.getElementById("logoutButton").addEventListener("click", async () => {
             await fetch("/api/auth/logout", { method: "POST" });

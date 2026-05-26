@@ -125,12 +125,293 @@
     animation: dashboard-skeleton 1.4s ease-in-out infinite;
 }
 
+.shorts-analysis-section {
+    margin: 0 0 28px;
+    border-top: 1px solid rgba(156, 163, 175, 0.25);
+    padding-top: 12px;
+}
+
+.shorts-section-head,
+.shorts-ranking-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.shorts-section-head h2,
+.shorts-ranking-head h3,
+.shorts-segment-block h3 {
+    margin: 0;
+    color: var(--ink-strong);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.shorts-section-note,
+.shorts-empty-note {
+    margin: 0 0 14px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.shorts-detail-skeleton {
+    min-height: 160px;
+    border-radius: 4px;
+    background: rgba(156, 163, 175, 0.12);
+}
+
+.shorts-history-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 12px;
+}
+
+.shorts-segmented-control {
+    display: inline-flex;
+    overflow: hidden;
+    border: 1px solid rgba(156, 163, 175, 0.24);
+    border-radius: 7px;
+}
+
+.shorts-segmented-control button {
+    min-width: 42px;
+    border: 0;
+    border-right: 1px solid rgba(156, 163, 175, 0.18);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    padding: 7px 10px;
+}
+
+.shorts-segmented-control button:last-child {
+    border-right: 0;
+}
+
+.shorts-segmented-control button.is-active {
+    background: rgba(129, 161, 116, 0.16);
+    color: var(--ink-strong);
+}
+
+.shorts-select-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.shorts-select-label select {
+    min-width: 148px;
+    border: 1px solid rgba(156, 163, 175, 0.24);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ink-strong);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    padding: 7px 9px;
+}
+
+.shorts-history-chart {
+    display: block;
+    width: 100%;
+    height: 280px;
+}
+
+.shorts-chart-grid line {
+    stroke: rgba(156, 163, 175, 0.18);
+    stroke-width: 1;
+}
+
+.shorts-chart-grid text,
+.shorts-chart-axis text {
+    fill: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.shorts-chart-line {
+    fill: none;
+    stroke: #81a174;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 4;
+}
+
+.shorts-chart-points circle {
+    fill: var(--ink-strong);
+    stroke: var(--bg);
+    stroke-width: 2;
+}
+
+.shorts-ranking-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.shorts-ranking-list {
+    min-width: 0;
+}
+
+.shorts-ranking-head {
+    margin-bottom: 8px;
+}
+
+.shorts-ranking-head span {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.shorts-ranking-list ol {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0 0 0 20px;
+}
+
+.shorts-ranking-list li {
+    min-width: 0;
+    padding-bottom: 9px;
+    border-bottom: 1px solid rgba(156, 163, 175, 0.14);
+}
+
+.shorts-ranking-list a,
+.shorts-ranking-list strong,
+.shorts-ranking-list small {
+    display: block;
+    min-width: 0;
+}
+
+.shorts-ranking-list a {
+    overflow: hidden;
+    color: var(--ink-strong);
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.3;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.shorts-ranking-list strong {
+    margin-top: 5px;
+    color: var(--ink-strong);
+    font-size: 18px;
+    line-height: 1;
+}
+
+.shorts-ranking-list small {
+    overflow: hidden;
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.shorts-segment-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 22px 24px;
+}
+
+.shorts-segment-block {
+    min-width: 0;
+}
+
+.shorts-segment-block h3 {
+    margin-bottom: 9px;
+}
+
+.shorts-segment-table-wrap {
+    overflow-x: auto;
+}
+
+.shorts-segment-table {
+    width: 100%;
+    min-width: 560px;
+    border-collapse: collapse;
+    color: var(--ink);
+    font-size: 12px;
+}
+
+.shorts-segment-table th,
+.shorts-segment-table td {
+    border-bottom: 1px solid rgba(156, 163, 175, 0.14);
+    padding: 8px 9px 8px 0;
+    text-align: right;
+    vertical-align: top;
+}
+
+.shorts-segment-table th:first-child,
+.shorts-segment-table td:first-child {
+    max-width: 160px;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.shorts-segment-table th {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.shorts-guidance-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.shorts-guidance-grid div {
+    min-height: 68px;
+    border-top: 1px solid rgba(156, 163, 175, 0.18);
+    padding-top: 10px;
+}
+
+.shorts-guidance-grid span,
+.shorts-guidance-grid small {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.shorts-guidance-grid strong {
+    display: block;
+    margin-top: 7px;
+    color: var(--ink-strong);
+    font-size: 22px;
+    line-height: 1;
+}
+
+.shorts-guidance-grid small {
+    margin-top: 6px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
 .shorts-analytics-page .notes-shell {
-    width: min(100%, 1040px);
+    width: min(100%, 1160px);
 }
 
 .shorts-analytics-page .notes-stage {
-    width: min(100%, 820px);
+    width: min(100%, 1040px);
 }
 
 @media (max-width: 760px) {
@@ -138,10 +419,34 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 14px;
     }
+
+    .shorts-ranking-grid,
+    .shorts-segment-grid,
+    .shorts-guidance-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .shorts-history-controls {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .shorts-segmented-control {
+        width: 100%;
+    }
+
+    .shorts-segmented-control button {
+        flex: 1;
+        min-width: 0;
+    }
 }
 
 @media (max-width: 480px) {
     .shorts-performance-grid {
         grid-template-columns: 1fr;
+    }
+
+    .shorts-history-chart {
+        height: 220px;
     }
 }
