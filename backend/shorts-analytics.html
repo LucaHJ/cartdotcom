@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Shorts Analytics</title>
+    <link rel="stylesheet" href="/dashboard.css?v=20260526-refresh">
+    <link rel="stylesheet" href="/dashboard-small-notes.css?v=20260526-shorts">
+    <link rel="stylesheet" href="/shorts-analytics.css?v=20260526-widget">
+</head>
+<body class="small-notes-dashboard shorts-analytics-page">
+    <header class="topbar notes-topbar">
+        <nav class="topnav" aria-label="Main navigation">
+            <a href="/home.html">Home</a>
+            <a href="/backend/dashboard.html">Dashboard</a>
+            <a href="/backend/prompting.html">Prompting</a>
+            <a href="/backend/second-brain.html">Second Brain</a>
+            <a href="/backend/youtube-synthesis.html">YouTube</a>
+            <a href="/backend/instagram.html">Instagram</a>
+            <a href="/mobile-approval.html">Mobile Approval</a>
+            <button class="nav-button" id="logoutButton" type="button">Logout</button>
+        </nav>
+    </header>
+
+    <main class="notes-shell" aria-labelledby="analyticsTitle">
+        <section class="notes-stage">
+            <p class="eyebrow">shortform</p>
+            <h1 id="analyticsTitle">Shorts Analytics</h1>
+            <section id="shortsPerformance" class="shorts-performance-widget" aria-label="Shorts performance" aria-live="polite"></section>
+        </section>
+    </main>
+
+    <script src="/shorts-analytics.js?v=20260526-widget"></script>
+    <script>
+        loadShortsPerformanceWidget(document.getElementById("shortsPerformance"));
+
+        document.getElementById("logoutButton").addEventListener("click", async () => {
+            await fetch("/api/auth/logout", { method: "POST" });
+            window.location.href = "/login.html";
+        });
+    </script>
+</body>
+</html>

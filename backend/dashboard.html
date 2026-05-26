@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Small Notes</title>
     <link rel="stylesheet" href="/dashboard.css?v=20260526-refresh">
-    <link rel="stylesheet" href="/dashboard-small-notes.css?v=20260526-synthesis-cache">
+    <link rel="stylesheet" href="/dashboard-small-notes.css?v=20260526-shorts">
+    <link rel="stylesheet" href="/shorts-analytics.css?v=20260526-widget">
 </head>
 <body class="small-notes-dashboard">
     <header class="topbar notes-topbar">
@@ -15,6 +16,7 @@
             <a href="/backend/second-brain.html">Second Brain</a>
             <a href="/backend/youtube-synthesis.html">YouTube</a>
             <a href="/backend/instagram.html">Instagram</a>
+            <a href="/backend/shorts-analytics.html">Shorts</a>
             <a href="/mobile-approval.html">Mobile Approval</a>
             <button class="icon-button refresh-button" id="refreshNotes" type="button" aria-label="Refresh notes" title="Refresh notes">
                 <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -33,17 +35,20 @@
             <p class="eyebrow">second brain</p>
             <h1 id="notesTitle">Small Notes</h1>
             <p id="notesStatus" class="notes-status" aria-live="polite">Loading</p>
+            <section id="shortsPerformance" class="shorts-performance-widget" aria-label="Shorts performance" aria-live="polite"></section>
             <div id="synthesisStatus" class="synthesis-status-board" aria-label="Reel and YouTube synthesis status counts" aria-live="polite"></div>
             <ul id="smallNotes" class="small-notes-list" aria-live="polite"></ul>
         </section>
     </main>
 
     <script src="/refresh-button.js?v=20260526-refresh"></script>
+    <script src="/shorts-analytics.js?v=20260526-widget"></script>
     <script>
         const notesStatus = document.getElementById("notesStatus");
         const smallNotes = document.getElementById("smallNotes");
         const refreshNotes = document.getElementById("refreshNotes");
         const synthesisStatus = document.getElementById("synthesisStatus");
+        const shortsPerformance = document.getElementById("shortsPerformance");
         const cachePrefix = "cartdotcom:dashboard:20260526-reel-status:";
         const cacheTtlMs = 5 * 60 * 1000;
         const synthesisCacheTtlMs = 60 * 1000;
@@ -277,7 +282,11 @@
         }
 
         async function loadDashboard(options = {}) {
-            await Promise.allSettled([loadSmallNotes(options), loadSynthesisStatus(options)]);
+            await Promise.allSettled([
+                loadSmallNotes(options),
+                loadSynthesisStatus(options),
+                loadShortsPerformanceWidget(shortsPerformance, { link: true })
+            ]);
         }
 
         refreshNotes.addEventListener("click", () => runRefreshButton(refreshNotes, () => loadDashboard({ forceNetwork: true })));
