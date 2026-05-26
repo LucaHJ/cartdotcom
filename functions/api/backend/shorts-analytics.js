@@ -7,6 +7,8 @@ const FULL_YPP_SUBSCRIBERS_TARGET = 1000;
 const EARLY_YPP_SHORTS_VIEWS_TARGET = 3000000;
 const EARLY_YPP_SUBSCRIBERS_TARGET = 500;
 const EARLY_YPP_UPLOADS_TARGET = 3;
+const YOUTUBE_VIDEOS_API = "https://www.googleapis.com/youtube/v3/videos";
+const YOUTUBE_API_BATCH_SIZE = 50;
 
 function cleanCell(value) {
     return String(value || "")
@@ -66,8 +68,69 @@ function extractPerformanceRows(markdown) {
     return rows;
 }
 
+function isActivePerformanceRow(row) {
+    return !/\bremoved\b|\btaken down\b/i.test(row.notes);
+}
+
+function uniqueVideoIds(rows) {
+    return [...new Set(
+        rows
+            .filter(isActivePerformanceRow)
+            .map((row) => row.video_id)
+            .filter(Boolean)
+    )];
+}
+
+function parseYoutubeCount(value) {
+    const count = Number(value || 0);
+    return Number.isFinite(count) ? count : 0;
+}
+
+async function fetchYoutubeStatistics(videoIds, apiKey) {
+    if (!apiKey || !videoIds.length) return new Map();
+
+    const stats = new Map();
+    for (let index = 0; index < videoIds.length; index += YOUTUBE_API_BATCH_SIZE) {
+        const batch = videoIds.slice(index, index + YOUTUBE_API_BATCH_SIZE);
+        const url = new URL(YOUTUBE_VIDEOS_API);
+        url.searchParams.set("part", "statistics");
+        url.searchParams.set("id", batch.join(","));
+        url.searchParams.set("key", apiKey);
+
+        const response = await fetch(url, { headers: { accept: "application/json" } });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+            throw new Error(payload?.error?.message || "YouTube video statistics could not be loaded.");
+        }
+
+        for (const item of payload?.items || []) {
+            stats.set(item.id, {
+                views: parseYoutubeCount(item.statistics?.viewCount),
+                likes: parseYoutubeCount(item.statistics?.likeCount),
+                comments: parseYoutubeCount(item.statistics?.commentCount)
+            });
+        }
+    }
+    return stats;
+}
+
+function mergeYoutubeStatistics(rows, stats) {
+    if (!stats?.size) return rows;
+    return rows.map((row) => {
+        const videoStats = stats.get(row.video_id);
+        if (!videoStats) return row;
+        return {
+            ...row,
+            views: videoStats.views,
+            likes: videoStats.likes,
+            comments: videoStats.comments,
+            stats_source: "youtube_data_api"
+        };
+    });
+}
+
 function summarizeRows(rows) {
-    const activeRows = rows.filter((row) => !/\bremoved\b|\btaken down\b/i.test(row.notes));
+    const activeRows = rows.filter(isActivePerformanceRow);
     const totalViews = activeRows.reduce((total, row) => total + row.views, 0);
     const totalLikes = activeRows.reduce((total, row) => total + row.likes, 0);
     const totalComments = activeRows.reduce((total, row) => total + row.comments, 0);
@@ -128,15 +191,37 @@ export async function onRequestGet(context) {
             ok: true,
             source: PERFORMANCE_REVIEW_PATH,
             source_status: "missing",
+            stats_source: "performance_review",
+            stats_error: "",
+            live_stats_video_count: 0,
             ...summarizeRows([])
         });
     }
 
-    const rows = extractPerformanceRows(page.content || "");
+    let rows = extractPerformanceRows(page.content || "");
+    const apiKey = context.env.YOUTUBE_API_KEY || context.env.SHORTS_YOUTUBE_API_KEY || "";
+    let statsSource = apiKey ? "youtube_data_api" : "performance_review";
+    let statsError = "";
+    let liveStatsVideoCount = 0;
+
+    if (apiKey) {
+        try {
+            const stats = await fetchYoutubeStatistics(uniqueVideoIds(rows), apiKey);
+            liveStatsVideoCount = stats.size;
+            rows = mergeYoutubeStatistics(rows, stats);
+        } catch (error) {
+            statsSource = "performance_review";
+            statsError = error.message || "YouTube video statistics could not be loaded.";
+        }
+    }
+
     return json({
         ok: true,
         source: PERFORMANCE_REVIEW_PATH,
         source_status: "loaded",
+        stats_source: statsSource,
+        stats_error: statsError,
+        live_stats_video_count: liveStatsVideoCount,
         updated_at: page.metadata?.updated_at || "",
         ...summarizeRows(rows)
     }, 200, { "cache-control": "private, max-age=300" });

@@ -48,6 +48,7 @@ function renderShortsPerformance(target, payload, options = {}) {
     const videos = Number(totals.videos_published || 0);
     const progress = Number(full.shorts_views_progress || 0);
     const targetViews = Number(full.shorts_views_required || 10000000);
+    const metricSource = payload?.stats_source === "youtube_data_api" ? "live YouTube stats" : "saved performance rows";
     const updatedAt = payload?.updated_at ? new Date(payload.updated_at) : null;
     const status = updatedAt && !Number.isNaN(updatedAt.getTime())
         ? updatedAt.toLocaleDateString()
@@ -64,7 +65,7 @@ function renderShortsPerformance(target, payload, options = {}) {
             <div class="shorts-performance-metric">
                 <span>Overall views</span>
                 <strong>${shortsFormatNumber(views)}</strong>
-                <small>from saved performance rows</small>
+                <small>from ${metricSource}</small>
             </div>
             <div class="shorts-performance-metric">
                 <span>Likes</span>
