@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260526-branch-graph">
+    <link rel="stylesheet" href="/dashboard.css?v=20260526-stable-branch">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -191,6 +191,7 @@
         let graphSuppressClick = false;
         let graphMode = "partial";
         let showGraphLabels = true;
+        let partialGraphRootPath = "";
 
         function escapeHtml(value) {
             return String(value).replace(/[&<>"']/g, (char) => ({
@@ -480,6 +481,15 @@
             return segments.join("/");
         }
 
+        function topLevelFolderPath(path) {
+            return String(path || "").split("/").filter(Boolean)[0] || "";
+        }
+
+        function isTopLevelFolderPath(path) {
+            const segments = String(path || "").split("/").filter(Boolean);
+            return segments.length === 1;
+        }
+
         function findTreeFolder(node, path) {
             if (!path) return node;
             if (node.type === "folder" && node.path === path) return node;
@@ -614,6 +624,11 @@
         function focusFolder(path) {
             focusedNodeId = folderNodeId(path);
             if (path) treeOpenPaths.set(path, true);
+            if (!path) {
+                partialGraphRootPath = "";
+            } else if (isTopLevelFolderPath(path) || !partialGraphRootPath) {
+                partialGraphRootPath = topLevelFolderPath(path);
+            }
             graphHasUserTransform = false;
             closePreview();
             graphStatus.textContent = path ? "Focused" : "Ready";
@@ -1164,7 +1179,7 @@
         }
 
         function graphLayoutDimensions(viewportWidth, viewportHeight, nodes = graphData.nodes, edges = graphData.edges, rootId = folderNodeId("")) {
-            if (graphMode === "partial") {
+            if (graphMode === "partial" && !partialGraphRootPath) {
                 return {
                     width: Math.max(viewportWidth, 1200),
                     height: Math.max(viewportHeight, 900)
@@ -1270,12 +1285,7 @@
         }
 
         function partialGraphCenterNode() {
-            const focusedNode = getFocusedNode();
-            if (!focusedNode) return graphNodeById(folderNodeId(""));
-            if (focusedNode.type === "file") {
-                return graphNodeById(folderNodeId(parentFolderPath(focusedNode.path))) || graphNodeById(folderNodeId(""));
-            }
-            return focusedNode;
+            return graphNodeById(folderNodeId(partialGraphRootPath || ""));
         }
 
         function graphForCurrentMode() {
@@ -1287,11 +1297,29 @@
             if (!center) return { nodes: [], edges: [], rootId: folderNodeId("") };
 
             const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
-            const childEdges = graphData.edges.filter((edge) => edge.source === center.id && nodeById.has(edge.target));
-            const nodeIds = new Set([center.id, ...childEdges.map((edge) => edge.target)]);
+            const { children } = buildGraphTree(graphData.nodes, graphData.edges, center.id);
+            const edgeByKey = new Map(graphData.edges.map((edge) => [`${edge.source}->${edge.target}`, edge]));
+            const nodeIds = new Set([center.id]);
+            const edges = [];
+
+            if (!partialGraphRootPath) {
+                edges.push(...graphData.edges.filter((edge) => edge.source === center.id && nodeById.has(edge.target)));
+                edges.forEach((edge) => nodeIds.add(edge.target));
+            } else {
+                const walk = (nodeId) => {
+                    (children.get(nodeId) || []).forEach((childId) => {
+                        nodeIds.add(childId);
+                        const edge = edgeByKey.get(`${nodeId}->${childId}`);
+                        if (edge) edges.push(edge);
+                        walk(childId);
+                    });
+                };
+                walk(center.id);
+            }
+
             return {
                 nodes: Array.from(nodeIds).map((nodeId) => ({ ...nodeById.get(nodeId), isCenter: nodeId === center.id })),
-                edges: childEdges,
+                edges,
                 rootId: center.id
             };
         }
@@ -1415,6 +1443,7 @@
                 showGraphSkeleton();
                 closePreview();
                 focusedNodeId = "";
+                partialGraphRootPath = "";
             }
 
             try {
@@ -1428,6 +1457,10 @@
                     await loadPage(options.keepSelection);
                 } else if (options.keepFocus && graphData.nodes.some((node) => node.id === options.keepFocus)) {
                     focusedNodeId = options.keepFocus;
+                    const focusedNode = getFocusedNode();
+                    if (focusedNode?.path && !partialGraphRootPath) {
+                        partialGraphRootPath = topLevelFolderPath(focusedNode.path);
+                    }
                 }
                 renderTree();
                 renderGraph();
@@ -1443,6 +1476,7 @@
 
         async function loadPage(path) {
             const fileRecord = fileRecordForPath(path);
+            const topLevelPath = topLevelFolderPath(path);
             const cached = readContentCache(path);
             if ((typeof cached === "string" || (cached && typeof cached === "object")) && !pageContentByPath.has(path)) {
                 pageContentByPath.set(path, cached);
@@ -1451,6 +1485,10 @@
             selectedPath = path;
             focusedNodeId = fileNodeId(path);
             treeOpenPaths.set(parentFolderPath(path), true);
+            if (topLevelPath && (!partialGraphRootPath || partialGraphRootPath !== topLevelPath)) {
+                partialGraphRootPath = topLevelPath;
+                graphHasUserTransform = false;
+            }
             const visiblePath = displayVaultPath(path);
             graphStatus.textContent = "Ready";
             saveStatus.textContent = "Loaded";
