@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Second Brain Graph</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260526-stable-branch">
+    <link rel="stylesheet" href="/dashboard.css?v=20260526-branch-reveal">
 </head>
 <body class="brain-minimal">
     <main class="shell brain-shell">
@@ -1285,7 +1285,7 @@
         }
 
         function partialGraphCenterNode() {
-            return graphNodeById(folderNodeId(partialGraphRootPath || ""));
+            return graphNodeById(folderNodeId(""));
         }
 
         function graphForCurrentMode() {
@@ -1297,15 +1297,20 @@
             if (!center) return { nodes: [], edges: [], rootId: folderNodeId("") };
 
             const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
-            const { children } = buildGraphTree(graphData.nodes, graphData.edges, center.id);
+            const { children } = buildGraphTree(graphData.nodes, graphData.edges, folderNodeId(""));
             const edgeByKey = new Map(graphData.edges.map((edge) => [`${edge.source}->${edge.target}`, edge]));
             const nodeIds = new Set([center.id]);
             const edges = [];
+            const rootChildIds = children.get(center.id) || [];
 
-            if (!partialGraphRootPath) {
-                edges.push(...graphData.edges.filter((edge) => edge.source === center.id && nodeById.has(edge.target)));
-                edges.forEach((edge) => nodeIds.add(edge.target));
-            } else {
+            rootChildIds.forEach((childId) => {
+                nodeIds.add(childId);
+                const edge = edgeByKey.get(`${center.id}->${childId}`);
+                if (edge) edges.push(edge);
+            });
+
+            if (partialGraphRootPath) {
+                const branchRootId = folderNodeId(partialGraphRootPath);
                 const walk = (nodeId) => {
                     (children.get(nodeId) || []).forEach((childId) => {
                         nodeIds.add(childId);
@@ -1314,13 +1319,13 @@
                         walk(childId);
                     });
                 };
-                walk(center.id);
+                if (nodeIds.has(branchRootId)) walk(branchRootId);
             }
 
             return {
                 nodes: Array.from(nodeIds).map((nodeId) => ({ ...nodeById.get(nodeId), isCenter: nodeId === center.id })),
                 edges,
-                rootId: center.id
+                rootId: folderNodeId("")
             };
         }
 
