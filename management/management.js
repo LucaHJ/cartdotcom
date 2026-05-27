@@ -465,55 +465,291 @@ function savedIntakeList(intakes) {
     }));
 }
 
-function renderIntake(app) {
-    let state = {
-        projectId: "war-room-2",
-        priority: "high",
-        request: defaultRequest,
-        signals: [...defaultSignals]
-    };
-
-    const form = el("section", { className: "panel" });
-    const output = el("section", { className: "panel" });
-    const status = el("p", { className: "notice", text: "Task graph updates live. Saved drafts stay in this browser until server persistence is wired." });
-
-    form.append(
-        el("div", { className: "panel-header" }, [el("h2", { text: "Request" })]),
-        el("div", { className: "form-stack", style: "margin-top:14px" }, [
-            fieldSelect("Project", "projectInput", projects.map((project) => [project.id, project.name]), state.projectId, (value) => {
-                state.projectId = value;
-                renderOutput();
-            }),
-            fieldTextarea("Raw request", "requestInput", state.request, (value) => {
-                state.request = value;
-                renderOutput();
-            }),
-            priorityButtons(state.priority, (value) => {
-                state.priority = value;
-                renderIntake(app);
-            }),
-            signalChooser(state, () => renderOutput()),
-            el("div", { className: "button-row" }, [
-                el("button", { className: "button", type: "button", text: "Save Draft", onclick: () => saveCurrentDraft(state, status, output) }),
-                el("button", { className: "ghost-button", type: "button", text: "Export JSON", onclick: () => exportDraft(state) }),
-                el("button", { className: "ghost-button", type: "button", text: "Reset", onclick: () => renderIntake(app) })
-            ]),
-            status
-        ])
+function classifyCommand(request) {
+    const text = String(request || "").trim();
+    const lower = text.toLowerCase();
+    const mentionsExisting = projects.find((project) =>
+        lower.includes(project.id.toLowerCase()) || lower.includes(project.name.toLowerCase())
     );
+    const newProjectPattern = /\b(new|start|create|launch|build|make|prototype|spin up)\b.{0,28}\b(project|product|app|site|website|tool|business|service|dashboard|platform)\b/i;
+    const isNewProject = Boolean(newProjectPattern.test(text) && !mentionsExisting);
+    const projectNameMatch = text.match(/\b(?:called|named)\s+([A-Za-z0-9][A-Za-z0-9 -]{2,48}?)(?:\s+that\b|\s+to\b|\s+for\b|[.,!?]|$)/i);
+    const guessedName = projectNameMatch
+        ? projectNameMatch[1].trim().replace(/[.,!?].*$/, "")
+        : isNewProject
+            ? "New project"
+            : mentionsExisting?.name || "WAR-ROOM-2";
+    const projectId = mentionsExisting?.id || (isNewProject ? slugify(guessedName) : "war-room-2");
+    const hasMoney = /\b(money|revenue|income|profit|sell|sales|paid|subscription|affiliate|sponsor|customer|pricing|moneti[sz]e)\b/i.test(text);
+    const hasCompliance = hasMoney || /\b(legal|privacy|terms|refund|tax|gdpr|spam|email|payment|card|cookie|accessibility|compliance)\b/i.test(text);
+    const hasDeployment = /\b(deploy|scale|large[- ]scale|audience|production|cloudflare|traffic|uptime|backup|incident|latency)\b/i.test(text);
+    const needsCouncil = isNewProject || /\b(idea|proposal|strategy|plan|change|pivot|feature|existing product)\b/i.test(text);
+    const priority = /\b(urgent|asap|critical|broken|security|breach|outage|launch today)\b/i.test(text)
+        ? "urgent"
+        : hasMoney || hasCompliance || hasDeployment
+            ? "high"
+            : "normal";
+    const signals = new Set(["review"]);
 
-    function renderOutput() {
-        output.replaceChildren(
-            el("div", { className: "panel-header" }, [
-                el("h2", { text: "Role Task Graph" }),
-                el("span", { className: "status-pill", text: state.priority })
-            ]),
-            el("div", { style: "margin-top:14px" }, taskList(buildTasks(state.request, state.signals, state.projectId)))
+    if (needsCouncil) signals.add("council");
+    if (isNewProject || /\b(architecture|database|api|cloud|system|mobile|ios|workflow|integration|platform)\b/i.test(text)) signals.add("architecture");
+    if (hasCompliance || /\b(auth|login|secret|token|permission|payment|user data|credential)\b/i.test(text)) signals.add("security");
+    if (/\b(build|implement|fix|add|change|create|code|page|feature|ship|prototype)\b/i.test(text)) signals.add("code");
+    if (isNewProject || /\b(document|docs|future worker|future agent|readable|runbook|brief)\b/i.test(text)) signals.add("documentation");
+    if (/\b(agent|worker|automate|automation|schedule|queue|cron|background|execute|task)\b/i.test(text)) signals.add("automation");
+    if (/\b(image|video|tts|voice|design|asset|brand|logo|web design)\b/i.test(text)) signals.add("assets");
+    if (signals.size === 1) {
+        signals.add("council");
+        signals.add("documentation");
+    }
+
+    return {
+        text,
+        projectId,
+        projectName: guessedName,
+        isNewProject,
+        priority,
+        signals: Array.from(signals),
+        hasMoney,
+        hasCompliance,
+        hasDeployment,
+        needsCouncil,
+        confidence: isNewProject || mentionsExisting ? "high" : "medium"
+    };
+}
+
+function slugify(value) {
+    return String(value || "new-project")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 42) || "new-project";
+}
+
+function workerOrdersFor(analysis, details = {}) {
+    const tasks = buildTasks(analysis.text, analysis.signals, analysis.projectId);
+    if (analysis.hasMoney) {
+        tasks.push({
+            id: "monetization",
+            role: "product",
+            title: "Define monetization hypothesis",
+            output: "Offer, target customer, pricing path, conversion metric, and shutdown condition.",
+            dependsOn: analysis.signals.includes("council") ? ["council"] : ["triage"],
+            checks: [
+                "Revenue path is measurable",
+                "Cost and time risk are named",
+                "Performance row can be created"
+            ]
+        });
+    }
+    if (analysis.hasCompliance) {
+        tasks.push({
+            id: "compliance",
+            role: "security",
+            title: "Run compliance gate",
+            output: "Privacy, consumer claims, marketing consent, payment, tax, and disclosure checklist.",
+            dependsOn: ["triage"],
+            checks: [
+                "No paid launch without terms/privacy review",
+                "Claims have evidence",
+                "Payment and marketing scope are known"
+            ]
+        });
+    }
+    if (analysis.hasDeployment) {
+        tasks.push({
+            id: "deployment-readiness",
+            role: "operator",
+            title: "Prepare deployment and scale plan",
+            output: "Hosting, storage, observability, rollback, abuse limits, and cost guardrails.",
+            dependsOn: analysis.signals.includes("architecture") ? ["architecture"] : ["triage"],
+            checks: [
+                "Production state is not local-only",
+                "Rollback path is named",
+                "Cost and failure alerts are defined"
+            ]
+        });
+    }
+    if (details.goal || details.customer || details.success) {
+        tasks.push({
+            id: "project-brief",
+            role: "documentation",
+            title: "Write project operating brief",
+            output: "PROJECT, STATUS, COUNCIL, risks, and first runbook entries for future workers.",
+            dependsOn: ["council"],
+            checks: [
+                "Goal and user are explicit",
+                "First implementation slice is named",
+                "Future workers can load context without chat history"
+            ]
+        });
+    }
+    return tasks;
+}
+
+function councilQuestions(analysis) {
+    return [
+        ["Project name", analysis.projectName],
+        ["Primary customer or user", analysis.hasMoney ? "Who will pay, approve, or use this?" : "Who is this for?"],
+        ["Outcome", "What should be true when this succeeds?"],
+        ["First shippable slice", "What is the smallest version worth building first?"],
+        ["Constraints", "Budget, deadline, legal risk, tools, dependencies, or non-goals."],
+        ["Success metric", analysis.hasMoney ? "Revenue, conversion, retention, cost saved, or time saved." : "How will progress be measured?"]
+    ];
+}
+
+function renderIntake(app) {
+    const history = el("section", { className: "console-history", "aria-live": "polite" });
+    const commandInput = el("textarea", {
+        id: "commandInput",
+        className: "console-input",
+        placeholder: "Describe a project, idea, change, product, monetization test, or deployment concern..."
+    });
+    const status = el("p", { className: "console-status", text: "Auto-triage will infer project, priority, council need, workers, compliance, and deployability." });
+    const submit = el("button", { className: "button console-submit", type: "button", text: "Process" });
+
+    function addMessage(kind, children) {
+        const message = el("article", { className: `console-message ${kind}` }, children);
+        history.append(message);
+        message.scrollIntoView({ block: "nearest" });
+        return message;
+    }
+
+    function dispatchOrders(analysis, details = {}) {
+        const tasks = workerOrdersFor(analysis, details);
+        const draft = {
+            id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+            createdAt: new Date().toISOString(),
+            projectId: analysis.projectId,
+            priority: analysis.priority,
+            request: analysis.text,
+            signals: analysis.signals,
+            analysis,
+            details,
+            tasks
+        };
+        const intakes = readJson(storageKey, []);
+        writeJson(storageKey, [draft, ...intakes].slice(0, 30));
+        addMessage("assistant", [
+            el("span", { className: "tag", text: "worker orders" }),
+            el("h2", { text: "Orders prepared for execution" }),
+            el("p", { text: "These are structured orders for the worker layer. The next backend step is connecting this draft to a durable agent queue instead of local browser storage." }),
+            taskList(tasks)
+        ]);
+    }
+
+    function renderCouncilPrompt(analysis) {
+        const card = el("div", { className: "console-card" }, [
+            el("h2", { text: "Establish a council meeting?" }),
+            el("p", { text: "This looks like a new or broad project. A council meeting will capture the project brief so future workers do not depend on this chat history." }),
+            el("div", { className: "button-row" }, [
+                el("button", {
+                    className: "button",
+                    type: "button",
+                    text: "Establish Meeting",
+                    onclick: () => renderCouncilMeeting(analysis, card)
+                }),
+                el("button", {
+                    className: "ghost-button",
+                    type: "button",
+                    text: "Dispatch Without Meeting",
+                    onclick: () => dispatchOrders(analysis)
+                })
+            ])
+        ]);
+        addMessage("assistant", [card]);
+    }
+
+    function renderCouncilMeeting(analysis, target) {
+        const fields = {};
+        const questionNodes = councilQuestions(analysis).map(([label, placeholder]) => {
+            const id = `council-${slugify(label)}`;
+            const control = label === "Project name"
+                ? el("input", { id, className: "input", type: "text" })
+                : el("textarea", { id, className: "textarea", placeholder });
+            if (label === "Project name") control.value = analysis.projectName;
+            else control.style.minHeight = "82px";
+            fields[label] = control;
+            return fieldWrap(label, id, control);
+        });
+        target.replaceChildren(
+            el("h2", { text: "Council meeting" }),
+            el("p", { text: "Outline the durable project facts. When approved, worker orders will be generated from this brief." }),
+            el("div", { className: "console-brief-grid" }, questionNodes),
+            el("div", { className: "button-row" }, [
+                el("button", {
+                    className: "button",
+                    type: "button",
+                    text: "Approve Brief and Dispatch Workers",
+                    onclick: () => {
+                        const details = {
+                            name: fields["Project name"].value.trim(),
+                            customer: fields["Primary customer or user"].value.trim(),
+                            goal: fields["Outcome"].value.trim(),
+                            slice: fields["First shippable slice"].value.trim(),
+                            constraints: fields["Constraints"].value.trim(),
+                            success: fields["Success metric"].value.trim()
+                        };
+                        dispatchOrders({ ...analysis, projectName: details.name || analysis.projectName, projectId: slugify(details.name || analysis.projectName) }, details);
+                    }
+                })
+            ])
         );
     }
 
-    app.replaceChildren(el("section", { className: "split-panel" }, [form, output]));
-    renderOutput();
+    function processCommand() {
+        const text = commandInput.value.trim();
+        if (!text) {
+            status.textContent = "Enter a project, idea, change, or operating request first.";
+            return;
+        }
+        const analysis = classifyCommand(text);
+        addMessage("user", [el("p", { text })]);
+        addMessage("assistant", [
+            el("span", { className: "tag", text: "auto triage" }),
+            el("h2", { text: analysis.isNewProject ? "New project detected" : "Request classified" }),
+            el("div", { className: "console-triage-grid" }, [
+                scoreItem("Project", analysis.projectName),
+                scoreItem("Priority", analysis.priority),
+                scoreItem("Council", analysis.needsCouncil ? "recommended" : "optional"),
+                scoreItem("Confidence", analysis.confidence)
+            ]),
+            el("p", { text: `Inferred workers: ${analysis.signals.map((signal) => workSignals.find((item) => item[0] === signal)?.[1] || signal).join(", ")}.` })
+        ]);
+        commandInput.value = "";
+        status.textContent = "Request processed.";
+        if (analysis.needsCouncil) renderCouncilPrompt(analysis);
+        else dispatchOrders(analysis);
+    }
+
+    submit.addEventListener("click", processCommand);
+    commandInput.addEventListener("keydown", (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") processCommand();
+    });
+
+    app.replaceChildren(
+        el("section", { className: "console-shell" }, [
+            el("div", { className: "console-hero" }, [
+                el("p", { className: "eyebrow", text: "single command surface" }),
+                el("h2", { text: "What should WAR-ROOM-2 work on?" }),
+                el("p", { text: "Describe the outcome. The system will infer context, council need, worker roles, compliance, deployment, and measurement." })
+            ]),
+            history,
+            el("section", { className: "console-composer", "aria-label": "Project command" }, [
+                commandInput,
+                el("div", { className: "console-composer-footer" }, [
+                    status,
+                    submit
+                ])
+            ])
+        ])
+    );
+
+    addMessage("assistant", [
+        el("span", { className: "tag", text: "ready" }),
+        el("p", { text: "Give me a project, idea, change, monetization experiment, or deployment concern. I will turn it into council and worker orders without manual tagging." })
+    ]);
+    commandInput.focus();
 }
 
 function fieldSelect(label, id, options, value, onChange) {
