@@ -486,6 +486,13 @@ a {
     margin-top: 10px;
 }
 
+.queued-project-time {
+    display: block;
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
 .matrix {
     display: grid;
     gap: 10px;

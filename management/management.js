@@ -156,6 +156,54 @@ function writeJson(key, value) {
     }
 }
 
+async function managementApi(path, options = {}) {
+    const response = await fetch(path, {
+        credentials: "same-origin",
+        headers: {
+            accept: "application/json",
+            ...(options.body ? { "content-type": "application/json" } : {})
+        },
+        ...options
+    });
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json") ? await response.json() : {};
+    if (!response.ok || payload.error) {
+        throw new Error(payload.error || `Request failed: ${response.status}`);
+    }
+    return payload;
+}
+
+async function loadQueuedDrafts() {
+    try {
+        const payload = await managementApi("/api/management/queue");
+        if (Array.isArray(payload.records)) {
+            writeJson(storageKey, payload.records);
+            return { source: "queue", records: payload.records };
+        }
+    } catch (error) {
+        // Local static previews do not run Cloudflare Functions. Fall back to browser drafts.
+    }
+    return { source: "browser", records: readJson(storageKey, []) };
+}
+
+async function saveQueuedDraft(draft) {
+    const intakes = readJson(storageKey, []);
+    writeJson(storageKey, [draft, ...intakes.filter((item) => item.id !== draft.id)].slice(0, 30));
+
+    try {
+        const payload = await managementApi("/api/management/queue", {
+            method: "POST",
+            body: JSON.stringify(draft)
+        });
+        const record = payload.record || draft;
+        const latest = readJson(storageKey, []);
+        writeJson(storageKey, [record, ...latest.filter((item) => item.id !== record.id)].slice(0, 30));
+        return { ok: true, source: "queue", record };
+    } catch (error) {
+        return { ok: false, source: "browser", record: draft, error: error.message };
+    }
+}
+
 function asNumber(value) {
     const number = Number(value);
     return Number.isFinite(number) ? number : 0;
@@ -863,7 +911,7 @@ function renderIntake(app) {
         return message;
     }
 
-    function dispatchOrders(analysis, details = {}) {
+    async function dispatchOrders(analysis, details = {}) {
         const tasks = workerOrdersFor(analysis, details);
         const draft = {
             id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
@@ -876,14 +924,17 @@ function renderIntake(app) {
             details,
             tasks
         };
-        const intakes = readJson(storageKey, []);
-        writeJson(storageKey, [draft, ...intakes].slice(0, 30));
+        const saveResult = await saveQueuedDraft(draft);
+        const statusText = saveResult.ok
+            ? "This project was written to the management queue and will survive reloads."
+            : `Queue write failed, so this is only stored in this browser for now. ${saveResult.error || ""}`.trim();
+
         addMessage("assistant", [
             el("span", { className: "tag", text: "worker orders" }),
             el("h2", { text: "Orders prepared for execution" }),
-            el("p", { text: "These are structured orders for the worker layer. The next backend step is connecting this draft to a durable agent queue instead of local browser storage." }),
+            el("p", { text: statusText }),
             taskList(tasks),
-            renderTimeLedger(draft)
+            renderTimeLedger(saveResult.record || draft)
         ]);
     }
 
@@ -902,7 +953,7 @@ function renderIntake(app) {
                     className: "ghost-button",
                     type: "button",
                     text: "Dispatch Without Meeting",
-                    onclick: () => dispatchOrders(analysis)
+                    onclick: async () => dispatchOrders(analysis)
                 })
             ])
         ]);
@@ -1092,6 +1143,10 @@ function exportDraft(state) {
 }
 
 function renderProjects(app) {
+    const queuePanelBody = el("div", { className: "queued-projects" }, [
+        el("div", { className: "empty-state", text: "Loading queued project drafts..." })
+    ]);
+
     app.append(el("section", { className: "three-column" }, projects.map((project) => {
         return el("article", { className: "registry-card" }, [
             el("span", { className: "tag", text: project.status }),
@@ -1105,6 +1160,20 @@ function renderProjects(app) {
         ]);
     })));
 
+    app.append(el("section", { className: "panel", style: "margin-top:16px" }, [
+        el("div", { className: "panel-header" }, [
+            el("h2", { text: "Queued Project Drafts" }),
+            el("span", { className: "status-pill", text: "queue" })
+        ]),
+        el("p", { className: "panel-subtitle", text: "Projects submitted through the command console appear here once they are written to the management queue. Local static previews use browser drafts as a fallback." }),
+        el("div", { style: "margin-top:14px" }, queuePanelBody)
+    ]));
+
+    loadQueuedDrafts().then(({ source, records }) => {
+        const projectDrafts = records.filter((record) => record.projectId || record.analysis?.projectId);
+        queuePanelBody.replaceChildren(renderQueuedProjects(projectDrafts, source));
+    });
+
     app.append(el("section", { className: "two-column", style: "margin-top:16px" }, [
         panel("Startup Context Pack", contextTable(projects[0])),
         panel("Unknown Project Rule", list([
@@ -1114,6 +1183,45 @@ function renderProjects(app) {
             "If the project is still ambiguous, stop and ask for the target."
         ]))
     ]));
+}
+
+function renderQueuedProjects(records, source) {
+    if (!records.length) {
+        return el("div", { className: "empty-state", text: "No queued project drafts found yet." });
+    }
+
+    const byProject = {};
+    for (const record of records) {
+        const projectId = record.projectId || record.analysis?.projectId || "unassigned";
+        const projectName = record.details?.name || record.analysis?.projectName || projectId;
+        byProject[projectId] = byProject[projectId] || {
+            projectId,
+            projectName,
+            records: [],
+            updatedAt: record.updatedAt || record.queuedAt || record.createdAt || ""
+        };
+        byProject[projectId].records.push(record);
+        const timestamp = record.updatedAt || record.queuedAt || record.createdAt || "";
+        if (timestamp > byProject[projectId].updatedAt) byProject[projectId].updatedAt = timestamp;
+    }
+
+    return el("div", { className: "three-column" }, Object.values(byProject)
+        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        .map((project) => {
+            const latest = project.records[0] || {};
+            const taskCount = project.records.reduce((total, record) => total + (record.tasks?.length || 0), 0);
+            return el("article", { className: "registry-card" }, [
+                el("span", { className: "tag", text: source }),
+                el("h3", { text: project.projectName }),
+                el("p", { className: "panel-subtitle", text: latest.request || "Queued project draft" }),
+                el("div", { className: "registry-meta" }, [
+                    el("span", { className: "dependency-pill", text: project.projectId }),
+                    el("span", { className: "dependency-pill", text: `${project.records.length} draft${project.records.length === 1 ? "" : "s"}` }),
+                    el("span", { className: "dependency-pill", text: `${taskCount} order${taskCount === 1 ? "" : "s"}` })
+                ]),
+                project.updatedAt ? el("time", { className: "queued-project-time", text: new Date(project.updatedAt).toLocaleString() }) : null
+            ]);
+        }));
 }
 
 function contextTable(project) {
