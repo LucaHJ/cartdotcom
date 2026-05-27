@@ -493,9 +493,51 @@ a {
     font-size: 12px;
 }
 
+.registry-actions {
+    margin-top: 12px;
+}
+
+.registry-actions a,
+.project-stage-head a {
+    text-decoration: none;
+}
+
 .matrix {
     display: grid;
     gap: 10px;
+}
+
+.project-stage-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.project-stage-card {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    padding: 13px;
+}
+
+.project-stage-head {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.project-stage-card h3 {
+    margin: 6px 0 0;
+    font-size: 15px;
+}
+
+.project-stage-card p {
+    margin: 0 0 10px;
+    color: #4f4942;
+    font-size: 13px;
+    line-height: 1.5;
 }
 
 .matrix-row {
@@ -550,8 +592,8 @@ a {
 
 .console-page .management-topbar {
     position: static;
-    justify-content: center;
-    text-align: center;
+    justify-content: space-between;
+    text-align: left;
 }
 
 .console-page .management-shell {

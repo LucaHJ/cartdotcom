@@ -204,6 +204,25 @@ async function saveQueuedDraft(draft) {
     }
 }
 
+function latestTimestamp(record) {
+    return record.updatedAt || record.queuedAt || record.createdAt || "";
+}
+
+function projectWorkspaceUrl(projectId) {
+    return `/management/project.html?id=${encodeURIComponent(projectId)}`;
+}
+
+function sortLatestFirst(records) {
+    return [...records].sort((a, b) => String(latestTimestamp(b)).localeCompare(String(latestTimestamp(a))));
+}
+
+function developmentState(record) {
+    const state = record.development || {};
+    if (state.workerOrdersDeployedAt) return "worker orders deployed";
+    if (state.startedAt) return "development started";
+    return record.status || "queued";
+}
+
 function asNumber(value) {
     const number = Number(value);
     return Number.isFinite(number) ? number : 0;
@@ -1404,7 +1423,7 @@ function renderQueuedProjects(records, source) {
     return el("div", { className: "three-column" }, Object.values(byProject)
         .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
         .map((project) => {
-            const latest = project.records[0] || {};
+            const latest = sortLatestFirst(project.records)[0] || {};
             const taskCount = project.records.reduce((total, record) => total + (record.tasks?.length || 0), 0);
             return el("article", { className: "registry-card" }, [
                 el("span", { className: "tag", text: source }),
@@ -1413,11 +1432,201 @@ function renderQueuedProjects(records, source) {
                 el("div", { className: "registry-meta" }, [
                     el("span", { className: "dependency-pill", text: project.projectId }),
                     el("span", { className: "dependency-pill", text: `${project.records.length} draft${project.records.length === 1 ? "" : "s"}` }),
-                    el("span", { className: "dependency-pill", text: `${taskCount} order${taskCount === 1 ? "" : "s"}` })
+                    el("span", { className: "dependency-pill", text: `${taskCount} order${taskCount === 1 ? "" : "s"}` }),
+                    el("span", { className: "dependency-pill", text: developmentState(latest) })
+                ]),
+                el("div", { className: "button-row registry-actions" }, [
+                    el("a", { className: "button", href: projectWorkspaceUrl(project.projectId), text: "Open" })
                 ]),
                 project.updatedAt ? el("time", { className: "queued-project-time", text: new Date(project.updatedAt).toLocaleString() }) : null
             ]);
         }));
+}
+
+function renderProjectWorkspace(app) {
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get("id") || params.get("project") || "";
+    app.append(el("section", { className: "panel" }, [
+        el("div", { className: "empty-state", text: "Loading project workspace..." })
+    ]));
+
+    loadQueuedDrafts().then(({ source, records }) => {
+        const projectRecords = records.filter((record) => {
+            const recordId = record.projectId || record.analysis?.projectId || "";
+            return recordId === projectId || slugify(record.details?.name || record.analysis?.projectName || "") === projectId;
+        });
+        app.replaceChildren();
+        if (!projectRecords.length) {
+            app.append(el("section", { className: "panel" }, [
+                el("div", { className: "panel-header" }, [el("h2", { text: "Project Not Found" })]),
+                el("p", { className: "panel-subtitle", text: `No queued project was found for "${projectId}". Return to Projects and open an existing queued draft.` }),
+                el("div", { className: "button-row", style: "margin-top:14px" }, [
+                    el("a", { className: "button", href: "/management/projects.html", text: "Back To Projects" }),
+                    el("a", { className: "ghost-button", href: "/management/intake.html", text: "Open Console" })
+                ])
+            ]));
+            return;
+        }
+        renderProjectWorkspaceRecord(app, sortLatestFirst(projectRecords)[0], source, projectRecords);
+    });
+}
+
+function renderProjectWorkspaceRecord(app, record, source, allRecords) {
+    const projectId = record.projectId || record.analysis?.projectId || "unassigned";
+    const projectName = record.details?.name || record.analysis?.projectName || projectId;
+    const tasks = Array.isArray(record.tasks) ? record.tasks : [];
+    const entries = readTimeEntries().filter((entry) => entry.projectId === projectId);
+    const rollups = timeRollups(entries);
+    const state = record.development || {};
+    const stageStatuses = state.stageStatuses || {};
+
+    function updateDevelopment(nextPatch) {
+        const now = new Date().toISOString();
+        const next = {
+            ...record,
+            updatedAt: now,
+            status: nextPatch.status || record.status || "queued",
+            development: {
+                ...(record.development || {}),
+                ...nextPatch.development,
+                updatedAt: now
+            }
+        };
+        saveQueuedDraft(next).then((result) => {
+            app.replaceChildren();
+            renderProjectWorkspaceRecord(app, result.record || next, result.source, allRecords);
+        });
+    }
+
+    function startDevelopment() {
+        const statuses = {};
+        tasks.forEach((task, index) => {
+            statuses[task.id] = index === 0 ? "active" : "queued";
+        });
+        updateDevelopment({
+            status: "development-started",
+            development: {
+                startedAt: state.startedAt || new Date().toISOString(),
+                stageStatuses: { ...stageStatuses, ...statuses }
+            }
+        });
+    }
+
+    function deployWorkerOrders() {
+        const statuses = {};
+        tasks.forEach((task) => {
+            statuses[task.id] = stageStatuses[task.id] === "done" ? "done" : "deployed";
+        });
+        updateDevelopment({
+            status: "worker-orders-deployed",
+            development: {
+                startedAt: state.startedAt || new Date().toISOString(),
+                workerOrdersDeployedAt: new Date().toISOString(),
+                stageStatuses: { ...stageStatuses, ...statuses }
+            }
+        });
+    }
+
+    app.append(el("section", { className: "band" }, [
+        el("div", { className: "band-grid" }, [
+            el("div", {}, [
+                el("p", { className: "eyebrow", text: source }),
+                el("h2", { className: "section-title", text: projectName }),
+                el("p", { className: "panel-subtitle", text: record.request || "Queued project workspace." })
+            ]),
+            el("div", { className: "stat-row" }, [
+                stat("Status", developmentState(record)),
+                stat("Stages", String(tasks.length)),
+                stat("Outputs", String(Object.keys(state.outputs || {}).length)),
+                stat("Time", minutesLabel(rollups.totalMinutes))
+            ])
+        ])
+    ]));
+
+    app.append(el("section", { className: "two-column" }, [
+        panel("Deployment State", el("div", {}, [
+            el("div", { className: "score-board" }, [
+                scoreItem("Development", state.startedAt ? "started" : "not started"),
+                scoreItem("Workers", state.workerOrdersDeployedAt ? "orders deployed" : "not deployed"),
+                scoreItem("Runtime", "manual/codex"),
+                scoreItem("Drafts", String(allRecords.length))
+            ]),
+            el("p", { className: "notice warning", text: "Worker orders are visible and deployable, but no autonomous cloud worker runtime is connected yet. Starting/deploying here records state and clarifies what should be worked; it does not run agents by itself." }),
+            el("div", { className: "button-row", style: "margin-top:12px" }, [
+                el("button", { className: "button", type: "button", text: "Start Development", onclick: startDevelopment }),
+                el("button", { className: "ghost-button", type: "button", text: "Deploy Worker Orders", onclick: deployWorkerOrders }),
+                el("a", { className: "ghost-button", href: `/management/intake.html`, text: "Open Console" }),
+                el("a", { className: "ghost-button", href: `/management/projects.html`, text: "Back To Projects" })
+            ])
+        ])),
+        panel("Project Brief", list([
+            `Project id: ${projectId}`,
+            `Customer/user: ${record.details?.customer || "not captured"}`,
+            `Outcome: ${record.details?.goal || "not captured"}`,
+            `First slice: ${record.details?.slice || "not captured"}`,
+            `Success metric: ${record.details?.success || "not captured"}`
+        ]))
+    ]));
+
+    app.append(el("section", { className: "panel", style: "margin-top:16px" }, [
+        el("div", { className: "panel-header" }, [
+            el("h2", { text: "Stages And Worker Orders" }),
+            el("span", { className: "status-pill", text: developmentState(record) })
+        ]),
+        el("div", { className: "project-stage-list" }, tasks.map((task, index) => renderProjectStage(record, task, index, stageStatuses[task.id] || "queued")))
+    ]));
+
+    app.append(el("section", { className: "two-column", style: "margin-top:16px" }, [
+        panel("Outputs", renderProjectOutputs(record)),
+        panel("Time And Progress", renderProjectTimeSummary(projectId, entries, tasks))
+    ]));
+}
+
+function renderProjectStage(record, task, index, status) {
+    return el("article", { className: "project-stage-card" }, [
+        el("div", { className: "project-stage-head" }, [
+            el("div", {}, [
+                el("span", { className: "tag", text: roleLabels[task.role] || task.role || "worker" }),
+                el("h3", { text: `${index + 1}. ${task.title}` })
+            ]),
+            el("span", { className: "dependency-pill", text: status })
+        ]),
+        el("p", { text: task.output || "No output target recorded." }),
+        el("div", { className: "check-grid" }, (task.checks || []).map((check) => el("span", { text: check })))
+    ]);
+}
+
+function renderProjectOutputs(record) {
+    const outputs = record.development?.outputs || {};
+    const tasks = Array.isArray(record.tasks) ? record.tasks : [];
+    if (!Object.keys(outputs).length) {
+        return el("div", { className: "empty-state", text: "No worker outputs have been attached yet. Outputs should be written here once a stage produces an artifact, decision, diff, verification result, or document update." });
+    }
+    return el("ul", { className: "list-clean" }, Object.entries(outputs).map(([taskId, output]) => {
+        const task = tasks.find((item) => item.id === taskId);
+        return el("li", {}, [
+            el("strong", { text: task?.title || taskId }),
+            el("p", { text: output })
+        ]);
+    }));
+}
+
+function renderProjectTimeSummary(projectId, entries, tasks) {
+    const rollups = timeRollups(entries);
+    if (!entries.length) {
+        return el("div", { className: "empty-state", text: "No time has been logged for this project yet." });
+    }
+    const rows = tasks.map((task) => {
+        const segment = rollups.segments[`${projectId}::${task.id}`] || { minutes: 0, contributions: 0 };
+        return [task.title, minutesLabel(segment.minutes), String(segment.contributions)];
+    });
+    return el("div", { className: "time-dashboard" }, [
+        el("div", { className: "score-board" }, [
+            scoreItem("Project time", minutesLabel(rollups.totalMinutes)),
+            scoreItem("Contributions", String(entries.length))
+        ]),
+        wrapTable(simpleTable(["Stage", "Time", "Logs"], rows))
+    ]);
 }
 
 function contextTable(project) {
@@ -1925,6 +2134,7 @@ function render() {
     else if (page === "performance") renderPerformance(app);
     else if (page === "compliance") renderCompliance(app);
     else if (page === "deployment") renderDeployment(app);
+    else if (page === "project") renderProjectWorkspace(app);
     else if (page === "council") renderCouncil(app);
     else if (page === "agents") renderAgents(app);
     else if (page === "quality") renderQuality(app);
