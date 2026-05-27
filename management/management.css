@@ -674,6 +674,59 @@ a {
     gap: 12px;
 }
 
+.cloud-worker-card {
+    display: grid;
+    gap: 14px;
+}
+
+.cloud-worker-section {
+    display: grid;
+    gap: 10px;
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+}
+
+.cloud-worker-section h3 {
+    margin: 0;
+    font-size: 15px;
+}
+
+.council-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.council-card {
+    display: grid;
+    gap: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    padding: 11px;
+}
+
+.council-card strong {
+    font-size: 14px;
+}
+
+.council-card p {
+    margin: 0;
+}
+
+.council-mini-list {
+    display: grid;
+    gap: 6px;
+}
+
+.council-mini-list > span {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 850;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
 .console-triage-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -987,6 +1040,7 @@ a {
     .score-board,
     .console-triage-grid,
     .console-brief-grid,
+    .council-grid,
     .time-ledger-totals,
     .flow-strip {
         grid-template-columns: 1fr;

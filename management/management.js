@@ -2,6 +2,7 @@ const storageKey = "cartdotcom:management:intakes:v1";
 const councilKey = "cartdotcom:management:council:v1";
 const performanceKey = "cartdotcom:management:performance:v1";
 const timeKey = "cartdotcom:management:time-ledger:v1";
+const workerConversationKey = "cartdotcom:management:worker-conversation:v1";
 
 const projects = [
     {
@@ -202,6 +203,87 @@ async function saveQueuedDraft(draft) {
     } catch (error) {
         return { ok: false, source: "browser", record: draft, error: error.message };
     }
+}
+
+function workerConversationId() {
+    const saved = readJson(workerConversationKey, {});
+    if (saved.id) return saved.id;
+    const id = crypto.randomUUID ? crypto.randomUUID() : `conversation-${Date.now()}`;
+    writeJson(workerConversationKey, { id, createdAt: new Date().toISOString() });
+    return id;
+}
+
+async function askCloudWorker(message) {
+    const response = await fetch("/api/management/worker", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+            accept: "application/json",
+            "content-type": "application/json"
+        },
+        body: JSON.stringify({
+            message,
+            conversationId: workerConversationId()
+        })
+    });
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json") ? await response.json() : {};
+    if (!response.ok || payload.error) {
+        const error = new Error(payload.error || `Cloud worker request failed: ${response.status}`);
+        error.payload = payload;
+        throw error;
+    }
+    return payload;
+}
+
+function projectDraftFromWorkerRecord(record) {
+    const response = record.response || {};
+    const project = response.project || {};
+    const projectName = project.name || response.title || "WAR-ROOM project";
+    const projectId = slugify(project.id || projectName);
+    const tasks = (response.workerOrders || []).map((task, index) => ({
+        id: slugify(task.id || task.title || `worker-${index + 1}`),
+        role: String(task.role || "implementer").toLowerCase(),
+        title: task.title || `Worker order ${index + 1}`,
+        output: task.output || "No output target captured.",
+        dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn : [],
+        checks: Array.isArray(task.checks) ? task.checks : []
+    }));
+    return {
+        id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+        createdAt: new Date().toISOString(),
+        projectId,
+        priority: project.priority || "normal",
+        request: record.request || response.message || "",
+        signals: ["council", "architecture", "security", "documentation", "automation", "review"],
+        analysis: {
+            text: record.request || "",
+            projectId,
+            projectName,
+            isNewProject: true,
+            priority: project.priority || "normal",
+            signals: ["council", "architecture", "security", "documentation", "automation", "review"],
+            hasMoney: /\b(revenue|income|money|pricing|paid|subscription|affiliate|customer)\b/i.test(`${record.request || ""} ${response.message || ""}`),
+            hasCompliance: response.safeguards?.some((item) => /legal|privacy|security|compliance|secret|permission/i.test(item)) || false,
+            hasDeployment: response.safeguards?.some((item) => /deploy|cloud|github|cloudflare|queue/i.test(item)) || false,
+            needsCouncil: response.mode === "council" || response.needsUserInput,
+            confidence: response.confidence || "medium",
+            cloudWorkerRecordId: record.id
+        },
+        details: {
+            name: projectName,
+            customer: "",
+            goal: project.objective || response.message || "",
+            slice: project.firstSlice || "",
+            constraints: (project.constraints || []).join("\n"),
+            success: project.successMetric || "",
+            council: response.council || [],
+            memoryWrites: response.memoryWrites || [],
+            cloudWorkerRecordId: record.id
+        },
+        tasks,
+        source: "war-room-2-cloud-worker"
+    };
 }
 
 function latestTimestamp(record) {
@@ -511,6 +593,7 @@ function taskList(tasks) {
 }
 
 function taskCard(task) {
+    const dependencies = Array.isArray(task.dependsOn) ? task.dependsOn : [];
     return el("li", { className: "task-card" }, [
         el("header", {}, [
             el("div", {}, [
@@ -518,12 +601,111 @@ function taskCard(task) {
                 el("h3", { text: task.title })
             ]),
             el("span", {
-                className: task.dependsOn ? "dependency-pill" : "status-pill",
-                text: task.dependsOn ? `After ${task.dependsOn.join(", ")}` : "Entry"
+                className: dependencies.length ? "dependency-pill" : "status-pill",
+                text: dependencies.length ? `After ${dependencies.join(", ")}` : "Entry"
             })
         ]),
         el("p", { className: "task-output", text: task.output }),
-        el("div", { className: "check-grid" }, task.checks.map((check) => el("span", { text: check })))
+        el("div", { className: "check-grid" }, (task.checks || []).map((check) => el("span", { text: check })))
+    ]);
+}
+
+function renderCloudWorkerRecord(record) {
+    const response = record.response || {};
+    const project = response.project || {};
+    const status = el("p", { className: "notice", text: "Cloud worker response persisted to the WAR-ROOM queue log." });
+    const queueButton = el("button", {
+        className: "button",
+        type: "button",
+        text: response.needsUserInput ? "Queue Draft Anyway" : "Queue Project Draft",
+        onclick: async () => {
+            const draft = projectDraftFromWorkerRecord(record);
+            const result = await saveQueuedDraft(draft);
+            status.textContent = result.ok
+                ? `Queued ${draft.details.name}. Open it from Projects to track progress and worker orders.`
+                : `Saved locally only. ${result.error || "Queue write failed."}`;
+        }
+    });
+
+    const actions = el("div", { className: "button-row" }, [
+        project.detected || response.workerOrders?.length ? queueButton : null,
+        el("a", { className: "ghost-button", href: "/management/projects.html", text: "Projects" })
+    ]);
+
+    return el("div", { className: "cloud-worker-card" }, [
+        el("span", { className: "tag", text: "cloud worker" }),
+        el("h2", { text: response.title || "WAR-ROOM worker response" }),
+        el("p", { text: response.message || "No message returned." }),
+        el("div", { className: "console-triage-grid" }, [
+            scoreItem("Mode", response.mode || "answer"),
+            scoreItem("Confidence", response.confidence || "medium"),
+            scoreItem("Project", project.name || "not detected"),
+            scoreItem("Input needed", response.needsUserInput ? "yes" : "no")
+        ]),
+        response.council?.length ? renderCouncilContributions(response.council) : null,
+        project.detected ? renderCloudProjectSummary(project) : null,
+        response.workerOrders?.length ? el("div", { className: "cloud-worker-section" }, [
+            el("h3", { text: "Worker Orders" }),
+            taskList(response.workerOrders.map((task, index) => ({
+                id: task.id || `worker-${index + 1}`,
+                role: String(task.role || "worker").toLowerCase(),
+                title: task.title || `Worker order ${index + 1}`,
+                output: task.output || "No output target captured.",
+                dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn : [],
+                checks: Array.isArray(task.checks) ? task.checks : []
+            })))
+        ]) : null,
+        response.safeguards?.length ? el("div", { className: "cloud-worker-section" }, [
+            el("h3", { text: "Safeguards" }),
+            list(response.safeguards)
+        ]) : null,
+        response.memoryWrites?.length ? el("div", { className: "cloud-worker-section" }, [
+            el("h3", { text: "Memory Writes" }),
+            list(response.memoryWrites.map((item) => `${item.type}: ${item.title} - ${item.content}`))
+        ]) : null,
+        response.nextActions?.length ? el("div", { className: "cloud-worker-section" }, [
+            el("h3", { text: "Next Actions" }),
+            list(response.nextActions.map((item) => `${item.label}${item.requiresApproval ? " (approval required)" : ""}`))
+        ]) : null,
+        actions,
+        status
+    ]);
+}
+
+function renderCouncilContributions(council) {
+    return el("div", { className: "cloud-worker-section" }, [
+        el("h3", { text: "Council" }),
+        el("div", { className: "council-grid" }, council.map((member) => el("article", { className: "council-card" }, [
+            el("span", { className: "tag", text: member.seat || "Council" }),
+            el("strong", { text: member.stance || "Review" }),
+            el("p", { text: member.contribution || "" }),
+            member.questions?.length ? el("div", { className: "council-mini-list" }, [
+                el("span", { text: "Questions" }),
+                list(member.questions)
+            ]) : null,
+            member.risks?.length ? el("div", { className: "council-mini-list" }, [
+                el("span", { text: "Risks" }),
+                list(member.risks)
+            ]) : null
+        ])))
+    ]);
+}
+
+function renderCloudProjectSummary(project) {
+    return el("div", { className: "cloud-worker-section" }, [
+        el("h3", { text: "Project Shape" }),
+        el("div", { className: "score-board" }, [
+            scoreItem("ID", project.id || "unassigned"),
+            scoreItem("Status", project.status || "unknown"),
+            scoreItem("Priority", project.priority || "normal"),
+            scoreItem("Draft", project.shouldCreateDraft ? "ready" : "not yet")
+        ]),
+        el("ul", { className: "list-clean", style: "margin-top:10px" }, [
+            el("li", { text: `Objective: ${project.objective || "not captured"}` }),
+            el("li", { text: `First slice: ${project.firstSlice || "not captured"}` }),
+            el("li", { text: `Success metric: ${project.successMetric || "not captured"}` }),
+            project.constraints?.length ? el("li", { text: `Constraints: ${project.constraints.join("; ")}` }) : null
+        ])
     ]);
 }
 
@@ -1200,6 +1382,25 @@ function renderIntake(app) {
             return;
         }
         addMessage("user", [el("p", { text })]);
+        status.textContent = "Asking WAR-ROOM-2 cloud worker...";
+        try {
+            const payload = await askCloudWorker(text);
+            if (payload.record?.response) {
+                addMessage("assistant", [renderCloudWorkerRecord(payload.record)]);
+                commandInput.value = "";
+                status.textContent = payload.record.response.needsUserInput
+                    ? "Cloud worker responded with council questions."
+                    : "Cloud worker responded.";
+                return;
+            }
+        } catch (error) {
+            addMessage("assistant", [
+                el("span", { className: "tag", text: "local fallback" }),
+                el("h2", { text: "Cloud worker unavailable" }),
+                el("p", { text: `${error.message} The console will use local triage rules for this request.` })
+            ]);
+        }
+
         const executionAnalysis = await executionAnalysisFor(text);
         if (executionAnalysis?.notFound) {
             addMessage("assistant", [
@@ -1231,7 +1432,7 @@ function renderIntake(app) {
             el("p", { text: analysis.executionMode ? "Assumptions applied: load the queued project brief, preserve council constraints, select the first shippable slice, execute narrowly, update docs, run gates, and log contribution time." : `Inferred workers: ${analysis.signals.map((signal) => workSignals.find((item) => item[0] === signal)?.[1] || signal).join(", ")}.` })
         ]);
         commandInput.value = "";
-        status.textContent = "Request processed.";
+        status.textContent = "Request processed with local triage fallback.";
         if (analysis.executionMode) dispatchOrders(analysis, analysis.queuedDraft?.details || {});
         else if (analysis.needsCouncil) renderCouncilPrompt(analysis);
         else dispatchOrders(analysis);
@@ -1548,10 +1749,10 @@ function renderProjectWorkspaceRecord(app, record, source, allRecords) {
             el("div", { className: "score-board" }, [
                 scoreItem("Development", state.startedAt ? "started" : "not started"),
                 scoreItem("Workers", state.workerOrdersDeployedAt ? "orders deployed" : "not deployed"),
-                scoreItem("Runtime", "manual/codex"),
+                scoreItem("Runtime", record.details?.cloudWorkerRecordId ? "cloud-response" : "manual/codex"),
                 scoreItem("Drafts", String(allRecords.length))
             ]),
-            el("p", { className: "notice warning", text: "Worker orders are visible and deployable, but no autonomous cloud worker runtime is connected yet. Starting/deploying here records state and clarifies what should be worked; it does not run agents by itself." }),
+            el("p", { className: "notice warning", text: "Cloud workers can now respond through the management API when configured. Repo-writing, deployment, and paid-tool execution are still gated; starting/deploying here records state and does not grant desktop or production write access by itself." }),
             el("div", { className: "button-row", style: "margin-top:12px" }, [
                 el("button", { className: "button", type: "button", text: "Start Development", onclick: startDevelopment }),
                 el("button", { className: "ghost-button", type: "button", text: "Deploy Worker Orders", onclick: deployWorkerOrders }),
