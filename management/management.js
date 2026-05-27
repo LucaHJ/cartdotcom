@@ -698,6 +698,89 @@ function classifyCommand(request) {
     };
 }
 
+function extractExecutionTarget(text) {
+    const patterns = [
+        /\b(?:begin|start|continue|resume|execute|run)\s+(?:executing\s+|execution\s+for\s+|work(?:ing)?\s+on\s+)?(.+?)(?:[.!?]|$)/i,
+        /\bbeing\s+executing\s+(.+?)(?:[.!?]|$)/i
+    ];
+    for (const pattern of patterns) {
+        const match = String(text || "").match(pattern);
+        if (!match) continue;
+        return match[1]
+            .replace(/^(?:the\s+)?project\s+/i, "")
+            .replace(/\s+(?:project|work)$/i, "")
+            .trim();
+    }
+    return "";
+}
+
+function searchableProjectName(record) {
+    return [
+        record.projectId,
+        record.details?.name,
+        record.analysis?.projectName
+    ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function findQueuedProject(records, target) {
+    const normalizedTarget = slugify(target);
+    const plainTarget = String(target || "").toLowerCase();
+    return records.find((record) => {
+        const projectId = String(record.projectId || record.analysis?.projectId || "").toLowerCase();
+        const projectName = String(record.details?.name || record.analysis?.projectName || "").toLowerCase();
+        const haystack = searchableProjectName(record);
+        return projectId === normalizedTarget
+            || slugify(projectName) === normalizedTarget
+            || haystack.includes(plainTarget)
+            || plainTarget.includes(projectName)
+            || plainTarget.includes(projectId);
+    }) || null;
+}
+
+async function executionAnalysisFor(text) {
+    const target = extractExecutionTarget(text);
+    if (!target) return null;
+
+    const queue = await loadQueuedDrafts();
+    const record = findQueuedProject(queue.records, target);
+    if (!record) {
+        return {
+            notFound: true,
+            target,
+            source: queue.source,
+            records: queue.records.length
+        };
+    }
+
+    const existing = record.analysis || {};
+    const signals = new Set([
+        ...(Array.isArray(record.signals) ? record.signals : []),
+        ...(Array.isArray(existing.signals) ? existing.signals : []),
+        "code",
+        "documentation",
+        "review"
+    ]);
+    if (existing.hasCompliance) signals.add("security");
+    if (existing.hasDeployment) signals.add("automation");
+
+    return {
+        text,
+        projectId: record.projectId || existing.projectId || slugify(target),
+        projectName: record.details?.name || existing.projectName || target,
+        isNewProject: false,
+        priority: record.priority || existing.priority || "high",
+        signals: Array.from(signals),
+        hasMoney: Boolean(existing.hasMoney),
+        hasCompliance: Boolean(existing.hasCompliance),
+        hasDeployment: Boolean(existing.hasDeployment),
+        needsCouncil: false,
+        confidence: "high",
+        executionMode: true,
+        queuedDraft: record,
+        queueSource: queue.source
+    };
+}
+
 function slugify(value) {
     return String(value || "new-project")
         .toLowerCase()
@@ -707,6 +790,100 @@ function slugify(value) {
 }
 
 function workerOrdersFor(analysis, details = {}) {
+    if (analysis.executionMode) {
+        const originalOrders = analysis.queuedDraft?.tasks?.length || 0;
+        const tasks = [
+            {
+                id: "load-queued-context",
+                role: "chair",
+                title: "Load queued project brief and context",
+                output: "Active execution context from the queued project draft, council notes, constraints, and prior worker orders.",
+                checks: [
+                    `Project resolves to ${analysis.projectId}`,
+                    `${originalOrders} queued worker order${originalOrders === 1 ? "" : "s"} considered`,
+                    "No new scope is invented before checking the brief"
+                ]
+            },
+            {
+                id: "select-first-slice",
+                role: "product",
+                title: "Select first executable slice",
+                output: "One narrow implementation target based on the project brief, first shippable slice, and current constraints.",
+                dependsOn: ["load-queued-context"],
+                checks: [
+                    "Slice is small enough for one reviewable diff",
+                    "Success metric is named",
+                    "Non-goals remain out of scope"
+                ]
+            },
+            {
+                id: "execute-first-slice",
+                role: "implementer",
+                title: "Execute the first slice",
+                output: "Implementation artifact for the selected slice with no unrelated changes.",
+                dependsOn: ["select-first-slice"],
+                checks: [
+                    "Changes stay inside approved project boundaries",
+                    "Verification command or manual check is recorded",
+                    "Failures are surfaced before moving on"
+                ]
+            },
+            {
+                id: "update-project-docs",
+                role: "documentation",
+                title: "Update durable project documentation",
+                output: "Project status, decisions, runbook notes, and any context needed by future workers.",
+                dependsOn: ["execute-first-slice"],
+                checks: [
+                    "Future workers can understand what changed",
+                    "Project status is current",
+                    "Open questions are separated from completed work"
+                ]
+            },
+            {
+                id: "run-review-gates",
+                role: "qa",
+                title: "Run review, compliance, and deployment gates",
+                output: "Verification result with defects, risks, compliance blockers, and deployment readiness.",
+                dependsOn: ["execute-first-slice"],
+                checks: [
+                    "Tests or checks are named",
+                    "Compliance/deployment blockers are not ignored",
+                    "Human approval threshold is stated"
+                ]
+            },
+            {
+                id: "log-time",
+                role: "operator",
+                title: "Log contribution time",
+                output: "Time ledger entries for each meaningful human or agent contribution.",
+                dependsOn: ["update-project-docs", "run-review-gates"],
+                checks: [
+                    "Individual contribution minutes are recorded",
+                    "Segment total updates",
+                    "Project and WAR-ROOM totals update"
+                ]
+            }
+        ];
+
+        if (analysis.hasMoney) {
+            tasks.splice(2, 0, {
+                id: "confirm-money-path",
+                role: "product",
+                title: "Confirm monetization path before build",
+                output: "Revenue hypothesis, target buyer/user, pricing assumption, and performance metric.",
+                dependsOn: ["select-first-slice"],
+                checks: [
+                    "Money-making assumption is explicit",
+                    "Metric can be tracked",
+                    "Cost and time risk are considered"
+                ]
+            });
+        }
+
+        return tasks;
+    }
+
     const tasks = buildTasks(analysis.text, analysis.signals, analysis.projectId);
     if (analysis.hasMoney) {
         tasks.push({
@@ -997,28 +1174,47 @@ function renderIntake(app) {
         );
     }
 
-    function processCommand() {
+    async function processCommand() {
         const text = commandInput.value.trim();
         if (!text) {
             status.textContent = "Enter a project, idea, change, or operating request first.";
             return;
         }
-        const analysis = classifyCommand(text);
         addMessage("user", [el("p", { text })]);
+        const executionAnalysis = await executionAnalysisFor(text);
+        if (executionAnalysis?.notFound) {
+            addMessage("assistant", [
+                el("span", { className: "tag", text: "project lookup" }),
+                el("h2", { text: "Queued project not found" }),
+                el("p", { text: `I could not find "${executionAnalysis.target}" in the management queue or local fallback drafts. Establish the project first, or check the Projects tab for the exact name.` }),
+                el("div", { className: "console-triage-grid" }, [
+                    scoreItem("Queue source", executionAnalysis.source),
+                    scoreItem("Drafts checked", String(executionAnalysis.records)),
+                    scoreItem("Action", "establish project"),
+                    scoreItem("Status", "blocked")
+                ])
+            ]);
+            commandInput.value = "";
+            status.textContent = "Project was not found in queued drafts.";
+            return;
+        }
+
+        const analysis = executionAnalysis || classifyCommand(text);
         addMessage("assistant", [
-            el("span", { className: "tag", text: "auto triage" }),
-            el("h2", { text: analysis.isNewProject ? "New project detected" : "Request classified" }),
+            el("span", { className: "tag", text: analysis.executionMode ? "execution command" : "auto triage" }),
+            el("h2", { text: analysis.executionMode ? "Execution project resolved" : analysis.isNewProject ? "New project detected" : "Request classified" }),
             el("div", { className: "console-triage-grid" }, [
                 scoreItem("Project", analysis.projectName),
                 scoreItem("Priority", analysis.priority),
-                scoreItem("Council", analysis.needsCouncil ? "recommended" : "optional"),
+                scoreItem("Council", analysis.executionMode ? "already queued" : analysis.needsCouncil ? "recommended" : "optional"),
                 scoreItem("Confidence", analysis.confidence)
             ]),
-            el("p", { text: `Inferred workers: ${analysis.signals.map((signal) => workSignals.find((item) => item[0] === signal)?.[1] || signal).join(", ")}.` })
+            el("p", { text: analysis.executionMode ? "Assumptions applied: load the queued project brief, preserve council constraints, select the first shippable slice, execute narrowly, update docs, run gates, and log contribution time." : `Inferred workers: ${analysis.signals.map((signal) => workSignals.find((item) => item[0] === signal)?.[1] || signal).join(", ")}.` })
         ]);
         commandInput.value = "";
         status.textContent = "Request processed.";
-        if (analysis.needsCouncil) renderCouncilPrompt(analysis);
+        if (analysis.executionMode) dispatchOrders(analysis, analysis.queuedDraft?.details || {});
+        else if (analysis.needsCouncil) renderCouncilPrompt(analysis);
         else dispatchOrders(analysis);
     }
 
