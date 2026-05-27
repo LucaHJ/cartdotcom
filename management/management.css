@@ -685,6 +685,70 @@ a {
     min-width: 112px;
 }
 
+.time-dashboard {
+    display: grid;
+    gap: 14px;
+}
+
+.time-rollup-grid {
+    align-items: start;
+}
+
+.time-rollup-panel {
+    display: grid;
+    gap: 10px;
+}
+
+.time-rollup-panel h3 {
+    margin: 0;
+    font-size: 14px;
+}
+
+.table-wrap {
+    overflow-x: auto;
+}
+
+.time-ledger {
+    display: grid;
+    gap: 12px;
+    margin-top: 14px;
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+}
+
+.time-ledger-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr);
+    gap: 12px;
+    align-items: start;
+}
+
+.time-ledger-header h2 {
+    margin: 8px 0 8px;
+}
+
+.time-ledger-header p {
+    margin: 0;
+}
+
+.time-ledger-totals {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.time-form-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr 1fr 120px;
+    gap: 10px;
+}
+
+.time-ledger-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    gap: 14px;
+}
+
 .score-board {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -811,6 +875,9 @@ a {
     .dashboard-grid,
     .two-column,
     .three-column,
+    .time-ledger-header,
+    .time-form-grid,
+    .time-ledger-grid,
     .split-panel {
         grid-template-columns: 1fr;
     }
@@ -871,6 +938,7 @@ a {
     .score-board,
     .console-triage-grid,
     .console-brief-grid,
+    .time-ledger-totals,
     .flow-strip {
         grid-template-columns: 1fr;
     }

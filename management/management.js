@@ -1,6 +1,7 @@
 const storageKey = "cartdotcom:management:intakes:v1";
 const councilKey = "cartdotcom:management:council:v1";
 const performanceKey = "cartdotcom:management:performance:v1";
+const timeKey = "cartdotcom:management:time-ledger:v1";
 
 const projects = [
     {
@@ -170,6 +171,70 @@ function money(value) {
 
 function percent(value) {
     return `${Math.round(asNumber(value) * 10) / 10}%`;
+}
+
+function normalizeMinutes(value) {
+    return Math.max(0, Math.round(asNumber(value)));
+}
+
+function minutesLabel(minutes) {
+    const total = normalizeMinutes(minutes);
+    const hours = Math.floor(total / 60);
+    const remainder = total % 60;
+    if (!hours) return `${remainder}m`;
+    if (!remainder) return `${hours}h`;
+    return `${hours}h ${remainder}m`;
+}
+
+function readTimeEntries() {
+    return readJson(timeKey, []).filter((entry) => normalizeMinutes(entry.minutes) > 0);
+}
+
+function writeTimeEntries(entries) {
+    writeJson(timeKey, entries.slice(0, 1000));
+}
+
+function timeRollups(entries) {
+    const rollups = {
+        totalMinutes: 0,
+        projects: {},
+        segments: {},
+        contributors: {}
+    };
+    for (const entry of entries) {
+        const minutes = normalizeMinutes(entry.minutes);
+        if (!minutes) continue;
+        const projectId = entry.projectId || "unassigned";
+        const segmentId = entry.segmentId || "unassigned";
+        const contributor = entry.contributor || entry.role || "unassigned";
+        const segmentKey = `${projectId}::${segmentId}`;
+        rollups.totalMinutes += minutes;
+        rollups.projects[projectId] = rollups.projects[projectId] || {
+            projectId,
+            projectName: entry.projectName || projectId,
+            minutes: 0,
+            contributions: 0
+        };
+        rollups.projects[projectId].minutes += minutes;
+        rollups.projects[projectId].contributions += 1;
+        rollups.segments[segmentKey] = rollups.segments[segmentKey] || {
+            projectId,
+            segmentId,
+            segmentName: entry.segmentName || segmentId,
+            minutes: 0,
+            contributions: 0
+        };
+        rollups.segments[segmentKey].minutes += minutes;
+        rollups.segments[segmentKey].contributions += 1;
+        rollups.contributors[contributor] = rollups.contributors[contributor] || {
+            contributor,
+            minutes: 0,
+            contributions: 0
+        };
+        rollups.contributors[contributor].minutes += minutes;
+        rollups.contributors[contributor].contributions += 1;
+    }
+    return rollups;
 }
 
 function buildTasks(request, signals, projectId) {
@@ -351,11 +416,15 @@ function el(tag, options = {}, children = []) {
     return node;
 }
 
-function renderStats(tasks, intakes) {
-    const roles = new Set(tasks.map((task) => task.role)).size;
+function renderStats(tasks, intakes, timeEntries = readTimeEntries()) {
+    const rollups = timeRollups(timeEntries);
+    const projectCount = new Set([
+        ...projects.map((project) => project.id),
+        ...Object.keys(rollups.projects)
+    ]).size;
     return el("div", { className: "stat-row" }, [
-        stat("Projects", String(projects.length)),
-        stat("Open Decisions", String(openDecisions.length)),
+        stat("Projects", String(projectCount)),
+        stat("WAR-ROOM Time", minutesLabel(rollups.totalMinutes)),
         stat("Draft Tasks", String(tasks.length)),
         stat("Saved Intakes", String(intakes.length || 0))
     ]);
@@ -393,6 +462,7 @@ function taskCard(task) {
 
 function renderDashboard(app) {
     const intakes = readJson(storageKey, []);
+    const timeEntries = readTimeEntries();
     const tasks = buildTasks(defaultRequest, defaultSignals, "war-room-2");
     const recent = intakes.slice(0, 4);
 
@@ -403,7 +473,7 @@ function renderDashboard(app) {
                 el("h2", { className: "section-title", text: "One intake, routed through project context and role gates" }),
                 el("p", { className: "panel-subtitle", text: "The management area is isolated under /management and keeps its navigation separate from existing site surfaces." })
             ]),
-            renderStats(tasks, intakes)
+            renderStats(tasks, intakes, timeEntries)
         ])
     ]));
 
@@ -418,6 +488,14 @@ function renderDashboard(app) {
     app.append(el("section", { className: "dashboard-grid", style: "margin-top:16px" }, [
         panel("Current Task Graph", taskList(tasks)),
         panel("Recent Intake Drafts", recent.length ? savedIntakeList(recent) : el("div", { className: "empty-state", text: "No local intake drafts saved in this browser." }))
+    ]));
+
+    app.append(el("section", { className: "panel", style: "margin-top:16px" }, [
+        el("div", { className: "panel-header" }, [
+            el("h2", { text: "Time Ledger" }),
+            el("span", { className: "status-pill", text: minutesLabel(timeRollups(timeEntries).totalMinutes) })
+        ]),
+        el("div", { style: "margin-top:14px" }, renderTimeDashboard(timeEntries))
     ]));
 
     app.append(el("section", { className: "two-column", style: "margin-top:16px" }, [
@@ -463,6 +541,60 @@ function savedIntakeList(intakes) {
         );
         return item;
     }));
+}
+
+function renderTimeDashboard(entries) {
+    if (!entries.length) {
+        return el("div", { className: "empty-state", text: "No contribution time has been logged yet. Worker orders created from the command console can log generation time by segment." });
+    }
+
+    const rollups = timeRollups(entries);
+    const projectRows = Object.values(rollups.projects)
+        .sort((a, b) => b.minutes - a.minutes)
+        .map((project) => [
+            project.projectName,
+            project.projectId,
+            minutesLabel(project.minutes),
+            String(project.contributions)
+        ]);
+    const segmentRows = Object.values(rollups.segments)
+        .sort((a, b) => b.minutes - a.minutes)
+        .slice(0, 12)
+        .map((segment) => [
+            segment.projectId,
+            segment.segmentName,
+            minutesLabel(segment.minutes),
+            String(segment.contributions)
+        ]);
+    const contributorRows = Object.values(rollups.contributors)
+        .sort((a, b) => b.minutes - a.minutes)
+        .slice(0, 8)
+        .map((contributor) => [
+            contributor.contributor,
+            minutesLabel(contributor.minutes),
+            String(contributor.contributions)
+        ]);
+
+    return el("div", { className: "time-dashboard" }, [
+        el("div", { className: "score-board" }, [
+            scoreItem("WAR-ROOM total", minutesLabel(rollups.totalMinutes)),
+            scoreItem("Projects", String(Object.keys(rollups.projects).length)),
+            scoreItem("Segments", String(Object.keys(rollups.segments).length)),
+            scoreItem("Contributions", String(entries.length))
+        ]),
+        el("div", { className: "three-column time-rollup-grid" }, [
+            timeRollupPanel("Project Totals", simpleTable(["Project", "ID", "Time", "Logs"], projectRows)),
+            timeRollupPanel("Segment Totals", simpleTable(["Project", "Segment", "Time", "Logs"], segmentRows)),
+            timeRollupPanel("Contributor Totals", simpleTable(["Contributor", "Time", "Logs"], contributorRows))
+        ])
+    ]);
+}
+
+function timeRollupPanel(title, body) {
+    return el("section", { className: "time-rollup-panel" }, [
+        el("h3", { text: title }),
+        body
+    ]);
 }
 
 function classifyCommand(request) {
@@ -598,6 +730,122 @@ function councilQuestions(analysis) {
     ];
 }
 
+function renderTimeLedger(draft) {
+    const container = el("section", { className: "time-ledger" });
+    const projectName = draft.details?.name || draft.analysis?.projectName || draft.projectId;
+
+    function render() {
+        const entries = readTimeEntries();
+        const projectEntries = entries.filter((entry) => entry.projectId === draft.projectId);
+        const rollups = timeRollups(entries);
+        const projectRollup = rollups.projects[draft.projectId] || { minutes: 0, contributions: 0 };
+        const segmentRows = draft.tasks.map((task) => {
+            const key = `${draft.projectId}::${task.id}`;
+            const segment = rollups.segments[key] || { minutes: 0, contributions: 0 };
+            return [
+                task.title,
+                roleLabels[task.role] || task.role,
+                minutesLabel(segment.minutes),
+                String(segment.contributions)
+            ];
+        });
+        const recentRows = projectEntries.slice(0, 8).map((entry) => [
+            entry.contributionTitle || entry.segmentName,
+            entry.contributor || entry.role || "unassigned",
+            entry.segmentName || entry.segmentId,
+            minutesLabel(entry.minutes),
+            new Date(entry.createdAt).toLocaleString()
+        ]);
+        const segmentOptions = draft.tasks.map((task) => [task.id, `${roleLabels[task.role] || task.role}: ${task.title}`]);
+        const segmentSelect = basicSelect(`timeSegment-${draft.id}`, segmentOptions, draft.tasks[0]?.id || "");
+        const contributor = textInput(`timeContributor-${draft.id}`, "Person, agent, or worker name");
+        const contribution = textInput(`timeContribution-${draft.id}`, "Contribution generated");
+        const minutes = numberInput(`timeMinutes-${draft.id}`, "Minutes");
+        const notes = el("textarea", { id: `timeNotes-${draft.id}`, className: "textarea", placeholder: "Optional note about the generation, decision, or output." });
+        const status = el("p", { className: "notice", text: "Log actual generation time when a worker or human completes a contribution." });
+
+        notes.style.minHeight = "86px";
+
+        function syncDefaults() {
+            const task = draft.tasks.find((item) => item.id === segmentSelect.value) || draft.tasks[0];
+            if (!task) return;
+            if (!contributor.value) contributor.value = roleLabels[task.role] || task.role;
+            if (!contribution.value) contribution.value = task.title;
+        }
+
+        segmentSelect.addEventListener("change", () => {
+            contributor.value = "";
+            contribution.value = "";
+            syncDefaults();
+        });
+        syncDefaults();
+
+        container.replaceChildren(
+            el("div", { className: "time-ledger-header" }, [
+                el("div", {}, [
+                    el("span", { className: "tag", text: "time ledger" }),
+                    el("h2", { text: "Contribution time tracking" }),
+                    el("p", { text: "Log each worker or human contribution. Segment totals roll into the project total, and project totals roll into the WAR-ROOM total." })
+                ]),
+                el("div", { className: "time-ledger-totals" }, [
+                    scoreItem("This project", minutesLabel(projectRollup.minutes)),
+                    scoreItem("WAR-ROOM", minutesLabel(rollups.totalMinutes))
+                ])
+            ]),
+            el("div", { className: "time-form-grid" }, [
+                fieldWrap("Project segment", segmentSelect.id, segmentSelect),
+                fieldWrap("Contributor", contributor.id, contributor),
+                fieldWrap("Contribution", contribution.id, contribution),
+                fieldWrap("Minutes", minutes.id, minutes)
+            ]),
+            fieldWrap("Notes", notes.id, notes),
+            el("div", { className: "button-row" }, [
+                el("button", {
+                    className: "button",
+                    type: "button",
+                    text: "Log Contribution Time",
+                    onclick: () => {
+                        const task = draft.tasks.find((item) => item.id === segmentSelect.value) || draft.tasks[0];
+                        const loggedMinutes = normalizeMinutes(minutes.value);
+                        if (!task || !loggedMinutes) {
+                            status.textContent = "Choose a segment and enter minutes greater than 0.";
+                            return;
+                        }
+                        const entry = {
+                            id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+                            createdAt: new Date().toISOString(),
+                            projectId: draft.projectId,
+                            projectName,
+                            segmentId: task.id,
+                            segmentName: task.title,
+                            contributionTitle: contribution.value.trim() || task.title,
+                            contributor: contributor.value.trim() || roleLabels[task.role] || task.role,
+                            role: roleLabels[task.role] || task.role,
+                            minutes: loggedMinutes,
+                            notes: notes.value.trim(),
+                            sourceDraftId: draft.id
+                        };
+                        writeTimeEntries([entry, ...readTimeEntries()]);
+                        render();
+                    }
+                })
+            ]),
+            status,
+            el("div", { className: "time-ledger-grid" }, [
+                timeRollupPanel("Project Segment Totals", wrapTable(simpleTable(["Segment", "Role", "Time", "Logs"], segmentRows))),
+                timeRollupPanel("Recent Contributions", recentRows.length ? wrapTable(simpleTable(["Contribution", "Contributor", "Segment", "Time", "Logged"], recentRows)) : el("div", { className: "empty-state", text: "No contributions logged for this project yet." }))
+            ])
+        );
+    }
+
+    render();
+    return container;
+}
+
+function wrapTable(table) {
+    return el("div", { className: "table-wrap" }, [table]);
+}
+
 function renderIntake(app) {
     const history = el("section", { className: "console-history", "aria-live": "polite" });
     const commandInput = el("textarea", {
@@ -634,7 +882,8 @@ function renderIntake(app) {
             el("span", { className: "tag", text: "worker orders" }),
             el("h2", { text: "Orders prepared for execution" }),
             el("p", { text: "These are structured orders for the worker layer. The next backend step is connecting this draft to a durable agent queue instead of local browser storage." }),
-            taskList(tasks)
+            taskList(tasks),
+            renderTimeLedger(draft)
         ]);
     }
 
