@@ -1,0 +1,1145 @@
+const storageKey = "cartdotcom:management:intakes:v1";
+const councilKey = "cartdotcom:management:council:v1";
+const performanceKey = "cartdotcom:management:performance:v1";
+
+const projects = [
+    {
+        id: "war-room-2",
+        name: "WAR-ROOM-2",
+        status: "active",
+        priority: "high",
+        owner: "Luca",
+        summary: "Central second brain, project management center, council workflow, and agent operations hub.",
+        context: [
+            "AGENTS.md",
+            "projects/PROJECT_REGISTRY.yml",
+            "projects/war-room-2/PROJECT.md",
+            "projects/war-room-2/STATUS.md",
+            "docs/agent/docs-map.md",
+            "docs/QUALITY_GATES.md"
+        ]
+    },
+    {
+        id: "cartdotcom-management",
+        name: "cartdotcom management layer",
+        status: "implementation",
+        priority: "high",
+        owner: "Luca",
+        summary: "Isolated management page flow published under /management without linking into legacy operational pages.",
+        context: [
+            "management/index.html",
+            "management/intake.html",
+            "management/projects.html",
+            "management/council.html",
+            "management/agents.html",
+            "management/quality.html"
+        ]
+    }
+];
+
+const workSignals = [
+    ["council", "Council", "Question scope, risks, assumptions, and success criteria."],
+    ["architecture", "Architecture", "Define system boundaries, data flow, and dependencies."],
+    ["security", "Security", "Review auth, secrets, permissions, and abuse cases."],
+    ["code", "Code", "Create implementation tasks and verification checks."],
+    ["documentation", "Docs", "Update human and agent-readable project knowledge."],
+    ["automation", "Automation", "Plan cloud jobs, schedules, retries, and audit records."],
+    ["assets", "Assets", "Route image, video, audio, and design generation tasks."],
+    ["review", "Review", "Create quality, security, and code review checkpoints."]
+];
+
+const defaultSignals = ["council", "architecture", "security", "code", "documentation", "automation", "review"];
+
+const roleLabels = {
+    chair: "Council Chair",
+    product: "Product",
+    architect: "Architect",
+    security: "Security",
+    qa: "QA",
+    documentation: "Documentation",
+    operator: "Operator",
+    implementer: "Implementer"
+};
+
+const openDecisions = [
+    "Choose production storage for project state and task records.",
+    "Choose the first cloud automation runner for jobs that must run while local machines are off.",
+    "Decide whether GitHub writes create direct commits or review pull requests.",
+    "Set the human approval threshold for autonomous agent work.",
+    "Onboard the first non-WAR-ROOM-2 project with a full council pass.",
+    "Define the monetization compliance threshold before collecting customer money."
+];
+
+const defaultRequest = "Build WAR-ROOM-2 into the central brain with a website intake that can split work across council, architecture, implementation, documentation, review, and automation agents.";
+
+const defaultPerformanceEntries = [
+    {
+        id: "sample-tool-codex",
+        type: "tool",
+        name: "Codex implementation work",
+        project: "WAR-ROOM-2",
+        gross: 0,
+        cost: 0,
+        traffic: 0,
+        conversions: 0,
+        status: "monitor",
+        note: "Track time saved, defects caught, and deployment velocity."
+    },
+    {
+        id: "sample-stream-affiliate",
+        type: "income",
+        name: "Affiliate content test",
+        project: "cartdotcom",
+        gross: 0,
+        cost: 0,
+        traffic: 0,
+        conversions: 0,
+        status: "not-started",
+        note: "Requires endorsement disclosures and source tracking before publication."
+    },
+    {
+        id: "sample-project-management",
+        type: "project",
+        name: "Management layer",
+        project: "cartdotcom",
+        gross: 0,
+        cost: 0,
+        traffic: 0,
+        conversions: 0,
+        status: "build",
+        note: "Measures whether management pages reduce coordination overhead."
+    }
+];
+
+const complianceControls = [
+    ["Privacy and data map", "Identify personal information collected, purpose, storage location, retention, access, deletion, and cross-border processors.", "Before public user accounts"],
+    ["Privacy policy", "Publish a clear policy covering collection, use, disclosure, access/correction rights, complaints, and overseas disclosures.", "Before collecting personal data"],
+    ["Marketing consent", "Commercial messages need consent, sender identification, and a working unsubscribe path.", "Before email, SMS, or DM campaigns"],
+    ["Consumer law claims", "Revenue pages must avoid misleading claims, hidden limitations, fake scarcity, and unsupported performance promises.", "Before monetized landing pages"],
+    ["Refunds and terms", "Terms must state offer scope, refund handling, subscriptions, cancellation, support, and consumer guarantee limits.", "Before paid offers"],
+    ["Endorsements and affiliates", "Material connections, paid placements, affiliate links, gifted products, and reviews need clear disclosure.", "Before affiliate or sponsor content"],
+    ["Payment card scope", "Use hosted checkout where possible, document PCI scope, avoid storing card data, and track third-party payment scripts.", "Before card payments"],
+    ["Tax and accounting", "Track income, costs, invoice records, GST/VAT/sales-tax triggers, and accountant review requirements.", "Before meaningful revenue"],
+    ["Accessibility", "Use WCAG 2.2 AA as the working target for pages, forms, navigation, contrast, keyboard use, and error messages.", "Before broad release"],
+    ["Security and incident response", "Document auth, secrets, backups, abuse handling, breach response, logging, and owner escalation.", "Before scale"],
+    ["IP and content rights", "Record source, license, model/provider, attribution, reuse rights, and takedown handling for generated and sourced assets.", "Before publishing assets"],
+    ["AI/vendor disclosure", "Track AI providers, data sent to them, output review rules, model limitations, and high-risk human approval gates.", "Before agent automation"]
+];
+
+const deploymentControls = [
+    ["Cloudflare plan capacity", "Track Pages build count, file count, asset size, Functions invocation costs, and need for Workers Standard.", "Scale gate"],
+    ["Fail-closed protected routes", "Auth-protected management or customer areas should fail closed if Functions quota or auth middleware fails.", "Security gate"],
+    ["Preview deployment workflow", "Use branch previews for risky changes and require human review before production promotion.", "Release gate"],
+    ["Observability", "Capture uptime, deploy version, errors, latency, conversion failures, payment failures, and worker exceptions.", "Operations gate"],
+    ["Rate limiting and abuse", "Protect APIs, forms, auth, and expensive agent/tool calls with rate limits and abuse logging.", "Public launch"],
+    ["Data persistence", "Move durable state from localStorage into D1, KV, R2, Supabase, or another backed-up production store.", "Before team use"],
+    ["Backup and restore", "Define export cadence, restore procedure, owner, and evidence that restore has been tested.", "Scale gate"],
+    ["Performance budget", "Set budgets for page weight, critical requests, interaction latency, and mobile render health.", "Audience gate"],
+    ["Incident runbook", "Write owner, severity levels, rollback command, customer comms, breach/legal trigger, and postmortem template.", "Before paid customers"],
+    ["Cost guardrails", "Set monthly spend alerts for Cloudflare, AI providers, media generation, storage, observability, and automation.", "Before automation"]
+];
+
+function readJson(key, fallback) {
+    try {
+        return JSON.parse(localStorage.getItem(key) || "null") || fallback;
+    } catch (error) {
+        return fallback;
+    }
+}
+
+function writeJson(key, value) {
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+        // Local drafts are optional and must not block the page.
+    }
+}
+
+function asNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+}
+
+function money(value) {
+    return new Intl.NumberFormat("en-AU", {
+        style: "currency",
+        currency: "AUD",
+        maximumFractionDigits: 0
+    }).format(asNumber(value));
+}
+
+function percent(value) {
+    return `${Math.round(asNumber(value) * 10) / 10}%`;
+}
+
+function buildTasks(request, signals, projectId) {
+    const activeSignals = new Set(signals);
+    const tasks = [
+        {
+            id: "triage",
+            role: "chair",
+            title: "Classify intake and load project context",
+            output: "Structured intake record with project id, intent, missing info, and risk level.",
+            checks: [
+                `Project id resolves to ${projectId}`,
+                "Required context pack is listed",
+                "Ambiguities are flagged before execution"
+            ]
+        }
+    ];
+
+    if (activeSignals.has("council")) {
+        tasks.push({
+            id: "council",
+            role: "chair",
+            title: "Run council review",
+            output: "Council decision with assumptions, risks, non-goals, and go/no-go recommendation.",
+            dependsOn: ["triage"],
+            checks: [
+                "Each council role contributes findings",
+                "Decision is short enough to become an artifact",
+                "Open questions are separated from approved scope"
+            ]
+        });
+    }
+
+    if (activeSignals.has("architecture")) {
+        tasks.push({
+            id: "architecture",
+            role: "architect",
+            title: "Define architecture slice",
+            output: "Architecture note or ADR covering system boundary, data flow, and integration points.",
+            dependsOn: activeSignals.has("council") ? ["council"] : ["triage"],
+            checks: [
+                "Data ownership is explicit",
+                "External services and permissions are listed",
+                "Future agents can find the relevant docs"
+            ]
+        });
+    }
+
+    if (activeSignals.has("security")) {
+        tasks.push({
+            id: "security",
+            role: "security",
+            title: "Review security and permission boundaries",
+            output: "Security checklist for auth, secrets, scoped tokens, and audit logging.",
+            dependsOn: ["triage"],
+            checks: [
+                "No secrets enter Markdown docs",
+                "Cloud jobs have minimal permission scope",
+                "Human approval threshold is stated"
+            ]
+        });
+    }
+
+    if (activeSignals.has("code")) {
+        tasks.push({
+            id: "implementation",
+            role: "implementer",
+            title: "Create implementation work package",
+            output: "One reviewable code task with files, non-goals, and verification commands.",
+            dependsOn: activeSignals.has("architecture") ? ["architecture"] : ["triage"],
+            checks: [
+                "Task can produce one reviewable diff",
+                "Acceptance criteria are testable",
+                "No unrelated refactors are included"
+            ]
+        });
+    }
+
+    if (activeSignals.has("documentation")) {
+        tasks.push({
+            id: "documentation",
+            role: "documentation",
+            title: "Update project knowledge",
+            output: "Updates to PROJECT, STATUS, ADR, docs-map, or runbook files.",
+            dependsOn: activeSignals.has("council") ? ["council"] : ["triage"],
+            checks: [
+                "Durable decisions are not left only in chat",
+                "Docs map points to the new artifact",
+                "Project registry remains current"
+            ]
+        });
+    }
+
+    if (activeSignals.has("automation")) {
+        tasks.push({
+            id: "automation",
+            role: "operator",
+            title: "Design cloud automation task",
+            output: "Job spec with trigger, retry policy, permissions, audit log, and failure handling.",
+            dependsOn: activeSignals.has("architecture") ? ["architecture"] : ["triage"],
+            checks: [
+                "Runs without depending on local machine power state",
+                "Idempotency strategy is defined",
+                "Failure notification is defined"
+            ]
+        });
+    }
+
+    if (activeSignals.has("assets")) {
+        tasks.push({
+            id: "assets",
+            role: "product",
+            title: "Route asset generation",
+            output: "Asset brief with provider recommendation, prompt inputs, rights notes, and review target.",
+            dependsOn: ["triage"],
+            checks: [
+                "Output format and usage rights are stated",
+                "Prompt and tool version will be logged",
+                "Human review is required before publication"
+            ]
+        });
+    }
+
+    if (activeSignals.has("review")) {
+        tasks.push({
+            id: "review",
+            role: "qa",
+            title: "Create review and verification plan",
+            output: "Quality gate covering tests, static checks, AI review, and human approval.",
+            dependsOn: tasks.some((task) => task.id === "implementation") ? ["implementation"] : ["triage"],
+            checks: [
+                "Verification commands are named",
+                "Risky changes require approval",
+                "Review output has actionable findings"
+            ]
+        });
+    }
+
+    if (String(request).toLowerCase().includes("mobile")) {
+        tasks.push({
+            id: "mobile-readiness",
+            role: "architect",
+            title: "Assess mobile readiness",
+            output: "Mobile app boundary note covering API reuse, auth, offline needs, and iOS constraints.",
+            dependsOn: activeSignals.has("architecture") ? ["architecture"] : ["triage"],
+            checks: [
+                "No duplicate mobile-only data model",
+                "Shared API contract is identified",
+                "Offline and sync requirements are captured"
+            ]
+        });
+    }
+
+    return tasks;
+}
+
+function setActiveNavigation() {
+    const path = window.location.pathname.replace(/\/index\.html$/, "/");
+    for (const link of document.querySelectorAll(".management-nav a")) {
+        const href = new URL(link.href).pathname.replace(/\/index\.html$/, "/");
+        const active = href === path || (href === "/management/" && path === "/management");
+        if (active) link.setAttribute("aria-current", "page");
+    }
+}
+
+function el(tag, options = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(options)) {
+        if (key === "className") node.className = value;
+        else if (key === "text") node.textContent = value;
+        else if (key === "html") node.innerHTML = value;
+        else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2).toLowerCase(), value);
+        else if (value !== null && value !== undefined) node.setAttribute(key, value);
+    }
+    for (const child of [].concat(children)) {
+        if (child === null || child === undefined) continue;
+        node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    }
+    return node;
+}
+
+function renderStats(tasks, intakes) {
+    const roles = new Set(tasks.map((task) => task.role)).size;
+    return el("div", { className: "stat-row" }, [
+        stat("Projects", String(projects.length)),
+        stat("Open Decisions", String(openDecisions.length)),
+        stat("Draft Tasks", String(tasks.length)),
+        stat("Saved Intakes", String(intakes.length || 0))
+    ]);
+}
+
+function stat(label, value) {
+    return el("div", { className: "stat" }, [
+        el("span", { text: label }),
+        el("strong", { text: value })
+    ]);
+}
+
+function taskList(tasks) {
+    const list = el("ul", { className: "task-list" });
+    for (const task of tasks) list.append(taskCard(task));
+    return list;
+}
+
+function taskCard(task) {
+    return el("li", { className: "task-card" }, [
+        el("header", {}, [
+            el("div", {}, [
+                el("span", { className: "tag", text: roleLabels[task.role] || task.role }),
+                el("h3", { text: task.title })
+            ]),
+            el("span", {
+                className: task.dependsOn ? "dependency-pill" : "status-pill",
+                text: task.dependsOn ? `After ${task.dependsOn.join(", ")}` : "Entry"
+            })
+        ]),
+        el("p", { className: "task-output", text: task.output }),
+        el("div", { className: "check-grid" }, task.checks.map((check) => el("span", { text: check })))
+    ]);
+}
+
+function renderDashboard(app) {
+    const intakes = readJson(storageKey, []);
+    const tasks = buildTasks(defaultRequest, defaultSignals, "war-room-2");
+    const recent = intakes.slice(0, 4);
+
+    app.append(el("section", { className: "band" }, [
+        el("div", { className: "band-grid" }, [
+            el("div", {}, [
+                el("p", { className: "eyebrow", text: "operations" }),
+                el("h2", { className: "section-title", text: "One intake, routed through project context and role gates" }),
+                el("p", { className: "panel-subtitle", text: "The management area is isolated under /management and keeps its navigation separate from existing site surfaces." })
+            ]),
+            renderStats(tasks, intakes)
+        ])
+    ]));
+
+    app.append(el("section", { className: "flow-strip" }, [
+        flowStep("01", "Capture", "Request, project, priority, and work signals."),
+        flowStep("02", "Council", "Assumptions, risks, non-goals, and approval gate."),
+        flowStep("03", "Assign", "Role-specific tasks with context requirements."),
+        flowStep("04", "Execute", "One reviewable artifact per task."),
+        flowStep("05", "Record", "Durable decisions, status, and audit trail.")
+    ]));
+
+    app.append(el("section", { className: "dashboard-grid", style: "margin-top:16px" }, [
+        panel("Current Task Graph", taskList(tasks)),
+        panel("Recent Intake Drafts", recent.length ? savedIntakeList(recent) : el("div", { className: "empty-state", text: "No local intake drafts saved in this browser." }))
+    ]));
+
+    app.append(el("section", { className: "two-column", style: "margin-top:16px" }, [
+        panel("Open Decisions", list(openDecisions)),
+        panel("Active Boundaries", list([
+            "Do not modify legacy site surfaces from this management flow.",
+            "Treat Markdown as canonical knowledge and HTML as presentation unless the page is interactive.",
+            "Use cloud-hosted jobs for automation that must run while local machines are offline.",
+            "Load project context from the registry before cross-project work."
+        ]))
+    ]));
+}
+
+function flowStep(number, title, detail) {
+    return el("div", { className: "flow-step" }, [
+        el("span", { text: number }),
+        el("strong", { text: title }),
+        el("p", { text: detail })
+    ]);
+}
+
+function panel(title, body, subtitle = "") {
+    return el("section", { className: "panel" }, [
+        el("div", { className: "panel-header" }, [
+            el("h2", { text: title })
+        ]),
+        subtitle ? el("p", { className: "panel-subtitle", text: subtitle }) : null,
+        el("div", { style: "margin-top:14px" }, body)
+    ]);
+}
+
+function list(items) {
+    return el("ul", { className: "list-clean" }, items.map((item) => el("li", { text: item })));
+}
+
+function savedIntakeList(intakes) {
+    return el("ul", { className: "list-clean" }, intakes.map((intake) => {
+        const item = el("li", { className: "saved-intake" });
+        item.append(
+            el("strong", { text: intake.projectId || "project" }),
+            el("time", { text: new Date(intake.createdAt).toLocaleString() }),
+            el("p", { text: String(intake.request || "").slice(0, 180) })
+        );
+        return item;
+    }));
+}
+
+function renderIntake(app) {
+    let state = {
+        projectId: "war-room-2",
+        priority: "high",
+        request: defaultRequest,
+        signals: [...defaultSignals]
+    };
+
+    const form = el("section", { className: "panel" });
+    const output = el("section", { className: "panel" });
+    const status = el("p", { className: "notice", text: "Task graph updates live. Saved drafts stay in this browser until server persistence is wired." });
+
+    form.append(
+        el("div", { className: "panel-header" }, [el("h2", { text: "Request" })]),
+        el("div", { className: "form-stack", style: "margin-top:14px" }, [
+            fieldSelect("Project", "projectInput", projects.map((project) => [project.id, project.name]), state.projectId, (value) => {
+                state.projectId = value;
+                renderOutput();
+            }),
+            fieldTextarea("Raw request", "requestInput", state.request, (value) => {
+                state.request = value;
+                renderOutput();
+            }),
+            priorityButtons(state.priority, (value) => {
+                state.priority = value;
+                renderIntake(app);
+            }),
+            signalChooser(state, () => renderOutput()),
+            el("div", { className: "button-row" }, [
+                el("button", { className: "button", type: "button", text: "Save Draft", onclick: () => saveCurrentDraft(state, status, output) }),
+                el("button", { className: "ghost-button", type: "button", text: "Export JSON", onclick: () => exportDraft(state) }),
+                el("button", { className: "ghost-button", type: "button", text: "Reset", onclick: () => renderIntake(app) })
+            ]),
+            status
+        ])
+    );
+
+    function renderOutput() {
+        output.replaceChildren(
+            el("div", { className: "panel-header" }, [
+                el("h2", { text: "Role Task Graph" }),
+                el("span", { className: "status-pill", text: state.priority })
+            ]),
+            el("div", { style: "margin-top:14px" }, taskList(buildTasks(state.request, state.signals, state.projectId)))
+        );
+    }
+
+    app.replaceChildren(el("section", { className: "split-panel" }, [form, output]));
+    renderOutput();
+}
+
+function fieldSelect(label, id, options, value, onChange) {
+    const select = el("select", { id, className: "select" });
+    for (const [optionValue, optionLabel] of options) {
+        select.append(el("option", { value: optionValue, text: optionLabel }));
+    }
+    select.value = value;
+    select.addEventListener("change", () => onChange(select.value));
+    return el("div", { className: "field-group" }, [
+        el("label", { for: id, text: label }),
+        select
+    ]);
+}
+
+function fieldTextarea(label, id, value, onInput) {
+    const textarea = el("textarea", { id, className: "textarea" });
+    textarea.value = value;
+    textarea.addEventListener("input", () => onInput(textarea.value));
+    return el("div", { className: "field-group" }, [
+        el("label", { for: id, text: label }),
+        textarea
+    ]);
+}
+
+function priorityButtons(value, onChange) {
+    const group = el("div", { className: "field-group" }, [el("span", { className: "field-label", text: "Priority" })]);
+    const buttons = el("div", { className: "segmented" });
+    for (const option of ["normal", "high", "urgent"]) {
+        buttons.append(el("button", {
+            type: "button",
+            className: option === value ? "active" : "",
+            text: option,
+            onclick: () => onChange(option)
+        }));
+    }
+    group.append(buttons);
+    return group;
+}
+
+function signalChooser(state, onChange) {
+    const wrapper = el("fieldset", { className: "field-group" }, [
+        el("legend", { className: "field-label", text: "Work signals" })
+    ]);
+    const grid = el("div", { className: "signals-grid" });
+    for (const [id, label, description] of workSignals) {
+        const checkbox = el("input", { type: "checkbox" });
+        checkbox.checked = state.signals.includes(id);
+        checkbox.addEventListener("change", () => {
+            state.signals = checkbox.checked
+                ? Array.from(new Set([...state.signals, id]))
+                : state.signals.filter((item) => item !== id);
+            onChange();
+        });
+        grid.append(el("label", { className: "signal-option" }, [
+            checkbox,
+            el("span", {}, [el("strong", { text: label }), el("span", { text: description })])
+        ]));
+    }
+    wrapper.append(grid);
+    return wrapper;
+}
+
+function currentDraft(state) {
+    return {
+        id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+        createdAt: new Date().toISOString(),
+        projectId: state.projectId,
+        priority: state.priority,
+        request: state.request,
+        signals: state.signals,
+        tasks: buildTasks(state.request, state.signals, state.projectId)
+    };
+}
+
+function saveCurrentDraft(state, status) {
+    const draft = currentDraft(state);
+    const intakes = readJson(storageKey, []);
+    writeJson(storageKey, [draft, ...intakes].slice(0, 20));
+    status.textContent = `${draft.tasks.length} tasks saved locally for ${draft.projectId}.`;
+}
+
+function exportDraft(state) {
+    const draft = currentDraft(state);
+    const blob = new Blob([JSON.stringify(draft, null, 2)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `war-room-intake-${draft.projectId}-${Date.now()}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+}
+
+function renderProjects(app) {
+    app.append(el("section", { className: "three-column" }, projects.map((project) => {
+        return el("article", { className: "registry-card" }, [
+            el("span", { className: "tag", text: project.status }),
+            el("h3", { text: project.name }),
+            el("p", { className: "panel-subtitle", text: project.summary }),
+            el("div", { className: "registry-meta" }, [
+                el("span", { className: "dependency-pill", text: project.priority }),
+                el("span", { className: "dependency-pill", text: project.owner }),
+                el("span", { className: "dependency-pill", text: project.id })
+            ])
+        ]);
+    })));
+
+    app.append(el("section", { className: "two-column", style: "margin-top:16px" }, [
+        panel("Startup Context Pack", contextTable(projects[0])),
+        panel("Unknown Project Rule", list([
+            "Read the registry before editing.",
+            "Resolve the target project id and context pack.",
+            "Load the target project's PROJECT, STATUS, COUNCIL, and local AGENTS files.",
+            "If the project is still ambiguous, stop and ask for the target."
+        ]))
+    ]));
+}
+
+function contextTable(project) {
+    const table = el("table", { className: "data-table" });
+    table.append(el("thead", {}, [el("tr", {}, [
+        el("th", { text: "Document" }),
+        el("th", { text: "Purpose" })
+    ])]));
+    const tbody = el("tbody");
+    const purposes = {
+        "AGENTS.md": "Global agent startup rules",
+        "projects/PROJECT_REGISTRY.yml": "Project lookup and routing",
+        "projects/war-room-2/PROJECT.md": "Project scope and operating context",
+        "projects/war-room-2/STATUS.md": "Current implementation state",
+        "docs/agent/docs-map.md": "Deep context loading map",
+        "docs/QUALITY_GATES.md": "Review and verification policy"
+    };
+    for (const doc of project.context) {
+        tbody.append(el("tr", {}, [
+            el("td", { text: doc }),
+            el("td", { text: purposes[doc] || "Project context" })
+        ]));
+    }
+    table.append(tbody);
+    return table;
+}
+
+function renderCouncil(app) {
+    const saved = readJson(councilKey, {
+        decision: "",
+        assumptions: "",
+        risks: "",
+        updatedAt: ""
+    });
+    const agenda = [
+        ["Chair", "Classify request, name scope, identify missing decisions."],
+        ["Product", "Confirm user value, target workflow, non-goals."],
+        ["Architect", "Check system boundary, data ownership, integration cost."],
+        ["Security", "Review auth, secrets, permissions, abuse paths."],
+        ["Operator", "Check automation, retries, observability, rollback."],
+        ["QA", "Define verification commands and failure thresholds."],
+        ["Documentation", "Name durable files that must be updated."]
+    ];
+
+    const table = el("table", { className: "data-table" });
+    table.append(el("thead", {}, [el("tr", {}, [el("th", { text: "Seat" }), el("th", { text: "Review focus" })])]));
+    table.append(el("tbody", {}, agenda.map(([seat, focus]) => el("tr", {}, [el("td", { text: seat }), el("td", { text: focus })]))));
+
+    const decision = el("textarea", { id: "decisionInput", className: "textarea" });
+    decision.value = saved.decision;
+    const assumptions = el("textarea", { id: "assumptionsInput", className: "textarea" });
+    assumptions.value = saved.assumptions;
+    const risks = el("textarea", { id: "risksInput", className: "textarea" });
+    risks.value = saved.risks;
+    const saveStatus = el("p", { className: "notice", text: saved.updatedAt ? `Last local council draft: ${new Date(saved.updatedAt).toLocaleString()}` : "No local council draft saved in this browser." });
+
+    app.append(el("section", { className: "two-column" }, [
+        panel("Council Seats", table),
+        panel("Gate Conditions", list([
+            "No implementation starts before scope and non-goals are named.",
+            "Architecture and data ownership are explicit for shared systems.",
+            "Security signs off on credentials, auth, external tools, and cloud jobs.",
+            "QA names verification before implementers start work.",
+            "Documentation target files are listed before the work closes."
+        ]))
+    ]));
+
+    app.append(el("section", { className: "panel", style: "margin-top:16px" }, [
+        el("div", { className: "panel-header" }, [el("h2", { text: "Council Draft" })]),
+        el("div", { className: "three-column", style: "margin-top:14px" }, [
+            el("div", { className: "field-group" }, [el("label", { for: "decisionInput", text: "Decision" }), decision]),
+            el("div", { className: "field-group" }, [el("label", { for: "assumptionsInput", text: "Assumptions" }), assumptions]),
+            el("div", { className: "field-group" }, [el("label", { for: "risksInput", text: "Risks" }), risks])
+        ]),
+        el("div", { className: "button-row", style: "margin-top:14px" }, [
+            el("button", {
+                className: "button",
+                type: "button",
+                text: "Save Council Draft",
+                onclick: () => {
+                    const value = {
+                        decision: decision.value,
+                        assumptions: assumptions.value,
+                        risks: risks.value,
+                        updatedAt: new Date().toISOString()
+                    };
+                    writeJson(councilKey, value);
+                    saveStatus.textContent = `Saved council draft at ${new Date(value.updatedAt).toLocaleString()}.`;
+                }
+            })
+        ]),
+        saveStatus
+    ]));
+}
+
+function renderAgents(app) {
+    const startupRows = [
+        ["Global instructions", "AGENTS.md", "Operating posture, project discovery, quality gate."],
+        ["Project registry", "projects/PROJECT_REGISTRY.yml", "Project id, route, owner, status, context pack."],
+        ["Project brief", "projects/{project}/PROJECT.md", "Scope, goals, boundaries, external systems."],
+        ["Current status", "projects/{project}/STATUS.md", "Active work, recent changes, next decisions."],
+        ["Council file", "projects/{project}/COUNCIL.md", "Required review seats and approval record."],
+        ["Docs map", "docs/agent/docs-map.md", "On-demand context loading without clutter."],
+        ["Quality gate", "docs/QUALITY_GATES.md", "Tests, build checks, review thresholds."]
+    ];
+
+    app.append(el("section", { className: "two-column" }, [
+        panel("Startup Pack", simpleTable(["Artifact", "Path", "Why it is loaded"], startupRows)),
+        panel("Cross-Project Handling", list([
+            "When pointed at a project not already loaded, find it in the registry.",
+            "Load only that project's context pack before touching files.",
+            "State the active project before making cross-project edits.",
+            "Keep shared architecture changes behind an ADR.",
+            "Escalate when two project instructions conflict."
+        ]))
+    ]));
+
+    app.append(el("section", { className: "two-column", style: "margin-top:16px" }, [
+        panel("Role Agents", simpleTable(["Role", "Default output", "Stop condition"], [
+            ["Council Chair", "Council decision", "Missing owner, goal, or approval threshold"],
+            ["Architect", "ADR or architecture note", "Unknown data boundary"],
+            ["Implementer", "Reviewable diff", "No acceptance criteria"],
+            ["Documentation", "Updated durable docs", "Decision only exists in chat"],
+            ["Security", "Permission checklist", "Secrets or broad tokens requested"],
+            ["QA", "Verification report", "No reproducible command or manual check"],
+            ["Operator", "Automation runbook", "No retry, audit, or failure path"]
+        ])),
+        panel("Format Policy", list([
+            "Markdown remains the source format for notes, docs, and project records.",
+            "HTML is presentation output unless it is an intentionally interactive surface.",
+            "Large context is summarized into status docs instead of loaded into every agent.",
+            "Generated artifacts should link back to canonical Markdown or registry entries."
+        ]))
+    ]));
+}
+
+function renderPerformance(app) {
+    const entries = readJson(performanceKey, defaultPerformanceEntries);
+    const totals = entries.reduce((acc, entry) => {
+        acc.gross += asNumber(entry.gross);
+        acc.cost += asNumber(entry.cost);
+        acc.traffic += asNumber(entry.traffic);
+        acc.conversions += asNumber(entry.conversions);
+        return acc;
+    }, { gross: 0, cost: 0, traffic: 0, conversions: 0 });
+    const net = totals.gross - totals.cost;
+    const conversionRate = totals.traffic ? (totals.conversions / totals.traffic) * 100 : 0;
+    const byType = entries.reduce((acc, entry) => {
+        const type = entry.type || "other";
+        acc[type] = acc[type] || { gross: 0, cost: 0, count: 0 };
+        acc[type].gross += asNumber(entry.gross);
+        acc[type].cost += asNumber(entry.cost);
+        acc[type].count += 1;
+        return acc;
+    }, {});
+
+    app.append(el("section", { className: "band" }, [
+        el("div", { className: "band-grid" }, [
+            el("div", {}, [
+                el("p", { className: "eyebrow", text: "money layer" }),
+                el("h2", { className: "section-title", text: "Track what creates revenue, saves cost, or deserves shutdown" }),
+                el("p", { className: "panel-subtitle", text: "This dashboard stores draft metrics locally for now. Production tracking should move into a database with source attribution, audit records, and access control." })
+            ]),
+            el("div", { className: "stat-row" }, [
+                stat("Gross", money(totals.gross)),
+                stat("Net", money(net)),
+                stat("Cost", money(totals.cost)),
+                stat("Conv.", String(totals.conversions))
+            ])
+        ])
+    ]));
+
+    app.append(el("section", { className: "dashboard-grid" }, [
+        panel("Metric Entry", performanceForm(entries)),
+        panel("Portfolio Summary", el("div", {}, [
+            el("div", { className: "score-board" }, [
+                scoreItem("Traffic", String(totals.traffic)),
+                scoreItem("Conversion rate", percent(conversionRate)),
+                scoreItem("Tracked lines", String(entries.length)),
+                scoreItem("Income streams", String(entries.filter((entry) => entry.type === "income").length))
+            ]),
+            el("div", { className: "mini-bars" }, Object.entries(byType).map(([type, value]) => miniBar(type, value.gross - value.cost, Math.max(1, Math.abs(net), ...Object.values(byType).map((item) => Math.abs(item.gross - item.cost)))))),
+            el("p", { className: "notice warning", text: "Use net revenue, marginal cost, conversion rate, and legal readiness together. A high-performing stream that fails compliance should not scale." })
+        ]))
+    ]));
+
+    app.append(el("section", { className: "panel", style: "margin-top:16px" }, [
+        el("div", { className: "panel-header" }, [
+            el("h2", { text: "Tracked Tools, Projects, and Income Streams" }),
+            el("span", { className: "status-pill", text: `${entries.length} rows` })
+        ]),
+        el("div", { style: "margin-top:14px" }, performanceTable(entries)),
+        el("div", { className: "button-row", style: "margin-top:14px" }, [
+            el("button", { className: "ghost-button", type: "button", text: "Export JSON", onclick: () => exportPerformance(entries, "json") }),
+            el("button", { className: "ghost-button", type: "button", text: "Export CSV", onclick: () => exportPerformance(entries, "csv") }),
+            el("button", {
+                className: "ghost-button",
+                type: "button",
+                text: "Reset Samples",
+                onclick: () => {
+                    writeJson(performanceKey, defaultPerformanceEntries);
+                    render();
+                }
+            })
+        ])
+    ]));
+}
+
+function performanceForm(entries) {
+    const form = el("form", { className: "form-stack" });
+    const type = basicSelect("metricType", [["income", "Income stream"], ["tool", "Tool"], ["project", "Project"], ["channel", "Channel"]], "income");
+    const status = basicSelect("metricStatus", [["not-started", "Not started"], ["build", "Build"], ["monitor", "Monitor"], ["scale", "Scale"], ["pause", "Pause"]], "monitor");
+    const name = textInput("metricName", "Affiliate content, productized service, tool, project");
+    const project = textInput("metricProject", "Project or property");
+    const gross = numberInput("metricGross", "0");
+    const cost = numberInput("metricCost", "0");
+    const traffic = numberInput("metricTraffic", "0");
+    const conversions = numberInput("metricConversions", "0");
+    const note = el("textarea", { id: "metricNote", className: "textarea", placeholder: "What changed, what source produced it, and what decision should follow." });
+    note.style.minHeight = "100px";
+    const saveStatus = el("p", { className: "notice", text: "Add rows weekly or after each campaign/tool test." });
+
+    form.append(
+        el("div", { className: "two-column" }, [
+            fieldWrap("Type", "metricType", type),
+            fieldWrap("Status", "metricStatus", status)
+        ]),
+        fieldWrap("Name", "metricName", name),
+        fieldWrap("Project", "metricProject", project),
+        el("div", { className: "two-column" }, [
+            fieldWrap("Gross revenue / value", "metricGross", gross),
+            fieldWrap("Cost", "metricCost", cost)
+        ]),
+        el("div", { className: "two-column" }, [
+            fieldWrap("Traffic / usage", "metricTraffic", traffic),
+            fieldWrap("Conversions / wins", "metricConversions", conversions)
+        ]),
+        fieldWrap("Decision note", "metricNote", note),
+        el("div", { className: "button-row" }, [
+            el("button", {
+                className: "button",
+                type: "submit",
+                text: "Add Metric",
+                onclick: (event) => {
+                    event.preventDefault();
+                    if (!name.value.trim()) {
+                        saveStatus.textContent = "Name is required.";
+                        return;
+                    }
+                    const next = {
+                        id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+                        type: type.value,
+                        name: name.value.trim(),
+                        project: project.value.trim() || "unassigned",
+                        gross: asNumber(gross.value),
+                        cost: asNumber(cost.value),
+                        traffic: asNumber(traffic.value),
+                        conversions: asNumber(conversions.value),
+                        status: status.value,
+                        note: note.value.trim(),
+                        recordedAt: new Date().toISOString()
+                    };
+                    writeJson(performanceKey, [next, ...entries]);
+                    saveStatus.textContent = `Added ${next.name}. Refreshing dashboard.`;
+                    render();
+                }
+            })
+        ]),
+        saveStatus
+    );
+
+    return form;
+}
+
+function basicSelect(id, options, value) {
+    const select = el("select", { id, className: "select" });
+    for (const [optionValue, label] of options) select.append(el("option", { value: optionValue, text: label }));
+    select.value = value;
+    return select;
+}
+
+function textInput(id, placeholder) {
+    return el("input", { id, className: "input", type: "text", placeholder });
+}
+
+function numberInput(id, placeholder) {
+    return el("input", { id, className: "input", type: "number", inputmode: "decimal", min: "0", step: "1", placeholder });
+}
+
+function fieldWrap(label, id, control) {
+    return el("div", { className: "field-group" }, [
+        el("label", { for: id, text: label }),
+        control
+    ]);
+}
+
+function scoreItem(label, value) {
+    return el("div", { className: "score-item" }, [
+        el("span", { text: label }),
+        el("strong", { text: value })
+    ]);
+}
+
+function miniBar(label, value, max) {
+    const width = Math.max(6, Math.min(100, Math.round((Math.abs(value) / max) * 100)));
+    return el("div", { className: "mini-bar" }, [
+        el("div", { className: "mini-bar-label" }, [
+            el("span", { text: label }),
+            el("strong", { text: money(value) })
+        ]),
+        el("div", { className: "mini-bar-track" }, [
+            el("span", { className: value >= 0 ? "positive" : "negative", style: `width:${width}%` })
+        ])
+    ]);
+}
+
+function performanceTable(entries) {
+    const rows = entries.map((entry) => [
+        entry.type || "other",
+        entry.name || "",
+        entry.project || "",
+        money(entry.gross),
+        money(entry.cost),
+        money(asNumber(entry.gross) - asNumber(entry.cost)),
+        String(entry.traffic || 0),
+        String(entry.conversions || 0),
+        entry.status || "monitor"
+    ]);
+    return simpleTable(["Type", "Name", "Project", "Gross", "Cost", "Net", "Traffic", "Conv.", "Status"], rows);
+}
+
+function exportPerformance(entries, format) {
+    let content;
+    let type;
+    let extension;
+    if (format === "csv") {
+        const headers = ["type", "name", "project", "gross", "cost", "traffic", "conversions", "status", "note", "recordedAt"];
+        const rows = entries.map((entry) => headers.map((header) => `"${String(entry[header] ?? "").replace(/"/g, '""')}"`).join(","));
+        content = [headers.join(","), ...rows].join("\n");
+        type = "text/csv";
+        extension = "csv";
+    } else {
+        content = JSON.stringify(entries, null, 2);
+        type = "application/json";
+        extension = "json";
+    }
+    const blob = new Blob([content], { type });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `cartdotcom-performance-${Date.now()}.${extension}`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+}
+
+function renderCompliance(app) {
+    const phaseRows = [
+        ["Pre-revenue", "Privacy map, asset rights, claims review, basic terms, analytics consent posture."],
+        ["First sale", "Refund terms, payment scope, accounting records, support process, transaction audit trail."],
+        ["Marketing scale", "Consent proof, unsubscribe handling, affiliate disclosures, review/testimonial policy."],
+        ["Audience scale", "Accessibility pass, incident response, rate limits, data deletion, vendor review."],
+        ["International", "GDPR/UK privacy posture, cookie consent, tax handling, localized consumer terms."]
+    ];
+
+    app.append(el("section", { className: "band" }, [
+        el("div", { className: "band-grid" }, [
+            el("div", {}, [
+                el("p", { className: "eyebrow", text: "risk layer" }),
+                el("h2", { className: "section-title", text: "Monetization should not outrun compliance" }),
+                el("p", { className: "panel-subtitle", text: "This is an operational checklist, not legal advice. Get lawyer/accountant review before paid offers, public claims, or international expansion." })
+            ]),
+            el("div", { className: "stat-row" }, [
+                stat("Controls", String(complianceControls.length)),
+                stat("Blockers", "4"),
+                stat("Review", "Legal"),
+                stat("Target", "Scale")
+            ])
+        ])
+    ]));
+
+    app.append(el("section", { className: "panel" }, [
+        el("div", { className: "panel-header" }, [
+            el("h2", { text: "Compliance Control Register" }),
+            el("span", { className: "status-pill", text: "required" })
+        ]),
+        el("div", { className: "matrix", style: "margin-top:14px" }, complianceControls.map((row) => matrixRow(row)))
+    ]));
+
+    app.append(el("section", { className: "two-column", style: "margin-top:16px" }, [
+        panel("Revenue Phase Gates", simpleTable(["Phase", "Must be true"], phaseRows)),
+        panel("Reference Basis", list([
+            "Australian privacy: personal information handling, privacy policy, access/correction, data breach response.",
+            "Australian marketing: consent, sender identification, and unsubscribe for commercial electronic messages.",
+            "Australian consumer law: avoid misleading claims and honor consumer guarantees/refund obligations.",
+            "US-facing promotion: material connections and endorsements must be clearly disclosed.",
+            "EU/UK users: GDPR-style rights, lawful basis, data transfer, and cookie consent may apply.",
+            "Payments: hosted checkout reduces card-data scope, but script inventory and payment-page integrity still need ownership."
+        ]))
+    ]));
+}
+
+function renderDeployment(app) {
+    const architectureRows = [
+        ["Static content", "Cloudflare Pages assets", "Marketing, docs, and management UI shell"],
+        ["Protected routes", "Pages Functions middleware", "Management access and future customer account gates"],
+        ["Durable data", "D1 or Supabase plus R2 for files", "Project state, performance rows, assets, audit logs"],
+        ["Queue and jobs", "Workers Queues, GitHub Actions, Trigger.dev, or Inngest", "Automations that must run without a local machine"],
+        ["Observability", "Cloudflare Analytics plus error logging", "Latency, errors, conversions, deploy health"],
+        ["Secrets", "Cloudflare environment variables", "API keys, provider tokens, webhook secrets"]
+    ];
+
+    app.append(el("section", { className: "band" }, [
+        el("div", { className: "band-grid" }, [
+            el("div", {}, [
+                el("p", { className: "eyebrow", text: "deployability" }),
+                el("h2", { className: "section-title", text: "Prepare the site for a larger audience before the audience arrives" }),
+                el("p", { className: "panel-subtitle", text: "The current static management layer is safe for preview. Production scale needs storage, observability, fail-closed auth, rollback, and cost controls." })
+            ]),
+            el("div", { className: "stat-row" }, [
+                stat("Gates", String(deploymentControls.length)),
+                stat("Runtime", "Cloudflare"),
+                stat("State", "Pending"),
+                stat("Risk", "Medium")
+            ])
+        ])
+    ]));
+
+    app.append(el("section", { className: "two-column" }, [
+        panel("Scale Architecture", simpleTable(["Layer", "Candidate", "Use"], architectureRows)),
+        panel("Launch Checklist", list([
+            "Set Cloudflare Pages Functions fail-open/fail-closed behavior deliberately for protected routes.",
+            "Move local-only dashboard state into a backed-up database before team or customer use.",
+            "Add rate limits around auth, forms, write APIs, and paid AI/tool calls.",
+            "Add deploy previews and rollback notes for every production change.",
+            "Record cost owners and monthly spend caps before enabling automated generation."
+        ]))
+    ]));
+
+    app.append(el("section", { className: "panel", style: "margin-top:16px" }, [
+        el("div", { className: "panel-header" }, [
+            el("h2", { text: "Deployment Control Register" }),
+            el("span", { className: "status-pill", text: "scale gate" })
+        ]),
+        el("div", { className: "matrix", style: "margin-top:14px" }, deploymentControls.map((row) => matrixRow(row)))
+    ]));
+}
+
+function renderQuality(app) {
+    const qualityRows = [
+        ["Docs-only", "Heading consistency, links, registry references", "Manual review or lightweight link check"],
+        ["Static page", "No console errors, responsive layout, no route leakage", "Browser render and narrow viewport check"],
+        ["Function/API", "Auth, input validation, error shape, cache policy", "Local Pages dev plus targeted request tests"],
+        ["Agent output", "Acceptance checks, artifact path, verification commands", "Council or QA review before execution"],
+        ["Automation", "Idempotency, retry, audit, alerting, least privilege", "Cloud dry run plus failure simulation"],
+        ["Release", "Git status, diff review, deployment target", "Build command and Cloudflare Pages preview"]
+    ];
+
+    const automationRows = [
+        ["Short jobs", "Cloudflare Workers Cron", "Small scheduled tasks close to the existing site"],
+        ["Long jobs", "GitHub Actions", "Repo-aware tasks, commits, tests, and build checks"],
+        ["Stateful workflows", "Trigger.dev or Inngest", "Retries, queues, human approval, longer orchestration"],
+        ["Content generation", "Provider APIs behind queued jobs", "Image, video, TTS, web generation with audit records"],
+        ["Human review", "Management approval queue", "High-risk writes, publishing, spending, credentials"]
+    ];
+
+    app.append(el("section", { className: "panel" }, [
+        el("div", { className: "panel-header" }, [el("h2", { text: "Quality Gate Matrix" })]),
+        el("div", { className: "matrix", style: "margin-top:14px" }, qualityRows.map((row) => matrixRow(row)))
+    ]));
+
+    app.append(el("section", { className: "two-column", style: "margin-top:16px" }, [
+        panel("Automation Stack", simpleTable(["Workload", "Candidate", "Fit"], automationRows)),
+        panel("Development Oversight", list([
+            "Require a council pass before new project work starts.",
+            "Keep implementation tasks small enough for one coherent review.",
+            "Run automated checks before human review.",
+            "Use AI review as a second pass, not as the only approval.",
+            "Record architecture and operational decisions as durable docs."
+        ]))
+    ]));
+}
+
+function simpleTable(headers, rows) {
+    const table = el("table", { className: "data-table" });
+    table.append(el("thead", {}, [el("tr", {}, headers.map((header) => el("th", { text: header })))]));
+    table.append(el("tbody", {}, rows.map((row) => el("tr", {}, row.map((cell) => el("td", { text: cell }))))));
+    return table;
+}
+
+function matrixRow(row) {
+    return el("div", { className: "matrix-row" }, [
+        el("strong", { text: row[0] }),
+        el("span", { text: row[1] }),
+        el("span", { text: row[2] })
+    ]);
+}
+
+function render() {
+    setActiveNavigation();
+    const app = document.getElementById("managementApp");
+    if (!app) return;
+    const page = document.body.dataset.page || "dashboard";
+    app.replaceChildren();
+    if (page === "intake") renderIntake(app);
+    else if (page === "projects") renderProjects(app);
+    else if (page === "performance") renderPerformance(app);
+    else if (page === "compliance") renderCompliance(app);
+    else if (page === "deployment") renderDeployment(app);
+    else if (page === "council") renderCouncil(app);
+    else if (page === "agents") renderAgents(app);
+    else if (page === "quality") renderQuality(app);
+    else renderDashboard(app);
+}
+
+render();
