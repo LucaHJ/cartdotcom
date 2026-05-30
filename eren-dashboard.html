@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'">
+    <meta name="referrer" content="no-referrer">
+    <title>Eren Profit Dashboard</title>
+    <link rel="stylesheet" href="/eren-dashboard.css?v=20260530-1">
+</head>
+<body>
+    <main class="shell">
+        <section class="hero" aria-labelledby="dashboardTitle">
+            <div class="hero-copy">
+                <p class="eyebrow">Eren Operating System</p>
+                <h1 id="dashboardTitle">1,000,000 Net Profit Dashboard</h1>
+                <p class="lede">Track actual profit against the 12-month target, keep the execution plan visible, and force every month into measurable work.</p>
+            </div>
+            <div class="status-strip" aria-label="Security and privacy posture">
+                <span>Local-first</span>
+                <span>No analytics</span>
+                <span>No external scripts</span>
+                <span>Browser-only entries</span>
+            </div>
+        </section>
+
+        <section class="metrics-grid" aria-label="Profit progress">
+            <article class="metric primary">
+                <span class="metric-label">Total Profit</span>
+                <strong id="totalProfit">$0</strong>
+                <span id="goalPercent">0.00% of goal</span>
+            </article>
+            <article class="metric">
+                <span class="metric-label">Goal Remaining</span>
+                <strong id="remainingProfit">$1,000,000</strong>
+                <span>Net profit left</span>
+            </article>
+            <article class="metric">
+                <span class="metric-label">Required Pace</span>
+                <strong id="requiredPace">$83,333/mo</strong>
+                <span>Full-year average</span>
+            </article>
+            <article class="metric">
+                <span class="metric-label">Tracked Entries</span>
+                <strong id="entryCount">0</strong>
+                <span>Manual profit records</span>
+            </article>
+        </section>
+
+        <section class="progress-band" aria-label="Goal progress">
+            <div class="progress-topline">
+                <div>
+                    <p class="section-kicker">Progress</p>
+                    <h2>Actual vs Target</h2>
+                </div>
+                <p id="paceSummary">Add profit entries to calculate progress.</p>
+            </div>
+            <div class="progress-track" aria-hidden="true">
+                <div id="progressFill" class="progress-fill"></div>
+            </div>
+        </section>
+
+        <section class="workspace-grid">
+            <form id="profitForm" class="profit-form" autocomplete="off">
+                <div class="section-heading">
+                    <p class="section-kicker">Ledger</p>
+                    <h2>Add Profit</h2>
+                </div>
+                <label>
+                    Date
+                    <input id="profitDate" type="date" required>
+                </label>
+                <label>
+                    Net profit amount
+                    <input id="profitAmount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00" required>
+                </label>
+                <label>
+                    Source
+                    <input id="profitSource" type="text" maxlength="80" placeholder="Product, service, subscription, affiliate">
+                </label>
+                <label>
+                    Notes
+                    <textarea id="profitNotes" maxlength="240" placeholder="Short context, evidence, or payout reference"></textarea>
+                </label>
+                <div class="form-actions">
+                    <button type="submit">Add Entry</button>
+                    <button id="exportData" class="secondary" type="button">Export JSON</button>
+                    <button id="clearData" class="danger" type="button">Clear</button>
+                </div>
+                <p class="privacy-note">Entries are stored only in this browser's local storage. They are not sent to GitHub, Cloudflare, or any API.</p>
+            </form>
+
+            <section class="ledger" aria-labelledby="ledgerTitle">
+                <div class="section-heading">
+                    <p class="section-kicker">Records</p>
+                    <h2 id="ledgerTitle">Profit Entries</h2>
+                </div>
+                <div id="ledgerList" class="ledger-list"></div>
+            </section>
+        </section>
+
+        <section class="plan-section" aria-labelledby="planTitle">
+            <div class="plan-header">
+                <div>
+                    <p class="section-kicker">Roadmap</p>
+                    <h2 id="planTitle">Month-By-Month Execution Plan</h2>
+                </div>
+                <p>The plan assumes aggressive product discovery early, then ruthless scaling of the strongest revenue loops.</p>
+            </div>
+            <div id="monthPlan" class="month-plan"></div>
+        </section>
+    </main>
+
+    <script src="/eren-dashboard.js?v=20260530-1" defer></script>
+</body>
+</html>
