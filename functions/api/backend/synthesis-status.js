@@ -7,6 +7,7 @@ const YOUTUBE_STAGE_DEFINITIONS = [
     { id: "queued", label: "Queued", statuses: ["approved"] },
     { id: "claimed", label: "Claimed", statuses: ["running"] },
     { id: "waiting_git_publish", label: "Waiting publish", statuses: ["waiting_git_publish"] },
+    { id: "waiting_cloud_sync", label: "Waiting sync", statuses: ["waiting_cloud_sync"] },
     { id: "failed", label: "Failed", statuses: ["failed"] },
     { id: "handled", label: "Handled", statuses: ["handled"] }
 ];

@@ -380,6 +380,100 @@ textarea {
     color: var(--muted);
 }
 
+.pipeline-status-board {
+    display: grid;
+    gap: 10px;
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+}
+
+.pipeline-status-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.pipeline-status-head h2 {
+    margin: 0;
+    color: var(--ink-strong);
+    font-size: 16px;
+}
+
+.pipeline-status-head strong {
+    color: var(--ink-strong);
+    font-size: 20px;
+}
+
+.pipeline-status-list {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 9px 18px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.pipeline-status-list li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.pipeline-status-list li span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pipeline-status-list li strong {
+    color: var(--ink-strong);
+    font-size: 15px;
+}
+
+.pipeline-skeleton {
+    position: relative;
+    overflow: hidden;
+    border-radius: 4px;
+    background: rgba(156, 163, 175, 0.16);
+    color: transparent;
+}
+
+.pipeline-skeleton::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+    content: "";
+    transform: translateX(-100%);
+    animation: pipeline-skeleton 1.4s ease-in-out infinite;
+}
+
+.skeleton-status-title {
+    width: 150px;
+    height: 18px;
+}
+
+.skeleton-status-label {
+    width: 92px;
+    height: 15px;
+}
+
+.skeleton-status-count {
+    width: 28px;
+    height: 16px;
+}
+
+@keyframes pipeline-skeleton {
+    100% {
+        transform: translateX(100%);
+    }
+}
+
 .upload-button {
     display: inline-grid;
     place-items: center;
@@ -2090,6 +2184,10 @@ body.brain-minimal {
         min-height: 620px;
     }
 
+    .pipeline-status-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .brain-minimal .graph-panel {
         min-height: 0;
     }
@@ -2210,6 +2308,10 @@ body.brain-minimal {
     }
 
     .attachment-chip {
+        grid-template-columns: 1fr;
+    }
+
+    .pipeline-status-list {
         grid-template-columns: 1fr;
     }
 

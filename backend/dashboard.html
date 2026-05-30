@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Small Notes</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260526-refresh">
+    <link rel="stylesheet" href="/dashboard.css?v=20260527-status">
     <link rel="stylesheet" href="/dashboard-small-notes.css?v=20260526-shorts">
     <link rel="stylesheet" href="/shorts-analytics.css?v=20260527-detail">
 </head>
@@ -52,6 +52,12 @@
         const cachePrefix = "cartdotcom:dashboard:20260526-reel-status:";
         const cacheTtlMs = 5 * 60 * 1000;
         const synthesisCacheTtlMs = 60 * 1000;
+        const dashboardSynthesisStages = [
+            { id: "total", label: "Total" },
+            { id: "queued", label: "Queued" },
+            { id: "claimed", label: "Claimed" },
+            { id: "handled", label: "Handled" }
+        ];
 
         function readCache(key, ttlMs = cacheTtlMs) {
             try {
@@ -124,12 +130,12 @@
 
                 const header = document.createElement("div");
                 header.className = "synthesis-status-header";
-                header.innerHTML = `<span>${groupLabel}</span><strong class="skeleton-number">&nbsp;</strong>`;
+                header.innerHTML = `<span>${groupLabel}</span>`;
                 section.appendChild(header);
 
                 const list = document.createElement("ul");
                 list.className = "synthesis-stage-list";
-                for (let index = 0; index < 5; index += 1) {
+                for (let index = 0; index < dashboardSynthesisStages.length; index += 1) {
                     const item = document.createElement("li");
                     item.innerHTML = `<span class="skeleton-line">&nbsp;</span><strong class="skeleton-count">&nbsp;</strong>`;
                     list.appendChild(item);
@@ -159,20 +165,20 @@
                 const label = document.createElement("span");
                 label.textContent = group.label || "Synthesis";
 
-                const total = document.createElement("strong");
-                total.textContent = String(group.total ?? 0);
-                total.setAttribute("aria-label", `${group.total ?? 0} total`);
-
-                header.append(label, total);
+                header.appendChild(label);
                 section.appendChild(header);
 
                 const list = document.createElement("ul");
                 list.className = "synthesis-stage-list";
+                const stagesById = new Map((group.stages || []).map(stage => [stage.id, stage]));
 
-                for (const stage of group.stages || []) {
+                for (const basicStage of dashboardSynthesisStages) {
+                    const stage = basicStage.id === "total"
+                        ? { label: basicStage.label, count: group.total ?? 0 }
+                        : stagesById.get(basicStage.id) || { label: basicStage.label, count: 0 };
                     const item = document.createElement("li");
                     const stageLabel = document.createElement("span");
-                    stageLabel.textContent = stage.label || stage.id || "Status";
+                    stageLabel.textContent = basicStage.label || stage.label || "Status";
                     const count = document.createElement("strong");
                     count.textContent = String(stage.count ?? 0);
                     item.append(stageLabel, count);

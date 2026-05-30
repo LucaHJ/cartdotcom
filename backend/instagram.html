@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Instagram</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260526-refresh">
+    <link rel="stylesheet" href="/dashboard.css?v=20260527-status">
     <link rel="stylesheet" href="/instagram.css?v=20260526-confirm">
 </head>
 <body>
@@ -41,6 +41,7 @@
                     </svg>
                 </button>
             </div>
+            <section id="instagramStatusCounts" class="pipeline-status-board" aria-label="Instagram Reel status counts" aria-live="polite"></section>
             <p id="queueStatus" class="instagram-status" aria-live="polite">Loading</p>
             <div id="queueList" class="instagram-list" aria-live="polite"></div>
         </section>
@@ -61,6 +62,7 @@
         const queueList = document.getElementById("queueList");
         const diagnosticList = document.getElementById("diagnosticList");
         const refreshQueue = document.getElementById("refreshQueue");
+        const instagramStatusCounts = document.getElementById("instagramStatusCounts");
 
         function escapeHtml(value) {
             return String(value || "").replace(/[&<>"']/g, (char) => ({
@@ -97,6 +99,51 @@
                 throw new Error(payload.error || "Request failed");
             }
             return payload;
+        }
+
+        function renderStatusSkeleton(target) {
+            target.innerHTML = `
+                <div class="pipeline-status-head">
+                    <span class="pipeline-skeleton skeleton-status-title">&nbsp;</span>
+                </div>
+                <ul class="pipeline-status-list">
+                    ${Array.from({ length: 9 }, () => "<li><span class='pipeline-skeleton skeleton-status-label'>&nbsp;</span><strong class='pipeline-skeleton skeleton-status-count'>&nbsp;</strong></li>").join("")}
+                </ul>
+            `;
+        }
+
+        function renderStatusGroup(target, group) {
+            if (!group) {
+                target.innerHTML = "<p class='empty'>Instagram status counts unavailable.</p>";
+                return;
+            }
+
+            const stages = group.stages || [];
+            target.innerHTML = `
+                <div class="pipeline-status-head">
+                    <h2>${escapeHtml(group.label || "Instagram reels")}</h2>
+                    <strong aria-label="${escapeHtml(group.total ?? 0)} total">${escapeHtml(group.total ?? 0)}</strong>
+                </div>
+                <ul class="pipeline-status-list">
+                    ${stages.map(stage => `
+                        <li>
+                            <span>${escapeHtml(stage.label || stage.id || "Status")}</span>
+                            <strong>${escapeHtml(stage.count ?? 0)}</strong>
+                        </li>
+                    `).join("")}
+                </ul>
+            `;
+        }
+
+        async function loadInstagramStatus() {
+            renderStatusSkeleton(instagramStatusCounts);
+            try {
+                const payload = await api("/api/backend/synthesis-status");
+                const group = (payload.groups || []).find(item => item.id === "instagram");
+                renderStatusGroup(instagramStatusCounts, group);
+            } catch (error) {
+                instagramStatusCounts.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+            }
         }
 
         function renderSkeletons() {
@@ -187,14 +234,18 @@
                     method: "POST",
                     body: JSON.stringify({ id, decision })
                 });
-                await loadQueue();
+                await loadPage();
             } catch (error) {
                 queueStatus.textContent = error.message;
                 button.disabled = false;
             }
         }
 
-        refreshQueue.addEventListener("click", () => runRefreshButton(refreshQueue, loadQueue));
+        async function loadPage() {
+            await Promise.allSettled([loadInstagramStatus(), loadQueue()]);
+        }
+
+        refreshQueue.addEventListener("click", () => runRefreshButton(refreshQueue, loadPage));
         queueList.addEventListener("click", (event) => {
             const button = event.target.closest(".instagram-decision");
             if (!button) return;
@@ -207,7 +258,7 @@
             window.location.href = "/login.html";
         });
 
-        loadQueue();
+        loadPage();
     </script>
 </body>
 </html>

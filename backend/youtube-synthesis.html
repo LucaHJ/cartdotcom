@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>YouTube Synthesis Intake</title>
-    <link rel="stylesheet" href="/dashboard.css?v=20260526-refresh">
+    <link rel="stylesheet" href="/dashboard.css?v=20260527-status">
     <link rel="stylesheet" href="/youtube-synthesis.css?v=20260526-cache">
 </head>
 <body>
@@ -40,6 +40,8 @@
                 <p id="submitStatus" class="copy-status" aria-live="polite"></p>
             </form>
 
+            <section id="youtubeStatusCounts" class="pipeline-status-board" aria-label="YouTube synthesis status counts" aria-live="polite"></section>
+
             <div class="youtube-jobs-head">
                 <h2>Recent Jobs</h2>
                 <button class="icon-button refresh-button" id="refreshJobs" type="button" aria-label="Refresh jobs" title="Refresh jobs">
@@ -63,6 +65,7 @@
         const submitStatus = document.getElementById("submitStatus");
         const jobList = document.getElementById("jobList");
         const refreshJobs = document.getElementById("refreshJobs");
+        const youtubeStatusCounts = document.getElementById("youtubeStatusCounts");
         const cacheKey = "cartdotcom:youtube-synthesis:recent-jobs";
         const cacheTtlMs = 5 * 60 * 1000;
 
@@ -134,6 +137,51 @@
             return payload;
         }
 
+        function renderStatusSkeleton(target) {
+            target.innerHTML = `
+                <div class="pipeline-status-head">
+                    <span class="pipeline-skeleton skeleton-status-title">&nbsp;</span>
+                </div>
+                <ul class="pipeline-status-list">
+                    ${Array.from({ length: 6 }, () => "<li><span class='pipeline-skeleton skeleton-status-label'>&nbsp;</span><strong class='pipeline-skeleton skeleton-status-count'>&nbsp;</strong></li>").join("")}
+                </ul>
+            `;
+        }
+
+        function renderStatusGroup(target, group) {
+            if (!group) {
+                target.innerHTML = "<p class='empty'>YouTube status counts unavailable.</p>";
+                return;
+            }
+
+            const stages = group.stages || [];
+            target.innerHTML = `
+                <div class="pipeline-status-head">
+                    <h2>${escapeHtml(group.label || "YouTube videos")}</h2>
+                    <strong aria-label="${escapeHtml(group.total ?? 0)} total">${escapeHtml(group.total ?? 0)}</strong>
+                </div>
+                <ul class="pipeline-status-list">
+                    ${stages.map(stage => `
+                        <li>
+                            <span>${escapeHtml(stage.label || stage.id || "Status")}</span>
+                            <strong>${escapeHtml(stage.count ?? 0)}</strong>
+                        </li>
+                    `).join("")}
+                </ul>
+            `;
+        }
+
+        async function loadYoutubeStatus() {
+            renderStatusSkeleton(youtubeStatusCounts);
+            try {
+                const payload = await api("/api/backend/synthesis-status");
+                const group = (payload.groups || []).find(item => item.id === "youtube");
+                renderStatusGroup(youtubeStatusCounts, group);
+            } catch (error) {
+                youtubeStatusCounts.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+            }
+        }
+
         function renderJobs(jobs) {
             if (!jobs.length) {
                 jobList.innerHTML = "<p class='empty'>No YouTube synthesis jobs yet.</p>";
@@ -194,7 +242,7 @@
                 });
                 submitStatus.textContent = payload.duplicate ? (payload.message || `Already queued ${payload.jobId}`) : `Queued ${payload.jobId}`;
                 youtubeUrl.value = "";
-                await loadJobs();
+                await loadPage();
             } catch (error) {
                 submitStatus.textContent = error.message;
             } finally {
@@ -202,7 +250,11 @@
             }
         });
 
-        refreshJobs.addEventListener("click", () => runRefreshButton(refreshJobs, loadJobs));
+        async function loadPage() {
+            await Promise.allSettled([loadYoutubeStatus(), loadJobs()]);
+        }
+
+        refreshJobs.addEventListener("click", () => runRefreshButton(refreshJobs, loadPage));
         jobList.addEventListener("click", async (event) => {
             const button = event.target.closest(".youtube-retry");
             if (!button) return;
@@ -215,7 +267,7 @@
                     body: JSON.stringify({ retryJobId: button.dataset.jobId })
                 });
                 submitStatus.textContent = payload.duplicate ? (payload.message || `Already queued ${payload.jobId}`) : `Queued retry ${payload.jobId}`;
-                await loadJobs();
+                await loadPage();
             } catch (error) {
                 submitStatus.textContent = error.message;
                 button.disabled = false;
@@ -226,7 +278,7 @@
             window.location.href = "/login.html";
         });
 
-        loadJobs();
+        loadPage();
     </script>
 </body>
 </html>
