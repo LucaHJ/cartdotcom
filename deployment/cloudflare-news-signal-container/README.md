@@ -11,6 +11,8 @@ Routes:
 - `GET /api/articles` - Recently discovered articles.
 - `GET /api/jobs` - Recent research jobs and failures.
 - `GET /api/results` - Stored Codex research memos and structured fields.
+- `GET /api/market-impacts` - Ticker percentage moves from article publication time across 1h, 6h, 12h, 1d, 1w, and 1m.
+- `GET /api/simulation` - Paper portfolio built from stored article sentiment and confidence.
 - `POST /api/ingest` - Fetch RSS feeds, dedupe articles, and enqueue research jobs.
 - `POST /api/process-next` - Manually process one pending job.
 - `GET /container/health` - Container health.
@@ -110,7 +112,9 @@ Cloudflare's docs note that the first container deploy can take several minutes 
 ## Notes
 
 - Durable MVP state lives in Cloudflare D1 (`cartdotcom-news-signal`) and research jobs are sent through Cloudflare Queues (`cartdotcom-news-signal-research`).
-- The Worker polls configured RSS feeds every 30 minutes and can also be triggered manually with `POST /api/ingest`.
+- The Worker polls configured RSS feeds every 10 minutes and can also be triggered manually with `POST /api/ingest`.
+- Ticker validation uses cached Yahoo Finance chart data and stores computed article/ticker impacts in D1.
+- The simulation starts with `$100,000`, buys on sufficiently positive sentiment, sells existing holdings on sufficiently negative sentiment, and sizes trades from score magnitude and confidence.
 - Do not store durable job data on the container filesystem.
 - This package is separate from the existing Cloudflare Pages config so it can be deployed independently.
 - The next step is improving source coverage, event taxonomy, and the dashboard view over `/api/results`.

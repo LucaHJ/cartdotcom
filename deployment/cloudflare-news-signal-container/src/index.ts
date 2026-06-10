@@ -41,6 +41,58 @@ type ResearchResultFields = {
   summary?: string;
 };
 
+type ResearchResultRow = {
+  id: string;
+  article_id: string;
+  title: string;
+  url: string;
+  published_at: string | null;
+  created_at: string;
+  symbols: string | null;
+  sentiment_score: number | null;
+  confidence: number | null;
+  event_type: string | null;
+  summary: string | null;
+};
+
+type PricePoint = {
+  at: string;
+  price: number | null;
+  change_pct: number | null;
+};
+
+type PriceImpact = {
+  article_id: string;
+  title: string;
+  url: string;
+  published_at: string | null;
+  symbol: string;
+  baseline_price: number | null;
+  baseline_at: string | null;
+  intervals: Record<string, PricePoint>;
+};
+
+type SimulationTrade = {
+  action: "BUY" | "SELL";
+  symbol: string;
+  article_title: string;
+  article_url: string;
+  event_type: string | null;
+  sentiment_score: number;
+  confidence: number;
+  price: number;
+  shares: number;
+  notional: number;
+  cash_after: number;
+  portfolio_value: number;
+  action_at: string;
+};
+
+type SimulationPoint = {
+  at: string;
+  value: number;
+};
+
 class ResearchBusyError extends Error {
   constructor() {
     super("Another research job is already running");
@@ -411,6 +463,76 @@ const DASHBOARD_HTML = `<!doctype html>
       gap: 14px;
     }
 
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin: 12px 0 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tab {
+      border: 0;
+      border-bottom: 3px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      padding: 11px 8px 9px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .tab.active {
+      color: var(--text);
+      border-bottom-color: #123c69;
+    }
+
+    .hidden { display: none; }
+
+    .portfolio-head {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 18px;
+    }
+
+    .portfolio-value {
+      font-size: 38px;
+      line-height: 1;
+      font-weight: 800;
+    }
+
+    .portfolio-move {
+      font-size: 16px;
+      font-weight: 750;
+    }
+
+    .chart {
+      width: 100%;
+      height: 260px;
+      padding: 0 18px 18px;
+    }
+
+    .chart svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #fbfcfe;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .impact-wrap {
+      padding: 12px;
+      overflow-x: auto;
+    }
+
+    .impact-table th,
+    .impact-table td {
+      white-space: nowrap;
+    }
+
+    .pill[title] { cursor: help; }
+
     @media (max-width: 1050px) {
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .layout { grid-template-columns: 1fr; }
@@ -451,32 +573,65 @@ const DASHBOARD_HTML = `<!doctype html>
 
     <section class="grid metrics" id="metrics"></section>
 
-    <section class="layout">
-      <div class="panel">
+    <nav class="tabs" aria-label="Dashboard sections">
+      <button class="tab active" id="overview-tab" type="button">Overview</button>
+      <button class="tab" id="simulation-tab" type="button">Simulation</button>
+    </nav>
+
+    <section id="overview-panel">
+      <section class="layout">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Research Results</div>
+            <div class="panel-meta" id="results-meta">0 rows</div>
+          </div>
+          <div class="results" id="results"></div>
+        </div>
+
+        <div class="split">
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">Recent Jobs</div>
+              <div class="panel-meta" id="jobs-meta">0 rows</div>
+            </div>
+            <div id="jobs"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">Recent Articles</div>
+              <div class="panel-meta" id="articles-meta">0 rows</div>
+            </div>
+            <div id="articles"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
         <div class="panel-header">
-          <div class="panel-title">Research Results</div>
-          <div class="panel-meta" id="results-meta">0 rows</div>
+          <div class="panel-title">Ticker Price Impact</div>
+          <div class="panel-meta" id="impacts-meta">0 rows</div>
         </div>
-        <div class="results" id="results"></div>
-      </div>
+        <div class="impact-wrap" id="impacts"></div>
+      </section>
+    </section>
 
-      <div class="split">
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title">Recent Jobs</div>
-            <div class="panel-meta" id="jobs-meta">0 rows</div>
-          </div>
-          <div id="jobs"></div>
+    <section id="simulation-panel" class="hidden">
+      <section class="panel">
+        <div class="portfolio-head">
+          <div class="portfolio-value" id="portfolio-value">$0</div>
+          <div class="portfolio-move" id="portfolio-move">0.00%</div>
         </div>
+        <div class="chart" id="portfolio-chart"></div>
+      </section>
 
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title">Recent Articles</div>
-            <div class="panel-meta" id="articles-meta">0 rows</div>
-          </div>
-          <div id="articles"></div>
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Simulation Trades</div>
+          <div class="panel-meta" id="trades-meta">0 rows</div>
         </div>
-      </div>
+        <div id="trades"></div>
+      </section>
     </section>
   </main>
 
@@ -491,6 +646,18 @@ const DASHBOARD_HTML = `<!doctype html>
     const resultsMeta = document.getElementById("results-meta");
     const jobsMeta = document.getElementById("jobs-meta");
     const articlesMeta = document.getElementById("articles-meta");
+    const impactsEl = document.getElementById("impacts");
+    const impactsMeta = document.getElementById("impacts-meta");
+    const overviewTab = document.getElementById("overview-tab");
+    const simulationTab = document.getElementById("simulation-tab");
+    const overviewPanel = document.getElementById("overview-panel");
+    const simulationPanel = document.getElementById("simulation-panel");
+    const portfolioValueEl = document.getElementById("portfolio-value");
+    const portfolioMoveEl = document.getElementById("portfolio-move");
+    const portfolioChartEl = document.getElementById("portfolio-chart");
+    const tradesEl = document.getElementById("trades");
+    const tradesMeta = document.getElementById("trades-meta");
+    let simulationLoaded = false;
 
     tokenInput.value = sessionStorage.getItem("newsSignalToken") || "";
     syncAuthState();
@@ -510,6 +677,17 @@ const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("refresh-btn").addEventListener("click", loadAll);
     document.getElementById("ingest-btn").addEventListener("click", () => runAction("/api/ingest"));
     document.getElementById("requeue-btn").addEventListener("click", () => runAction("/api/requeue-pending?limit=10"));
+    overviewTab.addEventListener("click", () => setTab("overview"));
+    simulationTab.addEventListener("click", () => setTab("simulation"));
+
+    function setTab(tab) {
+      const simulation = tab === "simulation";
+      overviewTab.classList.toggle("active", !simulation);
+      simulationTab.classList.toggle("active", simulation);
+      overviewPanel.classList.toggle("hidden", simulation);
+      simulationPanel.classList.toggle("hidden", !simulation);
+      if (simulation && !simulationLoaded) loadSimulation();
+    }
 
     function syncAuthState() {
       authState.textContent = tokenInput.value.trim() ? "Token set" : "Token not set";
@@ -545,22 +723,38 @@ const DASHBOARD_HTML = `<!doctype html>
     async function loadAll() {
       setBusy(true);
       try {
-        const [status, results, jobs, articles] = await Promise.all([
+        const [status, results, jobs, articles, impacts] = await Promise.all([
           api("/api/status"),
           api("/api/results?limit=20"),
           api("/api/jobs?limit=12"),
           api("/api/articles?limit=12"),
+          api("/api/market-impacts?limit=8"),
         ]);
         renderMetrics(status);
         renderResults(results.results || []);
         renderJobs(jobs.jobs || []);
         renderArticles(articles.articles || []);
+        renderImpacts(impacts.impacts || []);
         lastUpdated.textContent = "Updated " + new Date().toLocaleTimeString();
       } catch (error) {
         showError(metricsEl, error);
         resultsEl.innerHTML = "";
         jobsEl.innerHTML = "";
         articlesEl.innerHTML = "";
+        impactsEl.innerHTML = "";
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadSimulation() {
+      setBusy(true);
+      try {
+        const payload = await api("/api/simulation?limit=60");
+        renderSimulation(payload.simulation);
+        simulationLoaded = true;
+      } catch (error) {
+        showError(tradesEl, error);
       } finally {
         setBusy(false);
       }
@@ -608,14 +802,15 @@ const DASHBOARD_HTML = `<!doctype html>
         return '<article class="result">' +
           '<a class="result-title" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || "Untitled") + '</a>' +
           '<div class="row">' +
-            pill(item.source_name || "Source", "blue") +
-            pill(item.event_type || "event_unknown", "") +
-            pill("score " + formatNumber(score), scoreClass) +
-            pill(item.impact_horizon || "unknown", "amber") +
-            pill("conf " + formatNumber(item.confidence), "green") +
+            pill(item.source_name || "Source", "blue", "News source that originally published or syndicated this article.") +
+            pill("published " + formatDate(item.published_at || item.created_at), "blue", "Article publication time used as the baseline for ticker price comparisons.") +
+            pill(item.event_type || "event_unknown", "", "Codex-classified event category used to group comparable market perception events.") +
+            pill("score " + formatNumber(score), scoreClass, "Sentiment score from -1 to 1 estimated by Codex from the article's expected public/investor perception impact; negative means bearish, positive means bullish.") +
+            pill(item.impact_horizon || "unknown", "amber", "Expected duration of market perception impact: immediate, short, medium, long, or unknown.") +
+            pill("conf " + formatNumber(item.confidence), "green", "Codex confidence from 0 to 1 based on source specificity, clarity of affected companies/sectors, and how directly the article maps to known market patterns.") +
           '</div>' +
           '<p class="summary">' + escapeHtml(item.summary || "") + '</p>' +
-          '<div class="row">' + renderArrayPills(item.symbols, "blue") + '</div>' +
+          '<div class="row">' + renderArrayPills(item.symbols, "blue", "Ticker identified by Codex as potentially exposed to this article's perception impact.") + '</div>' +
           '<details><summary>Memo</summary><pre>' + escapeHtml(item.memo || "") + '</pre></details>' +
         '</article>';
       }).join("");
@@ -628,7 +823,7 @@ const DASHBOARD_HTML = `<!doctype html>
         return;
       }
       jobsEl.innerHTML = table(["Status", "Attempts", "Article"], jobs.map((job) => [
-        pill(job.status || "unknown", statusClass(job.status)),
+        pill(job.status || "unknown", statusClass(job.status), "Current durable research job state in D1 and Cloudflare Queues."),
         escapeHtml(String(job.attempts || 0)),
         '<a class="truncate" href="' + escapeAttr(job.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(job.title || job.article_id || "Article") + '</a>',
       ]));
@@ -640,11 +835,80 @@ const DASHBOARD_HTML = `<!doctype html>
         articlesEl.innerHTML = '<div class="empty">No articles.</div>';
         return;
       }
-      articlesEl.innerHTML = table(["Status", "Source", "Article"], articles.map((article) => [
-        pill(article.status || "unknown", statusClass(article.status)),
+      articlesEl.innerHTML = table(["Status", "Published", "Source", "Article"], articles.map((article) => [
+        pill(article.status || "unknown", statusClass(article.status), "Article ingestion state: queued means discovered, analyzed means a research result has been stored."),
+        escapeHtml(formatDate(article.published_at || article.discovered_at)),
         escapeHtml(article.source_name || article.source_id || ""),
         '<a class="truncate" href="' + escapeAttr(article.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(article.title || "Article") + '</a>',
       ]));
+    }
+
+    function renderImpacts(impacts) {
+      impactsMeta.textContent = impacts.length + " rows";
+      if (!impacts.length) {
+        impactsEl.innerHTML = '<div class="empty">No price impacts yet. They appear after analyzed articles include public tickers.</div>';
+        return;
+      }
+      impactsEl.innerHTML = table(["Ticker", "Published", "Base", "1h", "6h", "12h", "1d", "1w", "1m", "Article"], impacts.map((impact) => [
+        pill(impact.symbol, "blue", "Ticker whose price is compared against the article publication baseline."),
+        escapeHtml(formatDate(impact.published_at || impact.baseline_at)),
+        escapeHtml(formatMoney(impact.baseline_price)),
+        impactPill(impact.intervals && impact.intervals["1h"], "1h"),
+        impactPill(impact.intervals && impact.intervals["6h"], "6h"),
+        impactPill(impact.intervals && impact.intervals["12h"], "12h"),
+        impactPill(impact.intervals && impact.intervals["1d"], "1d"),
+        impactPill(impact.intervals && impact.intervals["1w"], "1w"),
+        impactPill(impact.intervals && impact.intervals["1m"], "1m"),
+        '<a class="truncate" href="' + escapeAttr(impact.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(impact.title || "Article") + '</a>',
+      ]));
+    }
+
+    function renderSimulation(simulation) {
+      portfolioValueEl.textContent = formatMoney(simulation.current_value);
+      const move = Number(simulation.movement_pct || 0);
+      portfolioMoveEl.textContent = signedPct(move) + " since funding";
+      portfolioMoveEl.style.color = move >= 0 ? "var(--green)" : "var(--red)";
+      renderChart(simulation.points || []);
+      const trades = simulation.trades || [];
+      tradesMeta.textContent = trades.length + " rows";
+      if (!trades.length) {
+        tradesEl.innerHTML = '<div class="empty">No simulated trades yet. Trades require analyzed articles with tickers, score magnitude above 0.15, and confidence above 0.35.</div>';
+        return;
+      }
+      tradesEl.innerHTML = table(["Action", "Ticker", "Price", "Shares", "Notional", "Time", "Article"], trades.map((trade) => [
+        pill(trade.action, trade.action === "BUY" ? "green" : "red", "The simulated action generated from sentiment score and confidence. Positive signals buy; negative signals sell existing holdings."),
+        escapeHtml(trade.symbol),
+        escapeHtml(formatMoney(trade.price)),
+        escapeHtml(formatNumber(trade.shares)),
+        escapeHtml(formatMoney(trade.notional)),
+        escapeHtml(formatDate(trade.action_at)),
+        '<a class="truncate" href="' + escapeAttr(trade.article_url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(trade.article_title || "Article") + '</a>',
+      ]));
+    }
+
+    function renderChart(points) {
+      const clean = points.filter((point) => Number.isFinite(Number(point.value)));
+      if (clean.length < 2) {
+        portfolioChartEl.innerHTML = '<div class="empty">Not enough simulation points for a chart.</div>';
+        return;
+      }
+      const width = 900;
+      const height = 240;
+      const pad = 18;
+      const values = clean.map((point) => Number(point.value));
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = max - min || 1;
+      const path = clean.map((point, index) => {
+        const x = pad + (index / (clean.length - 1)) * (width - pad * 2);
+        const y = height - pad - ((Number(point.value) - min) / span) * (height - pad * 2);
+        return (index === 0 ? "M" : "L") + x.toFixed(2) + " " + y.toFixed(2);
+      }).join(" ");
+      portfolioChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Portfolio value movement">' +
+        '<path d="' + path + '" fill="none" stroke="#123c69" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        '<text x="' + pad + '" y="22" fill="#667085" font-size="12">' + escapeHtml(formatMoney(max)) + '</text>' +
+        '<text x="' + pad + '" y="' + (height - 8) + '" fill="#667085" font-size="12">' + escapeHtml(formatMoney(min)) + '</text>' +
+      '</svg>';
     }
 
     function table(headers, rows) {
@@ -653,14 +917,23 @@ const DASHBOARD_HTML = `<!doctype html>
         '</tbody></table>';
     }
 
-    function renderArrayPills(value, cls) {
+    function renderArrayPills(value, cls, hint) {
       let parsed = [];
       try { parsed = Array.isArray(value) ? value : JSON.parse(value || "[]"); } catch { parsed = []; }
-      return parsed.slice(0, 12).map((item) => pill(String(item), cls)).join("");
+      return parsed.slice(0, 12).map((item) => pill(String(item), cls, hint)).join("");
     }
 
-    function pill(text, cls) {
-      return '<span class="pill ' + escapeAttr(cls || "") + '">' + escapeHtml(text) + '</span>';
+    function pill(text, cls, hint = "") {
+      return '<span class="pill ' + escapeAttr(cls || "") + '" title="' + escapeAttr(hint) + '">' + escapeHtml(text) + '</span>';
+    }
+
+    function impactPill(point, label) {
+      if (!point || point.change_pct === null || point.change_pct === undefined) {
+        return pill("n/a", "", "No market price was available for the " + label + " interval yet.");
+      }
+      const value = Number(point.change_pct);
+      const cls = value > 0 ? "green" : value < 0 ? "red" : "amber";
+      return pill(signedPct(value), cls, "Price change at " + label + " after publication versus the closest available market price at article publication time.");
     }
 
     function statusClass(status) {
@@ -673,6 +946,23 @@ const DASHBOARD_HTML = `<!doctype html>
     function formatNumber(value) {
       const number = Number(value);
       return Number.isFinite(number) ? number.toFixed(2) : "n/a";
+    }
+
+    function formatDate(value) {
+      if (!value) return "unknown";
+      const date = new Date(value);
+      return Number.isFinite(date.getTime()) ? date.toLocaleString() : String(value);
+    }
+
+    function formatMoney(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }) : "n/a";
+    }
+
+    function signedPct(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "n/a";
+      return (number >= 0 ? "+" : "") + number.toFixed(2) + "%";
     }
 
     function showError(target, error) {
@@ -1000,6 +1290,299 @@ async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: num
   return { requeued: pending.results?.length || 0 };
 }
 
+function parseJsonArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeTicker(symbol: string): string | null {
+  const normalized = symbol.trim().toUpperCase().replace(/\s+/g, "");
+  if (!/^[A-Z0-9][A-Z0-9.\-]{0,11}$/.test(normalized)) return null;
+  if (["SPY", "QQQ", "IWM", "TLT", "XLE", "XLY", "XRT", "XHB", "KRE", "USO"].includes(normalized)) return normalized;
+  return normalized;
+}
+
+function yahooSymbol(symbol: string): string {
+  return symbol.replace(/\./g, "-");
+}
+
+function unixSeconds(value: string): number {
+  return Math.floor(new Date(value).getTime() / 1000);
+}
+
+function isoFromUnix(seconds: number): string {
+  return new Date(seconds * 1000).toISOString();
+}
+
+function intervalTargets(publishedAt: string): Record<string, number> {
+  const base = unixSeconds(publishedAt);
+  return {
+    "1h": base + 60 * 60,
+    "6h": base + 6 * 60 * 60,
+    "12h": base + 12 * 60 * 60,
+    "1d": base + 24 * 60 * 60,
+    "1w": base + 7 * 24 * 60 * 60,
+    "1m": base + 30 * 24 * 60 * 60,
+  };
+}
+
+function nearestPoint(
+  timestamps: number[],
+  closes: Array<number | null>,
+  target: number,
+  direction: "after" | "before" = "after",
+): { at: number; price: number } | null {
+  const candidates = timestamps
+    .map((at, index) => ({ at, price: closes[index] }))
+    .filter((point): point is { at: number; price: number } => typeof point.price === "number" && Number.isFinite(point.price));
+  if (!candidates.length) return null;
+
+  const filtered = direction === "after" ? candidates.filter((point) => point.at >= target) : candidates.filter((point) => point.at <= target);
+  const pool = filtered.length ? filtered : candidates;
+  return pool.reduce((best, point) => (Math.abs(point.at - target) < Math.abs(best.at - target) ? point : best), pool[0]);
+}
+
+async function fetchYahooChart(symbol: string, publishedAt: string): Promise<{ timestamps: number[]; closes: Array<number | null> }> {
+  const published = unixSeconds(publishedAt);
+  const now = Math.floor(Date.now() / 1000);
+  const period1 = Math.max(0, published - 3 * 24 * 60 * 60);
+  const period2 = Math.max(now, published + 32 * 24 * 60 * 60);
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?period1=${period1}&period2=${period2}&interval=1h`;
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/json",
+      "user-agent": "cartdotcom-news-signal-mvp/0.1",
+    },
+  });
+  if (!response.ok) throw new Error(`Yahoo chart HTTP ${response.status} for ${symbol}`);
+
+  const payload = (await response.json()) as {
+    chart?: {
+      result?: Array<{
+        timestamp?: number[];
+        indicators?: { quote?: Array<{ close?: Array<number | null> }> };
+      }>;
+      error?: unknown;
+    };
+  };
+  const result = payload.chart?.result?.[0];
+  return {
+    timestamps: result?.timestamp || [],
+    closes: result?.indicators?.quote?.[0]?.close || [],
+  };
+}
+
+async function computePriceImpact(article: ResearchResultRow, symbol: string): Promise<PriceImpact> {
+  const publishedAt = article.published_at || article.created_at;
+  const chart = await fetchYahooChart(symbol, publishedAt);
+  const baseline = nearestPoint(chart.timestamps, chart.closes, unixSeconds(publishedAt), "after");
+  const intervals: Record<string, PricePoint> = {};
+
+  for (const [label, target] of Object.entries(intervalTargets(publishedAt))) {
+    const point = nearestPoint(chart.timestamps, chart.closes, target, "after");
+    intervals[label] = {
+      at: point ? isoFromUnix(point.at) : isoFromUnix(target),
+      price: point?.price ?? null,
+      change_pct: point && baseline ? ((point.price - baseline.price) / baseline.price) * 100 : null,
+    };
+  }
+
+  return {
+    article_id: article.article_id,
+    title: article.title,
+    url: article.url,
+    published_at: article.published_at,
+    symbol,
+    baseline_price: baseline?.price ?? null,
+    baseline_at: baseline ? isoFromUnix(baseline.at) : null,
+    intervals,
+  };
+}
+
+async function getRecentResearchRows(env: Env, limit: number): Promise<ResearchResultRow[]> {
+  return listRows<ResearchResultRow>(
+    env.NEWS_DB,
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id ORDER BY research_results.created_at DESC LIMIT ?",
+    limit,
+  );
+}
+
+async function getCachedPriceImpact(env: Env, article: ResearchResultRow, symbol: string): Promise<PriceImpact | null> {
+  const cached = await env.NEWS_DB.prepare(
+    "SELECT baseline_price, baseline_at, intervals_json FROM price_impacts WHERE article_id = ? AND symbol = ? AND datetime(updated_at) > datetime('now', '-6 hours')",
+  )
+    .bind(article.article_id, symbol)
+    .first<{ baseline_price: number | null; baseline_at: string | null; intervals_json: string }>();
+  if (!cached) return null;
+
+  return {
+    article_id: article.article_id,
+    title: article.title,
+    url: article.url,
+    published_at: article.published_at,
+    symbol,
+    baseline_price: cached.baseline_price,
+    baseline_at: cached.baseline_at,
+    intervals: JSON.parse(cached.intervals_json),
+  };
+}
+
+async function getPriceImpact(env: Env, article: ResearchResultRow, symbol: string): Promise<PriceImpact | null> {
+  const cached = await getCachedPriceImpact(env, article, symbol);
+  if (cached) return cached;
+
+  try {
+    const impact = await computePriceImpact(article, symbol);
+    await env.NEWS_DB.prepare(
+      "INSERT INTO price_impacts (article_id, symbol, baseline_price, baseline_at, intervals_json, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(article_id, symbol) DO UPDATE SET baseline_price = excluded.baseline_price, baseline_at = excluded.baseline_at, intervals_json = excluded.intervals_json, updated_at = CURRENT_TIMESTAMP",
+    )
+      .bind(impact.article_id, impact.symbol, impact.baseline_price, impact.baseline_at, JSON.stringify(impact.intervals))
+      .run();
+    return impact;
+  } catch {
+    return null;
+  }
+}
+
+async function buildMarketImpacts(env: Env, limit: number): Promise<PriceImpact[]> {
+  const rows = await getRecentResearchRows(env, limit);
+  const impacts: PriceImpact[] = [];
+
+  for (const row of rows) {
+    const symbols = [...new Set(parseJsonArray(row.symbols).map(normalizeTicker).filter((symbol): symbol is string => Boolean(symbol)))].slice(0, 5);
+    for (const symbol of symbols) {
+      const impact = await getPriceImpact(env, row, symbol);
+      if (impact) impacts.push(impact);
+    }
+  }
+
+  return impacts;
+}
+
+async function buildSimulation(env: Env, limit: number): Promise<{
+  starting_cash: number;
+  current_value: number;
+  movement_pct: number;
+  cash: number;
+  positions: Record<string, number>;
+  points: SimulationPoint[];
+  trades: SimulationTrade[];
+}> {
+  const startingCash = 100000;
+  let cash = startingCash;
+  const positions = new Map<string, number>();
+  const trades: SimulationTrade[] = [];
+  const points: SimulationPoint[] = [{ at: new Date(0).toISOString(), value: startingCash }];
+  const rows = (await getRecentResearchRows(env, limit)).reverse();
+
+  function portfolioValue(prices: Map<string, number>): number {
+    let value = cash;
+    for (const [symbol, shares] of positions) {
+      value += shares * (prices.get(symbol) || 0);
+    }
+    return value;
+  }
+
+  for (const row of rows) {
+    const score = Number(row.sentiment_score || 0);
+    const confidence = Number(row.confidence || 0);
+    if (Math.abs(score) < 0.15 || confidence < 0.35) continue;
+
+    const symbols = [...new Set(parseJsonArray(row.symbols).map(normalizeTicker).filter((symbol): symbol is string => Boolean(symbol)))].slice(0, 4);
+    if (!symbols.length) continue;
+
+    const prices = new Map<string, number>();
+    for (const symbol of symbols) {
+      const impact = await getPriceImpact(env, row, symbol);
+      if (impact?.baseline_price) prices.set(symbol, impact.baseline_price);
+    }
+    if (!prices.size) continue;
+
+    const currentValue = portfolioValue(prices);
+    const totalNotional = Math.min(currentValue * 0.12, currentValue * Math.abs(score) * confidence * 0.18);
+    const perSymbol = totalNotional / prices.size;
+    const actionAt = row.published_at || row.created_at;
+
+    for (const [symbol, price] of prices) {
+      if (score > 0) {
+        const notional = Math.min(cash, perSymbol);
+        const shares = Math.floor((notional / price) * 10000) / 10000;
+        if (shares <= 0) continue;
+        cash -= shares * price;
+        positions.set(symbol, (positions.get(symbol) || 0) + shares);
+        const value = portfolioValue(prices);
+        trades.push({
+          action: "BUY",
+          symbol,
+          article_title: row.title,
+          article_url: row.url,
+          event_type: row.event_type,
+          sentiment_score: score,
+          confidence,
+          price,
+          shares,
+          notional: shares * price,
+          cash_after: cash,
+          portfolio_value: value,
+          action_at: actionAt,
+        });
+        points.push({ at: actionAt, value });
+      } else {
+        const held = positions.get(symbol) || 0;
+        if (held <= 0) continue;
+        const shares = Math.min(held, Math.floor((perSymbol / price) * 10000) / 10000);
+        if (shares <= 0) continue;
+        cash += shares * price;
+        positions.set(symbol, held - shares);
+        const value = portfolioValue(prices);
+        trades.push({
+          action: "SELL",
+          symbol,
+          article_title: row.title,
+          article_url: row.url,
+          event_type: row.event_type,
+          sentiment_score: score,
+          confidence,
+          price,
+          shares,
+          notional: shares * price,
+          cash_after: cash,
+          portfolio_value: value,
+          action_at: actionAt,
+        });
+        points.push({ at: actionAt, value });
+      }
+    }
+  }
+
+  const latestPrices = new Map<string, number>();
+  for (const [symbol] of positions) {
+    const latestRow = rows.find((row) => parseJsonArray(row.symbols).map(normalizeTicker).includes(symbol));
+    if (!latestRow) continue;
+    const impact = await getPriceImpact(env, latestRow, symbol);
+    const current = impact?.intervals["1m"]?.price || impact?.intervals["1w"]?.price || impact?.intervals["1d"]?.price || impact?.baseline_price;
+    if (current) latestPrices.set(symbol, current);
+  }
+
+  const currentValue = portfolioValue(latestPrices);
+  if (points.length) points.push({ at: new Date().toISOString(), value: currentValue });
+
+  return {
+    starting_cash: startingCash,
+    current_value: currentValue,
+    movement_pct: ((currentValue - startingCash) / startingCash) * 100,
+    cash,
+    positions: Object.fromEntries(positions),
+    points,
+    trades: trades.reverse(),
+  };
+}
+
 async function listRows<T>(db: D1Database, query: string, limit: number): Promise<T[]> {
   const clamped = Math.min(Math.max(limit, 1), 100);
   const result = await db.prepare(query).bind(clamped).all<T>();
@@ -1060,8 +1643,18 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     });
   }
 
+  if (url.pathname === "/api/market-impacts") {
+    return json({ ok: true, impacts: await buildMarketImpacts(env, limit) });
+  }
+
+  if (url.pathname === "/api/simulation") {
+    return json({ ok: true, simulation: await buildSimulation(env, limit) });
+  }
+
   if (url.pathname === "/api/ingest" && request.method === "POST") {
-    return json({ ok: true, ...(await ingestFeeds(env)) });
+    const ingestion = await ingestFeeds(env);
+    const requeued = await requeuePendingJobs(env, 10);
+    return json({ ok: true, ...ingestion, ...requeued });
   }
 
   if (url.pathname === "/api/process-next" && request.method === "POST") {
@@ -1173,6 +1766,7 @@ export default {
       try {
         await processJob(env, message.body.jobId);
         message.ack();
+        await requeuePendingJobs(env, 1);
       } catch (error) {
         if (error instanceof ResearchBusyError) {
           message.retry({ delaySeconds: 120 });
