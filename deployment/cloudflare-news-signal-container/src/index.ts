@@ -41,6 +41,12 @@ type ResearchResultFields = {
   summary?: string;
 };
 
+class ResearchBusyError extends Error {
+  constructor() {
+    super("Another research job is already running");
+  }
+}
+
 export interface Env {
   CODEX_CONTAINER: DurableObjectNamespace<CodexResearchContainer>;
   NEWS_DB: D1Database;
@@ -294,15 +300,21 @@ async function runContainerResearch(env: Env, prompt: string): Promise<string> {
 }
 
 async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId: string; skipped?: string }> {
+  await env.NEWS_DB.prepare(
+    "UPDATE research_jobs SET status = 'pending', last_error = 'Reset stale running job', finished_at = CURRENT_TIMESTAMP WHERE status = 'running' AND datetime(started_at) < datetime('now', '-20 minutes')",
+  ).run();
+
   const existing = await env.NEWS_DB.prepare("SELECT status FROM research_jobs WHERE id = ?").bind(jobId).first<{ status: string }>();
   if (!existing) return { ok: false, jobId, skipped: "missing" };
-  if (existing.status === "succeeded" || existing.status === "running") return { ok: true, jobId, skipped: existing.status };
+  if (existing.status === "succeeded") return { ok: true, jobId, skipped: existing.status };
+  if (existing.status === "running") throw new ResearchBusyError();
 
-  await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL WHERE id = ?",
+  const acquired = await env.NEWS_DB.prepare(
+    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL WHERE id = ? AND status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_jobs WHERE status = 'running')",
   )
     .bind(jobId)
     .run();
+  if (!acquired.meta?.changes) throw new ResearchBusyError();
 
   const article = await env.NEWS_DB.prepare(
     "SELECT id, source_id, title, url, summary, published_at, discovered_at FROM articles WHERE id = (SELECT article_id FROM research_jobs WHERE id = ?)",
@@ -519,8 +531,16 @@ export default {
 
   async queue(batch: MessageBatch<ResearchJobMessage>, env: Env): Promise<void> {
     for (const message of batch.messages) {
-      await processJob(env, message.body.jobId);
-      message.ack();
+      try {
+        await processJob(env, message.body.jobId);
+        message.ack();
+      } catch (error) {
+        if (error instanceof ResearchBusyError) {
+          message.retry({ delaySeconds: 120 });
+          continue;
+        }
+        throw error;
+      }
     }
   },
 };
