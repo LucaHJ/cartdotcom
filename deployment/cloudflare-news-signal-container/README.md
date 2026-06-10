@@ -12,6 +12,7 @@ Routes:
 - `GET /api/jobs` - Recent research jobs and failures.
 - `GET /api/results` - Stored Codex research memos and structured fields.
 - `GET /api/market-impacts` - Ticker percentage moves from article publication time across 1h, 6h, 12h, 1d, 1w, and 1m.
+- `GET /api/ticker-signals` - Ticker-level aggregate score/confidence with contributing article breakdowns.
 - `GET /api/simulation` - Paper portfolio built from stored article sentiment and confidence.
 - `POST /api/ingest` - Fetch RSS feeds, dedupe articles, and enqueue research jobs.
 - `POST /api/process-next` - Manually process one pending job.

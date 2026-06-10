@@ -74,6 +74,15 @@ type PriceImpact = {
   intervals: Record<string, PricePoint>;
 };
 
+type TickerSignal = {
+  symbol: string;
+  score: number;
+  confidence: number;
+  article_count: number;
+  latest_published_at: string | null;
+  impacts: PriceImpact[];
+};
+
 type SimulationTrade = {
   action: "BUY" | "SELL";
   symbol: string;
@@ -620,8 +629,8 @@ const DASHBOARD_HTML = `<!doctype html>
 
       <section class="panel" style="margin-top:14px">
         <div class="panel-header">
-          <div class="panel-title">Ticker Price Impact</div>
-          <div class="panel-meta" id="impacts-meta">0 rows</div>
+          <div class="panel-title">Ticker Signals</div>
+          <div class="panel-meta" id="impacts-meta">0 tickers</div>
         </div>
         <div class="impact-wrap" id="impacts"></div>
       </section>
@@ -745,13 +754,13 @@ const DASHBOARD_HTML = `<!doctype html>
           api("/api/results?limit=20"),
           api("/api/jobs?limit=12"),
           api("/api/articles?limit=12"),
-          api("/api/market-impacts?limit=8"),
+          api("/api/ticker-signals?limit=25"),
         ]);
         renderMetrics(status);
         renderResults(results.results || []);
         renderJobs(jobs.jobs || []);
         renderArticles(articles.articles || []);
-        renderImpacts(impacts.impacts || []);
+        renderImpacts(impacts.tickers || []);
         lastUpdated.textContent = "Updated " + new Date().toLocaleTimeString();
       } catch (error) {
         showError(metricsEl, error);
@@ -860,26 +869,40 @@ const DASHBOARD_HTML = `<!doctype html>
       ]));
     }
 
-    function renderImpacts(impacts) {
-      impactsMeta.textContent = impacts.length + " rows";
-      if (!impacts.length) {
-        impactsEl.innerHTML = '<div class="empty">No price impacts yet. They appear after analyzed articles include public tickers.</div>';
+    function renderImpacts(tickers) {
+      impactsMeta.textContent = tickers.length + " tickers";
+      if (!tickers.length) {
+        impactsEl.innerHTML = '<div class="empty">No ticker signals yet. They appear after analyzed articles include public tickers.</div>';
         return;
       }
-      impactsEl.innerHTML = table(["Ticker", "Score", "Conf", "Published", "Base", "1h", "6h", "12h", "1d", "1w", "1m", "Article"], impacts.map((impact) => [
-        pill(impact.symbol, "blue", "Ticker whose price is compared against the article publication baseline."),
-        pill(formatNumber(impact.sentiment_score), Number(impact.sentiment_score || 0) > 0.1 ? "green" : Number(impact.sentiment_score || 0) < -0.1 ? "red" : "amber", "Article sentiment score from -1 to 1 estimated by Codex; negative means bearish expected perception impact and positive means bullish."),
-        pill(formatNumber(impact.confidence), "green", "Article confidence from 0 to 1 estimated by Codex from source specificity, clarity of affected companies/sectors, and fit to known market patterns."),
-        escapeHtml(formatDate(impact.published_at || impact.baseline_at)),
-        escapeHtml(formatMoney(impact.baseline_price)),
-        impactPill(impact.intervals && impact.intervals["1h"], "1h"),
-        impactPill(impact.intervals && impact.intervals["6h"], "6h"),
-        impactPill(impact.intervals && impact.intervals["12h"], "12h"),
-        impactPill(impact.intervals && impact.intervals["1d"], "1d"),
-        impactPill(impact.intervals && impact.intervals["1w"], "1w"),
-        impactPill(impact.intervals && impact.intervals["1m"], "1m"),
-        '<a class="truncate" href="' + escapeAttr(impact.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(impact.title || "Article") + '</a>',
-      ]));
+      impactsEl.innerHTML = '<div class="results">' + tickers.map((ticker) => {
+        const score = Number(ticker.score || 0);
+        const scoreClass = score > 0.1 ? "green" : score < -0.1 ? "red" : "amber";
+        const rows = (ticker.impacts || []).map((impact) => [
+          '<a class="truncate" href="' + escapeAttr(impact.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(impact.title || "Article") + '</a>',
+          pill(formatNumber(impact.sentiment_score), Number(impact.sentiment_score || 0) > 0.1 ? "green" : Number(impact.sentiment_score || 0) < -0.1 ? "red" : "amber", "This article's individual sentiment score for expected perception impact."),
+          pill(formatNumber(impact.confidence), "green", "This article's individual Codex confidence score."),
+          escapeHtml(formatDate(impact.published_at || impact.baseline_at)),
+          impactPill(impact.intervals && impact.intervals["1h"], "1h"),
+          impactPill(impact.intervals && impact.intervals["6h"], "6h"),
+          impactPill(impact.intervals && impact.intervals["1d"], "1d"),
+        ]);
+
+        return '<article class="result">' +
+          '<div class="row" style="justify-content:space-between;margin-top:0">' +
+            '<strong style="font-size:20px">' + escapeHtml(ticker.symbol) + '</strong>' +
+            '<span>' +
+              pill("score " + formatNumber(score), scoreClass, "Ticker-level score: confidence-weighted average of article sentiment scores mentioning this ticker.") +
+              pill("conf " + formatNumber(ticker.confidence), "green", "Ticker-level confidence: weighted article confidence, reduced when article scores disagree in direction.") +
+              pill(String(ticker.article_count) + " articles", "blue", "Number of analyzed articles contributing to this ticker signal.") +
+            '</span>' +
+          '</div>' +
+          '<div class="summary">Latest mention: ' + escapeHtml(formatDate(ticker.latest_published_at)) + '</div>' +
+          '<details><summary>Article breakdown</summary>' +
+            table(["Article", "Score", "Conf", "Published", "1h", "6h", "1d"], rows) +
+          '</details>' +
+        '</article>';
+      }).join("") + '</div>';
     }
 
     function renderSimulation(simulation) {
@@ -1536,6 +1559,44 @@ async function buildMarketImpacts(env: Env, limit: number): Promise<PriceImpact[
   return impacts;
 }
 
+async function buildTickerSignals(env: Env, limit: number): Promise<TickerSignal[]> {
+  const impacts = await buildMarketImpacts(env, limit);
+  const grouped = new Map<string, PriceImpact[]>();
+
+  for (const impact of impacts) {
+    const items = grouped.get(impact.symbol) || [];
+    items.push(impact);
+    grouped.set(impact.symbol, items);
+  }
+
+  return [...grouped.entries()]
+    .map(([symbol, items]) => {
+      const weights = items.map((item) => Math.max(0.05, Number(item.confidence || 0)));
+      const weightTotal = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+      const weightedScore =
+        items.reduce((sum, item, index) => sum + Number(item.sentiment_score || 0) * weights[index], 0) / weightTotal;
+      const weightedConfidence =
+        items.reduce((sum, item, index) => sum + Number(item.confidence || 0) * weights[index], 0) / weightTotal;
+      const averageAbsScore = items.reduce((sum, item) => sum + Math.abs(Number(item.sentiment_score || 0)), 0) / Math.max(items.length, 1);
+      const agreement = averageAbsScore > 0 ? Math.min(1, Math.abs(weightedScore) / averageAbsScore) : 0;
+      const confidence = Math.max(0, Math.min(0.95, weightedConfidence * (0.35 + 0.65 * agreement)));
+      const latest = items
+        .map((item) => item.published_at)
+        .filter((value): value is string => Boolean(value))
+        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
+
+      return {
+        symbol,
+        score: weightedScore,
+        confidence,
+        article_count: items.length,
+        latest_published_at: latest,
+        impacts: items.sort((a, b) => new Date(b.published_at || b.baseline_at || 0).getTime() - new Date(a.published_at || a.baseline_at || 0).getTime()),
+      };
+    })
+    .sort((a, b) => Math.abs(b.score) * b.confidence * Math.log1p(b.article_count) - Math.abs(a.score) * a.confidence * Math.log1p(a.article_count));
+}
+
 async function buildSimulation(env: Env, limit: number): Promise<{
   starting_cash: number;
   current_value: number;
@@ -1756,6 +1817,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, impacts: await buildMarketImpacts(env, limit) });
   }
 
+  if (url.pathname === "/api/ticker-signals") {
+    return json({ ok: true, tickers: await buildTickerSignals(env, limit) });
+  }
+
   if (url.pathname === "/api/simulation") {
     return json({ ok: true, simulation: await buildSimulation(env, limit) });
   }
@@ -1849,6 +1914,7 @@ export default {
           "/api/articles",
           "/api/jobs",
           "/api/results",
+          "/api/ticker-signals",
           "/container/health",
           "/container/mcp-check",
           "/container/research",
