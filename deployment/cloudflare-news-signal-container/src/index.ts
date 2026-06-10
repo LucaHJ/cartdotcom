@@ -96,11 +96,624 @@ const SOURCES: Source[] = [
   },
 ];
 
+const DASHBOARD_HTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>News Signal Dashboard</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --panel-soft: #f1f4f8;
+      --text: #18202b;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --green: #097a55;
+      --red: #b42318;
+      --amber: #a15c07;
+      --blue: #1457a8;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, select { font: inherit; }
+
+    .shell {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    .subhead {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .btn {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 0 12px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }
+
+    .btn.primary {
+      border-color: #123c69;
+      background: #123c69;
+      color: white;
+    }
+
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    .tokenbar {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      margin: 16px 0;
+      align-items: center;
+    }
+
+    .tokenbar input {
+      min-width: 0;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 11px;
+      background: var(--panel);
+      color: var(--text);
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .metrics {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+
+    .metric, .panel, .result {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .metric {
+      padding: 14px;
+      min-height: 86px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 750;
+    }
+
+    .metric .note {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(340px, 0.9fr);
+      gap: 14px;
+      margin-top: 14px;
+      align-items: start;
+    }
+
+    .panel {
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .panel-meta {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .results {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+    }
+
+    .result {
+      padding: 13px;
+    }
+
+    .result-title {
+      display: block;
+      color: var(--text);
+      font-weight: 700;
+      line-height: 1.3;
+      text-decoration: none;
+    }
+
+    .result-title:hover { text-decoration: underline; }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+      align-items: center;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #eef2f6;
+      color: #344054;
+      font-size: 12px;
+      line-height: 1.2;
+      max-width: 100%;
+    }
+
+    .pill.green { background: #e6f4ee; color: var(--green); }
+    .pill.red { background: #fdecec; color: var(--red); }
+    .pill.amber { background: #fff2d6; color: var(--amber); }
+    .pill.blue { background: #e8f1ff; color: var(--blue); }
+
+    .summary {
+      margin-top: 10px;
+      color: #344054;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    details {
+      margin-top: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 9px;
+    }
+
+    summary {
+      cursor: pointer;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    pre {
+      margin: 10px 0 0;
+      max-height: 340px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #344054;
+      font-size: 12px;
+      line-height: 1.45;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+    }
+
+    th {
+      color: var(--muted);
+      background: var(--panel-soft);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    td a {
+      color: var(--text);
+      font-weight: 650;
+      text-decoration: none;
+    }
+
+    td a:hover { text-decoration: underline; }
+
+    .truncate {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .empty, .error {
+      padding: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .error { color: var(--red); }
+
+    .split {
+      display: grid;
+      gap: 14px;
+    }
+
+    @media (max-width: 1050px) {
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 720px) {
+      .shell { padding: 12px; }
+      .topbar { align-items: stretch; flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .tokenbar { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr; }
+      th:nth-child(3), td:nth-child(3) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>News Signal Dashboard</h1>
+        <div class="subhead">
+          <span id="last-updated">Not loaded</span>
+          <span id="auth-state">Token not set</span>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn" id="refresh-btn" type="button">Refresh</button>
+        <button class="btn" id="ingest-btn" type="button">Ingest</button>
+        <button class="btn primary" id="requeue-btn" type="button">Requeue</button>
+      </div>
+    </header>
+
+    <section class="tokenbar">
+      <input id="token-input" type="password" autocomplete="off" placeholder="Bearer token">
+      <button class="btn" id="save-token-btn" type="button">Save Token</button>
+      <button class="btn" id="clear-token-btn" type="button">Clear</button>
+    </section>
+
+    <section class="grid metrics" id="metrics"></section>
+
+    <section class="layout">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Research Results</div>
+          <div class="panel-meta" id="results-meta">0 rows</div>
+        </div>
+        <div class="results" id="results"></div>
+      </div>
+
+      <div class="split">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Recent Jobs</div>
+            <div class="panel-meta" id="jobs-meta">0 rows</div>
+          </div>
+          <div id="jobs"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Recent Articles</div>
+            <div class="panel-meta" id="articles-meta">0 rows</div>
+          </div>
+          <div id="articles"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const tokenInput = document.getElementById("token-input");
+    const authState = document.getElementById("auth-state");
+    const lastUpdated = document.getElementById("last-updated");
+    const metricsEl = document.getElementById("metrics");
+    const resultsEl = document.getElementById("results");
+    const jobsEl = document.getElementById("jobs");
+    const articlesEl = document.getElementById("articles");
+    const resultsMeta = document.getElementById("results-meta");
+    const jobsMeta = document.getElementById("jobs-meta");
+    const articlesMeta = document.getElementById("articles-meta");
+
+    tokenInput.value = sessionStorage.getItem("newsSignalToken") || "";
+    syncAuthState();
+
+    document.getElementById("save-token-btn").addEventListener("click", () => {
+      sessionStorage.setItem("newsSignalToken", tokenInput.value.trim());
+      syncAuthState();
+      loadAll();
+    });
+
+    document.getElementById("clear-token-btn").addEventListener("click", () => {
+      sessionStorage.removeItem("newsSignalToken");
+      tokenInput.value = "";
+      syncAuthState();
+    });
+
+    document.getElementById("refresh-btn").addEventListener("click", loadAll);
+    document.getElementById("ingest-btn").addEventListener("click", () => runAction("/api/ingest"));
+    document.getElementById("requeue-btn").addEventListener("click", () => runAction("/api/requeue-pending?limit=10"));
+
+    function syncAuthState() {
+      authState.textContent = tokenInput.value.trim() ? "Token set" : "Token not set";
+    }
+
+    function headers() {
+      const token = sessionStorage.getItem("newsSignalToken") || tokenInput.value.trim();
+      return token ? { Authorization: "Bearer " + token } : {};
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: { ...(options.headers || {}), ...headers() },
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "HTTP " + response.status);
+      return payload;
+    }
+
+    async function runAction(path) {
+      setBusy(true);
+      try {
+        await api(path, { method: "POST" });
+        await loadAll();
+      } catch (error) {
+        showError(metricsEl, error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadAll() {
+      setBusy(true);
+      try {
+        const [status, results, jobs, articles] = await Promise.all([
+          api("/api/status"),
+          api("/api/results?limit=20"),
+          api("/api/jobs?limit=12"),
+          api("/api/articles?limit=12"),
+        ]);
+        renderMetrics(status);
+        renderResults(results.results || []);
+        renderJobs(jobs.jobs || []);
+        renderArticles(articles.articles || []);
+        lastUpdated.textContent = "Updated " + new Date().toLocaleTimeString();
+      } catch (error) {
+        showError(metricsEl, error);
+        resultsEl.innerHTML = "";
+        jobsEl.innerHTML = "";
+        articlesEl.innerHTML = "";
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function setBusy(isBusy) {
+      for (const button of document.querySelectorAll("button")) button.disabled = isBusy;
+    }
+
+    function count(rows, status) {
+      const row = (rows || []).find((item) => item.status === status);
+      return row ? Number(row.count || 0) : 0;
+    }
+
+    function renderMetrics(status) {
+      const analyzed = count(status.articles, "analyzed");
+      const queued = count(status.articles, "queued");
+      const pending = count(status.jobs, "pending");
+      const running = count(status.jobs, "running");
+      const succeeded = count(status.jobs, "succeeded");
+      const failed = count(status.jobs, "failed");
+      const results = Number((status.results && status.results.count) || 0);
+      metricsEl.innerHTML = [
+        metric("Articles", analyzed + queued, analyzed + " analyzed, " + queued + " queued"),
+        metric("Results", results, succeeded + " succeeded"),
+        metric("Running", running, "Serialized Codex jobs"),
+        metric("Pending", pending, "Queued for research"),
+        metric("Failed", failed, "Needs review"),
+      ].join("");
+    }
+
+    function metric(label, value, note) {
+      return '<div class="metric"><div class="label">' + escapeHtml(label) + '</div><div class="value">' + escapeHtml(String(value)) + '</div><div class="note">' + escapeHtml(note) + '</div></div>';
+    }
+
+    function renderResults(results) {
+      resultsMeta.textContent = results.length + " rows";
+      if (!results.length) {
+        resultsEl.innerHTML = '<div class="empty">No research results yet.</div>';
+        return;
+      }
+      resultsEl.innerHTML = results.map((item) => {
+        const score = Number(item.sentiment_score || 0);
+        const scoreClass = score > 0.1 ? "green" : score < -0.1 ? "red" : "amber";
+        return '<article class="result">' +
+          '<a class="result-title" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || "Untitled") + '</a>' +
+          '<div class="row">' +
+            pill(item.source_name || "Source", "blue") +
+            pill(item.event_type || "event_unknown", "") +
+            pill("score " + formatNumber(score), scoreClass) +
+            pill(item.impact_horizon || "unknown", "amber") +
+            pill("conf " + formatNumber(item.confidence), "green") +
+          '</div>' +
+          '<p class="summary">' + escapeHtml(item.summary || "") + '</p>' +
+          '<div class="row">' + renderArrayPills(item.symbols, "blue") + '</div>' +
+          '<details><summary>Memo</summary><pre>' + escapeHtml(item.memo || "") + '</pre></details>' +
+        '</article>';
+      }).join("");
+    }
+
+    function renderJobs(jobs) {
+      jobsMeta.textContent = jobs.length + " rows";
+      if (!jobs.length) {
+        jobsEl.innerHTML = '<div class="empty">No jobs.</div>';
+        return;
+      }
+      jobsEl.innerHTML = table(["Status", "Attempts", "Article"], jobs.map((job) => [
+        pill(job.status || "unknown", statusClass(job.status)),
+        escapeHtml(String(job.attempts || 0)),
+        '<a class="truncate" href="' + escapeAttr(job.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(job.title || job.article_id || "Article") + '</a>',
+      ]));
+    }
+
+    function renderArticles(articles) {
+      articlesMeta.textContent = articles.length + " rows";
+      if (!articles.length) {
+        articlesEl.innerHTML = '<div class="empty">No articles.</div>';
+        return;
+      }
+      articlesEl.innerHTML = table(["Status", "Source", "Article"], articles.map((article) => [
+        pill(article.status || "unknown", statusClass(article.status)),
+        escapeHtml(article.source_name || article.source_id || ""),
+        '<a class="truncate" href="' + escapeAttr(article.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(article.title || "Article") + '</a>',
+      ]));
+    }
+
+    function table(headers, rows) {
+      return '<table><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody>' +
+        rows.map((row) => '<tr>' + row.map((cell) => '<td>' + cell + '</td>').join("") + '</tr>').join("") +
+        '</tbody></table>';
+    }
+
+    function renderArrayPills(value, cls) {
+      let parsed = [];
+      try { parsed = Array.isArray(value) ? value : JSON.parse(value || "[]"); } catch { parsed = []; }
+      return parsed.slice(0, 12).map((item) => pill(String(item), cls)).join("");
+    }
+
+    function pill(text, cls) {
+      return '<span class="pill ' + escapeAttr(cls || "") + '">' + escapeHtml(text) + '</span>';
+    }
+
+    function statusClass(status) {
+      if (status === "succeeded" || status === "analyzed") return "green";
+      if (status === "failed") return "red";
+      if (status === "running") return "blue";
+      return "amber";
+    }
+
+    function formatNumber(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number.toFixed(2) : "n/a";
+    }
+
+    function showError(target, error) {
+      target.innerHTML = '<div class="error">' + escapeHtml(error.message || String(error)) + '</div>';
+      lastUpdated.textContent = "Load failed";
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[char]);
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value).replace(/\\n/g, " ");
+    }
+
+    if (tokenInput.value.trim()) loadAll();
+  </script>
+</body>
+</html>`;
+
 function json(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload, null, 2), {
     ...init,
     headers: {
       "content-type": "application/json; charset=utf-8",
+      ...init.headers,
+    },
+  });
+}
+
+function html(payload: string, init: ResponseInit = {}): Response {
+  return new Response(payload, {
+    ...init,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
       ...init.headers,
     },
   });
@@ -518,11 +1131,16 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/" || url.pathname === "/health") {
+    if (url.pathname === "/" || url.pathname === "/dashboard") {
+      return html(DASHBOARD_HTML);
+    }
+
+    if (url.pathname === "/health") {
       return json({
         ok: true,
         service: "cartdotcom-news-signal-container",
         routes: [
+          "/dashboard",
           "/health",
           "/api/status",
           "/api/ingest",

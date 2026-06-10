@@ -4,6 +4,7 @@ This Worker/Container package is a proof-of-life runtime for the news signal MVP
 
 Routes:
 
+- `GET /dashboard` - Browser dashboard for status, articles, jobs, and research results.
 - `GET /health` - Worker health.
 - `GET /api/status` - Counts for articles, jobs, and results.
 - `GET /api/sources` - Configured MVP news feeds.
