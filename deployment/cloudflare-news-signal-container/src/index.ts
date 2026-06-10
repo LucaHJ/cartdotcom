@@ -94,13 +94,10 @@ export default {
     const path = url.pathname.replace(/^\/container/, "") || "/health";
     const container = getContainer(env.CODEX_CONTAINER, "research-worker");
 
-    if (path === "/start" && request.method === "POST") {
-      await startWithSecrets(container, env);
-      return json({ ok: true, state: await container.getState() });
-    }
+    await startWithSecrets(container, env);
 
-    if (path === "/mcp-check" || path === "/research" || path === "/login-check") {
-      await startWithSecrets(container, env);
+    if (path === "/start" && request.method === "POST") {
+      return json({ ok: true, state: await container.getState() });
     }
 
     return container.fetch(cloneForContainer(request, path));
