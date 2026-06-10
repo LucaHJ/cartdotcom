@@ -111,7 +111,6 @@ async def run_research(prompt: str, timeout_seconds: int = 3600) -> str:
         "approval-policy": "never",
         "sandbox": "read-only",
         "cwd": "/workspace",
-        "include-plan-tool": False,
     }
     model = os.getenv("CODEX_RESEARCH_MODEL", "").strip()
     if model:
