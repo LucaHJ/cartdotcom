@@ -32,17 +32,19 @@ function cloneForContainer(request: Request, path: string): Request {
   return new Request(target.toString(), request);
 }
 
+function containerEnv(env: Env): Record<string, string> {
+  return {
+    CODEX_HOME: "/home/codex/.codex",
+    CODEX_RESEARCH_MODEL: env.CODEX_RESEARCH_MODEL || "gpt-5.5",
+    CODEX_AUTH_JSON: env.CODEX_AUTH_JSON || "",
+    OPENAI_API_KEY: env.OPENAI_API_KEY || "",
+    CODEX_ACCESS_TOKEN: env.CODEX_ACCESS_TOKEN || "",
+  };
+}
+
 async function startWithSecrets(container: any, env: Env): Promise<void> {
-  await container.startAndWaitForPorts({
-    startOptions: {
-      envVars: {
-        CODEX_HOME: "/home/codex/.codex",
-        CODEX_RESEARCH_MODEL: env.CODEX_RESEARCH_MODEL || "gpt-5.5",
-        CODEX_AUTH_JSON: env.CODEX_AUTH_JSON || "",
-        OPENAI_API_KEY: env.OPENAI_API_KEY || "",
-        CODEX_ACCESS_TOKEN: env.CODEX_ACCESS_TOKEN || "",
-      },
-    },
+  await container.startAndWaitForPorts(undefined, undefined, {
+    envVars: containerEnv(env),
   });
 }
 
@@ -93,6 +95,16 @@ export default {
 
     const path = url.pathname.replace(/^\/container/, "") || "/health";
     const container = getContainer(env.CODEX_CONTAINER, "research-worker");
+
+    if (path === "/restart" && request.method === "POST") {
+      if (!env.CONTAINER_API_TOKEN) {
+        return json({ error: "Restart requires CONTAINER_API_TOKEN" }, { status: 403 });
+      }
+
+      await container.stop();
+      await startWithSecrets(container, env);
+      return json({ ok: true, state: await container.getState() });
+    }
 
     await startWithSecrets(container, env);
 
