@@ -101,7 +101,7 @@ export default {
         return json({ error: "Restart requires CONTAINER_API_TOKEN" }, { status: 403 });
       }
 
-      await container.stop();
+      await container.destroy();
       await startWithSecrets(container, env);
       return json({ ok: true, state: await container.getState() });
     }
