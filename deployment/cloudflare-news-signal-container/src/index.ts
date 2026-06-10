@@ -1336,6 +1336,7 @@ function nearestPoint(
   closes: Array<number | null>,
   target: number,
   direction: "after" | "before" = "after",
+  allowFallback = true,
 ): { at: number; price: number } | null {
   const candidates = timestamps
     .map((at, index) => ({ at, price: closes[index] }))
@@ -1343,6 +1344,7 @@ function nearestPoint(
   if (!candidates.length) return null;
 
   const filtered = direction === "after" ? candidates.filter((point) => point.at >= target) : candidates.filter((point) => point.at <= target);
+  if (!filtered.length && !allowFallback) return null;
   const pool = filtered.length ? filtered : candidates;
   return pool.reduce((best, point) => (Math.abs(point.at - target) < Math.abs(best.at - target) ? point : best), pool[0]);
 }
@@ -1384,7 +1386,7 @@ async function computePriceImpact(article: ResearchResultRow, symbol: string): P
   const intervals: Record<string, PricePoint> = {};
 
   for (const [label, target] of Object.entries(intervalTargets(publishedAt))) {
-    const point = nearestPoint(chart.timestamps, chart.closes, target, "after");
+    const point = target <= Math.floor(Date.now() / 1000) ? nearestPoint(chart.timestamps, chart.closes, target, "after", false) : null;
     intervals[label] = {
       at: point ? isoFromUnix(point.at) : isoFromUnix(target),
       price: point?.price ?? null,
