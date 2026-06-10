@@ -374,6 +374,19 @@ async function processNextJob(env: Env): Promise<{ ok: boolean; jobId?: string; 
   return processJob(env, job.id);
 }
 
+async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: number }> {
+  const clamped = Math.min(Math.max(limit, 1), 100);
+  const pending = await env.NEWS_DB.prepare("SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY queued_at ASC LIMIT ?")
+    .bind(clamped)
+    .all<{ id: string }>();
+
+  for (const job of pending.results || []) {
+    await env.RESEARCH_QUEUE.send({ jobId: job.id });
+  }
+
+  return { requeued: pending.results?.length || 0 };
+}
+
 async function listRows<T>(db: D1Database, query: string, limit: number): Promise<T[]> {
   const clamped = Math.min(Math.max(limit, 1), 100);
   const result = await db.prepare(query).bind(clamped).all<T>();
@@ -440,6 +453,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
   if (url.pathname === "/api/process-next" && request.method === "POST") {
     return json(await processNextJob(env));
+  }
+
+  if (url.pathname === "/api/requeue-pending" && request.method === "POST") {
+    return json({ ok: true, ...(await requeuePendingJobs(env, limit)) });
   }
 
   return json({ error: "Not found" }, { status: 404 });
@@ -526,7 +543,11 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(ingestFeeds(env));
+    ctx.waitUntil(
+      ingestFeeds(env).then(async () => {
+        await requeuePendingJobs(env, 25);
+      }),
+    );
   },
 
   async queue(batch: MessageBatch<ResearchJobMessage>, env: Env): Promise<void> {
