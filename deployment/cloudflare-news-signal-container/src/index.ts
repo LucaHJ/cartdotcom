@@ -141,6 +141,8 @@ function decodeXml(value: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
     .replace(/<[^>]+>/g, "")
     .trim();
 }
@@ -244,9 +246,9 @@ async function ingestFeeds(env: Env): Promise<{ fetched: unknown[]; inserted: nu
 function researchPrompt(article: Article): string {
   return `You are building a rapid news analysis database for market perception, not trading advice.
 
-Analyze this news item and compare it to similar historical events from your knowledge. Focus on how the item could shape investor/public perception of companies, sectors, and supply chains.
+Analyze this news item quickly. Focus on how it could shape investor/public perception of companies, sectors, and supply chains. Use the supplied article fields and your prior knowledge; do not do extended browsing unless the item is impossible to understand without it.
 
-Return a JSON object followed by a concise memo. The JSON object must have these fields:
+Return a JSON object followed by a concise memo under 350 words. The JSON object must have these fields:
 event_type, companies, industries, symbols, sentiment_score, impact_horizon, confidence, summary.
 
 Article:
@@ -281,7 +283,7 @@ async function runContainerResearch(env: Env, prompt: string): Promise<string> {
     new Request("https://container.local/research", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt, timeout_seconds: 900 }),
+      body: JSON.stringify({ prompt, timeout_seconds: 300 }),
     }),
   );
   const payload = (await response.json()) as { ok?: boolean; memo?: string; error?: string };
@@ -296,7 +298,9 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   if (!existing) return { ok: false, jobId, skipped: "missing" };
   if (existing.status === "succeeded" || existing.status === "running") return { ok: true, jobId, skipped: existing.status };
 
-  await env.NEWS_DB.prepare("UPDATE research_jobs SET status = 'running', attempts = attempts + 1, started_at = CURRENT_TIMESTAMP WHERE id = ?")
+  await env.NEWS_DB.prepare(
+    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL WHERE id = ?",
+  )
     .bind(jobId)
     .run();
 
@@ -335,7 +339,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
         fields.summary || null,
         memo,
       ),
-      env.NEWS_DB.prepare("UPDATE research_jobs SET status = 'succeeded', finished_at = CURRENT_TIMESTAMP WHERE id = ?").bind(jobId),
+      env.NEWS_DB.prepare("UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?").bind(jobId),
       env.NEWS_DB.prepare("UPDATE articles SET status = 'analyzed' WHERE id = ?").bind(article.id),
     ]);
     return { ok: true, jobId };
