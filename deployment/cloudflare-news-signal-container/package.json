@@ -1,0 +1,19 @@
+{
+  "name": "cartdotcom-news-signal-container",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "mcp-check": "wrangler deploy && wrangler containers list"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260610.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.99.0"
+  }
+}
