@@ -1398,12 +1398,29 @@ function nearestPoint(
   return pool.reduce((best, point) => (Math.abs(point.at - target) < Math.abs(best.at - target) ? point : best), pool[0]);
 }
 
+function nearestElapsedPoint(timestamps: number[], closes: Array<number | null>, target: number): { at: number; price: number } | null {
+  const now = Math.floor(Date.now() / 1000);
+  if (target > now) return null;
+
+  const elapsedTarget = Math.min(target, now);
+  const candidates = timestamps
+    .map((at, index) => ({ at, price: closes[index] }))
+    .filter((point): point is { at: number; price: number } => typeof point.price === "number" && Number.isFinite(point.price) && point.at <= now);
+  if (!candidates.length) return null;
+
+  const afterTarget = candidates.filter((point) => point.at >= elapsedTarget);
+  const beforeTarget = candidates.filter((point) => point.at <= elapsedTarget);
+  const pool = afterTarget.length ? afterTarget : beforeTarget;
+  if (!pool.length) return null;
+  return pool.reduce((best, point) => (Math.abs(point.at - elapsedTarget) < Math.abs(best.at - elapsedTarget) ? point : best), pool[0]);
+}
+
 async function fetchYahooChart(symbol: string, publishedAt: string): Promise<{ timestamps: number[]; closes: Array<number | null> }> {
   const published = unixSeconds(publishedAt);
   const now = Math.floor(Date.now() / 1000);
   const period1 = Math.max(0, published - 3 * 24 * 60 * 60);
   const period2 = Math.max(now, published + 32 * 24 * 60 * 60);
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?period1=${period1}&period2=${period2}&interval=1h`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?period1=${period1}&period2=${period2}&interval=1h&includePrePost=true`;
   const response = await fetch(url, {
     headers: {
       accept: "application/json",
@@ -1435,7 +1452,7 @@ async function computePriceImpact(article: ResearchResultRow, symbol: string): P
   const intervals: Record<string, PricePoint> = {};
 
   for (const [label, target] of Object.entries(intervalTargets(publishedAt))) {
-    const point = target <= Math.floor(Date.now() / 1000) ? nearestPoint(chart.timestamps, chart.closes, target, "after", false) : null;
+    const point = nearestElapsedPoint(chart.timestamps, chart.closes, target);
     intervals[label] = {
       at: point ? isoFromUnix(point.at) : isoFromUnix(target),
       price: point?.price ?? null,
