@@ -66,6 +66,8 @@ type PriceImpact = {
   title: string;
   url: string;
   published_at: string | null;
+  sentiment_score: number | null;
+  confidence: number | null;
   symbol: string;
   baseline_price: number | null;
   baseline_at: string | null;
@@ -864,8 +866,10 @@ const DASHBOARD_HTML = `<!doctype html>
         impactsEl.innerHTML = '<div class="empty">No price impacts yet. They appear after analyzed articles include public tickers.</div>';
         return;
       }
-      impactsEl.innerHTML = table(["Ticker", "Published", "Base", "1h", "6h", "12h", "1d", "1w", "1m", "Article"], impacts.map((impact) => [
+      impactsEl.innerHTML = table(["Ticker", "Score", "Conf", "Published", "Base", "1h", "6h", "12h", "1d", "1w", "1m", "Article"], impacts.map((impact) => [
         pill(impact.symbol, "blue", "Ticker whose price is compared against the article publication baseline."),
+        pill(formatNumber(impact.sentiment_score), Number(impact.sentiment_score || 0) > 0.1 ? "green" : Number(impact.sentiment_score || 0) < -0.1 ? "red" : "amber", "Article sentiment score from -1 to 1 estimated by Codex; negative means bearish expected perception impact and positive means bullish."),
+        pill(formatNumber(impact.confidence), "green", "Article confidence from 0 to 1 estimated by Codex from source specificity, clarity of affected companies/sectors, and fit to known market patterns."),
         escapeHtml(formatDate(impact.published_at || impact.baseline_at)),
         escapeHtml(formatMoney(impact.baseline_price)),
         impactPill(impact.intervals && impact.intervals["1h"], "1h"),
@@ -1444,6 +1448,8 @@ async function computePriceImpact(article: ResearchResultRow, symbol: string): P
     title: article.title,
     url: article.url,
     published_at: article.published_at,
+    sentiment_score: article.sentiment_score,
+    confidence: article.confidence,
     symbol,
     baseline_price: baseline?.price ?? null,
     baseline_at: baseline ? isoFromUnix(baseline.at) : null,
@@ -1472,6 +1478,8 @@ async function getCachedPriceImpact(env: Env, article: ResearchResultRow, symbol
     title: article.title,
     url: article.url,
     published_at: article.published_at,
+    sentiment_score: article.sentiment_score,
+    confidence: article.confidence,
     symbol,
     baseline_price: cached.baseline_price,
     baseline_at: cached.baseline_at,
