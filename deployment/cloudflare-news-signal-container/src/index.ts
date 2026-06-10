@@ -91,6 +91,8 @@ type SimulationTrade = {
 type SimulationPoint = {
   at: string;
   value: number;
+  cash: number;
+  investments: number;
 };
 
 class ResearchBusyError extends Error {
@@ -506,6 +508,13 @@ const DASHBOARD_HTML = `<!doctype html>
       font-weight: 750;
     }
 
+    .portfolio-breakdown {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 18px 14px;
+    }
+
     .chart {
       width: 100%;
       height: 260px;
@@ -622,6 +631,10 @@ const DASHBOARD_HTML = `<!doctype html>
           <div class="portfolio-value" id="portfolio-value">$0</div>
           <div class="portfolio-move" id="portfolio-move">0.00%</div>
         </div>
+        <div class="portfolio-breakdown">
+          <span class="pill blue" id="portfolio-cash">Cash $0</span>
+          <span class="pill green" id="portfolio-investments">Investments $0</span>
+        </div>
         <div class="chart" id="portfolio-chart"></div>
       </section>
 
@@ -654,6 +667,8 @@ const DASHBOARD_HTML = `<!doctype html>
     const simulationPanel = document.getElementById("simulation-panel");
     const portfolioValueEl = document.getElementById("portfolio-value");
     const portfolioMoveEl = document.getElementById("portfolio-move");
+    const portfolioCashEl = document.getElementById("portfolio-cash");
+    const portfolioInvestmentsEl = document.getElementById("portfolio-investments");
     const portfolioChartEl = document.getElementById("portfolio-chart");
     const tradesEl = document.getElementById("trades");
     const tradesMeta = document.getElementById("trades-meta");
@@ -868,6 +883,10 @@ const DASHBOARD_HTML = `<!doctype html>
       const move = Number(simulation.movement_pct || 0);
       portfolioMoveEl.textContent = signedPct(move) + " since funding";
       portfolioMoveEl.style.color = move >= 0 ? "var(--green)" : "var(--red)";
+      portfolioCashEl.textContent = "Cash " + formatMoney(simulation.cash);
+      portfolioCashEl.title = "Uninvested cash remaining in the simulated account.";
+      portfolioInvestmentsEl.textContent = "Investments " + formatMoney(simulation.investment_value);
+      portfolioInvestmentsEl.title = "Current market value of simulated stock positions.";
       renderChart(simulation.points || []);
       const trades = simulation.trades || [];
       tradesMeta.textContent = trades.length + " rows";
@@ -894,20 +913,39 @@ const DASHBOARD_HTML = `<!doctype html>
       }
       const width = 900;
       const height = 240;
-      const pad = 18;
-      const values = clean.map((point) => Number(point.value));
+      const pad = 34;
+      const values = clean.flatMap((point) => [Number(point.value), Number(point.cash || 0), Number(point.investments || 0)]);
       const min = Math.min(...values);
       const max = Math.max(...values);
       const span = max - min || 1;
-      const path = clean.map((point, index) => {
-        const x = pad + (index / (clean.length - 1)) * (width - pad * 2);
-        const y = height - pad - ((Number(point.value) - min) / span) * (height - pad * 2);
-        return (index === 0 ? "M" : "L") + x.toFixed(2) + " " + y.toFixed(2);
+
+      function makePath(key) {
+        return clean.map((point, index) => {
+          const x = pad + (index / (clean.length - 1)) * (width - pad * 2);
+          const y = height - pad - ((Number(point[key] || 0) - min) / span) * (height - pad * 2);
+          return (index === 0 ? "M" : "L") + x.toFixed(2) + " " + y.toFixed(2);
+        }).join(" ");
+      }
+
+      const slices = clean.filter((_, index) => index === 0 || index === clean.length - 1 || index % Math.max(1, Math.floor(clean.length / 5)) === 0).map((point, index) => {
+        const originalIndex = clean.indexOf(point);
+        const x = pad + (originalIndex / (clean.length - 1)) * (width - pad * 2);
+        const labelY = index % 2 === 0 ? height - 8 : height - 20;
+        const label = formatShortDate(point.at);
+        return '<line x1="' + x.toFixed(2) + '" y1="' + pad + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad) + '" stroke="#d9e0ea"></line>' +
+          '<text x="' + x.toFixed(2) + '" y="' + labelY + '" fill="#667085" font-size="10" text-anchor="' + (originalIndex === 0 ? "start" : originalIndex === clean.length - 1 ? "end" : "middle") + '">' + escapeHtml(label) + '</text>';
       }).join(" ");
+
       portfolioChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Portfolio value movement">' +
-        '<path d="' + path + '" fill="none" stroke="#123c69" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        slices +
+        '<path d="' + makePath("value") + '" fill="none" stroke="#123c69" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        '<path d="' + makePath("cash") + '" fill="none" stroke="#1457a8" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        '<path d="' + makePath("investments") + '" fill="none" stroke="#097a55" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>' +
         '<text x="' + pad + '" y="22" fill="#667085" font-size="12">' + escapeHtml(formatMoney(max)) + '</text>' +
         '<text x="' + pad + '" y="' + (height - 8) + '" fill="#667085" font-size="12">' + escapeHtml(formatMoney(min)) + '</text>' +
+        '<text x="' + (width - 190) + '" y="22" fill="#123c69" font-size="12">Total</text>' +
+        '<text x="' + (width - 135) + '" y="22" fill="#1457a8" font-size="12">Cash</text>' +
+        '<text x="' + (width - 88) + '" y="22" fill="#097a55" font-size="12">Invested</text>' +
       '</svg>';
     }
 
@@ -952,6 +990,13 @@ const DASHBOARD_HTML = `<!doctype html>
       if (!value) return "unknown";
       const date = new Date(value);
       return Number.isFinite(date.getTime()) ? date.toLocaleString() : String(value);
+    }
+
+    function formatShortDate(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (!Number.isFinite(date.getTime())) return String(value);
+      return date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
     }
 
     function formatMoney(value) {
@@ -1471,6 +1516,7 @@ async function buildSimulation(env: Env, limit: number): Promise<{
   current_value: number;
   movement_pct: number;
   cash: number;
+  investment_value: number;
   positions: Record<string, number>;
   points: SimulationPoint[];
   trades: SimulationTrade[];
@@ -1478,15 +1524,30 @@ async function buildSimulation(env: Env, limit: number): Promise<{
   const startingCash = 100000;
   let cash = startingCash;
   const positions = new Map<string, number>();
+  const lastActionAt = new Map<string, number>();
+  const lastBuyAt = new Map<string, number>();
   const trades: SimulationTrade[] = [];
-  const points: SimulationPoint[] = [{ at: new Date(0).toISOString(), value: startingCash }];
+  const points: SimulationPoint[] = [];
   const rows = (await getRecentResearchRows(env, limit)).reverse();
+  const actionCooldownMs = 12 * 60 * 60 * 1000;
+  const minimumHoldMs = 3 * 24 * 60 * 60 * 1000;
 
-  function portfolioValue(prices: Map<string, number>): number {
-    let value = cash;
+  function investmentValue(prices: Map<string, number>): number {
+    let value = 0;
     for (const [symbol, shares] of positions) {
       value += shares * (prices.get(symbol) || 0);
     }
+    return value;
+  }
+
+  function portfolioValue(prices: Map<string, number>): number {
+    return cash + investmentValue(prices);
+  }
+
+  function addPoint(at: string, prices: Map<string, number>): number {
+    const investments = investmentValue(prices);
+    const value = cash + investments;
+    points.push({ at, value, cash, investments });
     return value;
   }
 
@@ -1509,15 +1570,28 @@ async function buildSimulation(env: Env, limit: number): Promise<{
     const totalNotional = Math.min(currentValue * 0.12, currentValue * Math.abs(score) * confidence * 0.18);
     const perSymbol = totalNotional / prices.size;
     const actionAt = row.published_at || row.created_at;
+    const actionTime = new Date(actionAt).getTime();
 
     for (const [symbol, price] of prices) {
       if (score > 0) {
+        const held = positions.get(symbol) || 0;
+        const lastAction = lastActionAt.get(symbol) || 0;
+        const existingValue = held * price;
+        const maxPositionValue = currentValue * 0.15;
+        const canAddToExisting = actionTime - lastAction >= 24 * 60 * 60 * 1000 && score >= 0.45 && confidence >= 0.65;
+        if (held > 0 && !canAddToExisting) continue;
+        if (actionTime - lastAction < actionCooldownMs) continue;
+        if (existingValue >= maxPositionValue) continue;
+
         const notional = Math.min(cash, perSymbol);
-        const shares = Math.floor((notional / price) * 10000) / 10000;
+        const cappedNotional = Math.min(notional, Math.max(0, maxPositionValue - existingValue));
+        const shares = Math.floor((cappedNotional / price) * 10000) / 10000;
         if (shares <= 0) continue;
         cash -= shares * price;
         positions.set(symbol, (positions.get(symbol) || 0) + shares);
-        const value = portfolioValue(prices);
+        lastActionAt.set(symbol, actionTime);
+        lastBuyAt.set(symbol, actionTime);
+        const value = addPoint(actionAt, prices);
         trades.push({
           action: "BUY",
           symbol,
@@ -1533,15 +1607,21 @@ async function buildSimulation(env: Env, limit: number): Promise<{
           portfolio_value: value,
           action_at: actionAt,
         });
-        points.push({ at: actionAt, value });
       } else {
         const held = positions.get(symbol) || 0;
         if (held <= 0) continue;
-        const shares = Math.min(held, Math.floor((perSymbol / price) * 10000) / 10000);
+        const lastAction = lastActionAt.get(symbol) || 0;
+        const lastBuy = lastBuyAt.get(symbol) || 0;
+        const criticalBearishExit = score <= -0.65 && confidence >= 0.75;
+        if (actionTime - lastAction < actionCooldownMs && !criticalBearishExit) continue;
+        if (actionTime - lastBuy < minimumHoldMs && !criticalBearishExit) continue;
+
+        const shares = criticalBearishExit ? held : Math.min(held, Math.floor((perSymbol / price) * 10000) / 10000);
         if (shares <= 0) continue;
         cash += shares * price;
         positions.set(symbol, held - shares);
-        const value = portfolioValue(prices);
+        lastActionAt.set(symbol, actionTime);
+        const value = addPoint(actionAt, prices);
         trades.push({
           action: "SELL",
           symbol,
@@ -1557,7 +1637,6 @@ async function buildSimulation(env: Env, limit: number): Promise<{
           portfolio_value: value,
           action_at: actionAt,
         });
-        points.push({ at: actionAt, value });
       }
     }
   }
@@ -1572,16 +1651,19 @@ async function buildSimulation(env: Env, limit: number): Promise<{
   }
 
   const currentValue = portfolioValue(latestPrices);
-  if (points.length) points.push({ at: new Date().toISOString(), value: currentValue });
+  const currentInvestmentValue = investmentValue(latestPrices);
+  if (!points.length) points.push({ at: new Date().toISOString(), value: startingCash, cash: startingCash, investments: 0 });
+  points.push({ at: new Date().toISOString(), value: currentValue, cash, investments: currentInvestmentValue });
 
   return {
     starting_cash: startingCash,
     current_value: currentValue,
     movement_pct: ((currentValue - startingCash) / startingCash) * 100,
     cash,
+    investment_value: currentInvestmentValue,
     positions: Object.fromEntries(positions),
     points,
-    trades: trades.reverse(),
+    trades: trades.sort((a, b) => new Date(b.action_at).getTime() - new Date(a.action_at).getTime()),
   };
 }
 
