@@ -5,6 +5,13 @@ This Worker/Container package is a proof-of-life runtime for the news signal MVP
 Routes:
 
 - `GET /health` - Worker health.
+- `GET /api/status` - Counts for articles, jobs, and results.
+- `GET /api/sources` - Configured MVP news feeds.
+- `GET /api/articles` - Recently discovered articles.
+- `GET /api/jobs` - Recent research jobs and failures.
+- `GET /api/results` - Stored Codex research memos and structured fields.
+- `POST /api/ingest` - Fetch RSS feeds, dedupe articles, and enqueue research jobs.
+- `POST /api/process-next` - Manually process one pending job.
 - `GET /container/health` - Container health.
 - `GET /container/mcp-check` - Starts `codex mcp-server` and returns exposed tools.
 - `POST /container/research` - Sends a prompt to Codex MCP and returns the memo.
@@ -101,6 +108,8 @@ Cloudflare's docs note that the first container deploy can take several minutes 
 
 ## Notes
 
-- Do not store durable job data on the container filesystem. Use Cloudflare Queues/D1/R2 for durable state.
+- Durable MVP state lives in Cloudflare D1 (`cartdotcom-news-signal`) and research jobs are sent through Cloudflare Queues (`cartdotcom-news-signal-research`).
+- The Worker polls configured RSS feeds every 30 minutes and can also be triggered manually with `POST /api/ingest`.
+- Do not store durable job data on the container filesystem.
 - This package is separate from the existing Cloudflare Pages config so it can be deployed independently.
-- The next step is wiring Cloudflare Queues/D1 to call `/container/research` for queued jobs.
+- The next step is improving source coverage, event taxonomy, and the dashboard view over `/api/results`.

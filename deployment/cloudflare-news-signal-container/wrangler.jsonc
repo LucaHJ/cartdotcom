@@ -7,8 +7,33 @@
   "observability": {
     "enabled": true
   },
+  "triggers": {
+    "crons": ["*/30 * * * *"]
+  },
   "vars": {
     "CODEX_RESEARCH_MODEL": "gpt-5.5"
+  },
+  "d1_databases": [
+    {
+      "binding": "NEWS_DB",
+      "database_name": "cartdotcom-news-signal",
+      "database_id": "8a3a5b15-c56a-4212-b8fe-38de91878b6a"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "RESEARCH_QUEUE",
+        "queue": "cartdotcom-news-signal-research"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "cartdotcom-news-signal-research",
+        "max_batch_size": 1,
+        "max_retries": 3
+      }
+    ]
   },
   "containers": [
     {
