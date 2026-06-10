@@ -12,10 +12,10 @@ RUN apt-get update \
 RUN npm install -g @openai/codex@0.139.0
 
 WORKDIR /app
-COPY container/requirements.txt /app/requirements.txt
+COPY requirements.txt /app/requirements.txt
 RUN python3 -m pip install --break-system-packages --no-cache-dir -r /app/requirements.txt
 
-COPY container/app.py /app/app.py
+COPY app.py /app/app.py
 
 RUN useradd --create-home --shell /bin/bash codex \
     && mkdir -p /workspace /home/codex/.codex \
