@@ -1,4 +1,4 @@
-const DATA_URL = "data/open-close-universe.json?v=20260611-openclose1";
+const DATA_URL = "data/open-close-universe.json?v=20260611-openclose2";
 const STARTING_EQUITY = 100000;
 const TRADING_DAYS = 252;
 
@@ -66,6 +66,30 @@ function dailyReturn(row, symbol, direction, costBps) {
     return directional - costBps / 10000;
 }
 
+function comparisonCurves(symbol) {
+    if (symbol === "portfolio") {
+        const base = Object.fromEntries(
+            appState.metadata.symbols.map((item) => [item.symbol, appState.data[0].symbols[item.symbol].close])
+        );
+        const priceIndex = appState.data.map((row) => mean(
+            appState.metadata.symbols.map((item) => row.symbols[item.symbol].close / base[item.symbol])
+        ));
+        return {
+            buyHoldCurve: priceIndex.map((value) => STARTING_EQUITY * value),
+            priceCurve: priceIndex.map((value) => value * 100),
+            priceLabel: "Price index"
+        };
+    }
+
+    const firstClose = appState.data[0].symbols[symbol].close;
+    const closes = appState.data.map((row) => row.symbols[symbol].close);
+    return {
+        buyHoldCurve: closes.map((close) => STARTING_EQUITY * (close / firstClose)),
+        priceCurve: closes,
+        priceLabel: "Close price"
+    };
+}
+
 function metricsFromReturns(returns) {
     let equity = STARTING_EQUITY;
     let peak = STARTING_EQUITY;
@@ -103,14 +127,15 @@ function computeResults() {
     const symbolResults = symbols.map((symbol) => {
         const returns = appState.data.map((row) => dailyReturn(row, symbol, direction, costBps));
         const metrics = metricsFromReturns(returns);
-        return { symbol, meta: appState.metadata.symbols.find((item) => item.symbol === symbol), returns, ...metrics };
+        return { symbol, meta: appState.metadata.symbols.find((item) => item.symbol === symbol), returns, ...metrics, ...comparisonCurves(symbol) };
     });
     const portfolioReturns = appState.data.map((_, index) => mean(symbolResults.map((result) => result.returns[index])));
     const portfolio = {
         symbol: "portfolio",
         meta: { symbol: "portfolio", name: "Equal-weight portfolio", group: "All symbols" },
         returns: portfolioReturns,
-        ...metricsFromReturns(portfolioReturns)
+        ...metricsFromReturns(portfolioReturns),
+        ...comparisonCurves("portfolio")
     };
     const allResults = [portfolio, ...symbolResults];
     return {
@@ -139,21 +164,40 @@ function drawChart(result) {
 
     const width = rect.width;
     const height = rect.height;
-    const pad = { top: 22, right: 52, bottom: 34, left: 56 };
+    const pad = { top: 44, right: 72, bottom: 34, left: 56 };
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = "#181b20";
     ctx.fillRect(0, 0, width, height);
 
     const values = result.equityCurve;
-    if (values.length < 2) return;
+    const buyHold = result.buyHoldCurve;
+    const prices = result.priceCurve;
+    if (values.length < 2 || buyHold.length < 2 || prices.length < 2) return;
 
-    const min = Math.min(...values);
-    const max = Math.max(...values);
+    const min = Math.min(...values, ...buyHold);
+    const max = Math.max(...values, ...buyHold);
     const range = max - min || 1;
+    const priceMin = Math.min(...prices);
+    const priceMax = Math.max(...prices);
+    const priceRange = priceMax - priceMin || 1;
     const plotW = width - pad.left - pad.right;
     const plotH = height - pad.top - pad.bottom;
     const xFor = (index) => pad.left + (index / Math.max(values.length - 1, 1)) * plotW;
     const yFor = (value) => pad.top + ((max - value) / range) * plotH;
+    const yForPrice = (value) => pad.top + ((priceMax - value) / priceRange) * plotH;
+
+    const drawSeries = (series, color, yScale, lineWidth = 2) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+        series.forEach((value, index) => {
+            const x = xFor(index);
+            const y = yScale(value);
+            if (index === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+    };
 
     ctx.strokeStyle = "#383f4b";
     ctx.lineWidth = 1;
@@ -165,21 +209,27 @@ function drawChart(result) {
     }
     ctx.stroke();
 
-    ctx.strokeStyle = result.totalReturn >= 0 ? "#a4f0c8" : "#ffb4b1";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    values.forEach((value, index) => {
-        const x = xFor(index);
-        const y = yFor(value);
-        if (index === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
+    drawSeries(values, result.totalReturn >= 0 ? "#a4f0c8" : "#ffb4b1", yFor, 2.3);
+    drawSeries(buyHold, "#79c6ff", yFor, 2);
+    drawSeries(prices, "#f2c56b", yForPrice, 1.8);
 
     ctx.fillStyle = "#9aa3b2";
     ctx.font = "12px Segoe UI";
     ctx.fillText(money(max), width - pad.right + 8, pad.top + 5);
     ctx.fillText(money(min), width - pad.right + 8, height - pad.bottom);
+    ctx.fillStyle = "#f2c56b";
+    ctx.fillText(priceMax.toFixed(result.symbol === "portfolio" ? 1 : 2), width - pad.right + 8, pad.top + 20);
+    ctx.fillText(priceMin.toFixed(result.symbol === "portfolio" ? 1 : 2), width - pad.right + 8, height - pad.bottom - 15);
+    ctx.fillStyle = "#a4f0c8";
+    ctx.fillRect(pad.left, 17, 20, 3);
+    ctx.fillText("intraday strategy", pad.left + 28, 21);
+    ctx.fillStyle = "#79c6ff";
+    ctx.fillRect(pad.left + 146, 17, 20, 3);
+    ctx.fillText("buy and hold", pad.left + 174, 21);
+    ctx.fillStyle = "#f2c56b";
+    ctx.fillRect(pad.left + 270, 17, 20, 3);
+    ctx.fillText(result.priceLabel, pad.left + 298, 21);
+    ctx.fillStyle = "#9aa3b2";
     ctx.fillText(appState.data[0].date, pad.left, height - 12);
     ctx.fillText(appState.data[appState.data.length - 1].date, width - pad.right - 74, height - 12);
 }
