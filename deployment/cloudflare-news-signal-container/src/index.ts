@@ -31,14 +31,26 @@ type ResearchJobMessage = {
 };
 
 type ResearchResultFields = {
+  event_title?: string;
   event_type?: string;
   companies?: string[];
   industries?: string[];
   symbols?: string[];
+  impact_details?: ImpactDetail[];
   sentiment_score?: number;
   impact_horizon?: string;
   confidence?: number;
   summary?: string;
+  event_blurb?: string;
+};
+
+type ImpactDetail = {
+  kind?: "company" | "industry" | "supply_chain" | "market";
+  name?: string;
+  symbol?: string | null;
+  direction?: "bullish" | "bearish" | "mixed" | "neutral";
+  confidence?: number;
+  reason?: string;
 };
 
 type ResearchResultRow = {
@@ -53,6 +65,7 @@ type ResearchResultRow = {
   confidence: number | null;
   event_type: string | null;
   summary: string | null;
+  memo: string | null;
 };
 
 type PricePoint = {
@@ -69,6 +82,9 @@ type PriceImpact = {
   sentiment_score: number | null;
   confidence: number | null;
   symbol: string;
+  company: string | null;
+  direction: string | null;
+  rationale: string | null;
   baseline_price: number | null;
   baseline_at: string | null;
   intervals: Record<string, PricePoint>;
@@ -581,6 +597,7 @@ const DASHBOARD_HTML = `<!doctype html>
       <div class="actions">
         <button class="btn" id="refresh-btn" type="button">Refresh</button>
         <button class="btn" id="ingest-btn" type="button">Ingest</button>
+        <button class="btn" id="reanalyze-btn" type="button">Reanalyze</button>
         <button class="btn primary" id="requeue-btn" type="button">Requeue</button>
       </div>
     </header>
@@ -602,7 +619,7 @@ const DASHBOARD_HTML = `<!doctype html>
       <section class="layout">
         <div class="panel">
           <div class="panel-header">
-            <div class="panel-title">Research Results</div>
+            <div class="panel-title">Event Summaries</div>
             <div class="panel-meta" id="results-meta">0 rows</div>
           </div>
           <div class="results" id="results"></div>
@@ -617,22 +634,15 @@ const DASHBOARD_HTML = `<!doctype html>
             <div id="jobs"></div>
           </div>
 
-          <div class="panel">
-            <div class="panel-header">
-              <div class="panel-title">Recent Articles</div>
-              <div class="panel-meta" id="articles-meta">0 rows</div>
-            </div>
-            <div id="articles"></div>
-          </div>
         </div>
       </section>
 
       <section class="panel" style="margin-top:14px">
         <div class="panel-header">
-          <div class="panel-title">Ticker Signals</div>
-          <div class="panel-meta" id="impacts-meta">0 tickers</div>
+          <div class="panel-title">Recent Articles</div>
+          <div class="panel-meta" id="articles-meta">0 rows</div>
         </div>
-        <div class="impact-wrap" id="impacts"></div>
+        <div id="articles"></div>
       </section>
     </section>
 
@@ -670,8 +680,6 @@ const DASHBOARD_HTML = `<!doctype html>
     const resultsMeta = document.getElementById("results-meta");
     const jobsMeta = document.getElementById("jobs-meta");
     const articlesMeta = document.getElementById("articles-meta");
-    const impactsEl = document.getElementById("impacts");
-    const impactsMeta = document.getElementById("impacts-meta");
     const overviewTab = document.getElementById("overview-tab");
     const simulationTab = document.getElementById("simulation-tab");
     const overviewPanel = document.getElementById("overview-panel");
@@ -709,6 +717,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     document.getElementById("refresh-btn").addEventListener("click", loadAll);
     document.getElementById("ingest-btn").addEventListener("click", () => runAction("/api/ingest"));
+    document.getElementById("reanalyze-btn").addEventListener("click", () => runAction("/api/reanalyze-recent?limit=20"));
     document.getElementById("requeue-btn").addEventListener("click", () => runAction("/api/requeue-pending?limit=10"));
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
@@ -761,25 +770,22 @@ const DASHBOARD_HTML = `<!doctype html>
     async function loadAll() {
       setBusy(true);
       try {
-        const [status, results, jobs, articles, impacts] = await Promise.all([
+        const [status, results, jobs, articles] = await Promise.all([
           api("/api/status"),
           api("/api/results?limit=20"),
           api("/api/jobs?limit=12"),
           api("/api/articles?limit=12"),
-          api("/api/ticker-signals?limit=25"),
         ]);
         renderMetrics(status);
         renderResults(results.results || []);
         renderJobs(jobs.jobs || []);
         renderArticles(articles.articles || []);
-        renderImpacts(impacts.tickers || []);
         lastUpdated.textContent = "Updated " + new Date().toLocaleTimeString();
       } catch (error) {
         showError(metricsEl, error);
         resultsEl.innerHTML = "";
         jobsEl.innerHTML = "";
         articlesEl.innerHTML = "";
-        impactsEl.innerHTML = "";
       } finally {
         setBusy(false);
       }
@@ -831,14 +837,33 @@ const DASHBOARD_HTML = `<!doctype html>
     function renderResults(results) {
       resultsMeta.textContent = results.length + " rows";
       if (!results.length) {
-        resultsEl.innerHTML = '<div class="empty">No research results yet.</div>';
+        resultsEl.innerHTML = '<div class="empty">No event summaries yet.</div>';
         return;
       }
       resultsEl.innerHTML = results.map((item) => {
+        const parsed = parseMemoJson(item.memo || "");
+        const eventTitle = parsed.event_title || item.event_type || item.title || "Untitled event";
+        const blurb = parsed.event_blurb || item.summary || "";
+        const impactDetails = normalizeImpactDetailsClient(parsed.impact_details);
         const score = Number(item.sentiment_score || 0);
         const scoreClass = score > 0.1 ? "green" : score < -0.1 ? "red" : "amber";
+        const impactRows = impactDetails.length ? impactDetails.map((impact) => [
+          pill(impact.kind || "impact", "blue", "Impact category identified by Codex after reasoning through the event's causal path."),
+          escapeHtml(impact.name || impact.symbol || "Unknown"),
+          escapeHtml(impact.symbol || "private/n/a"),
+          pill(impact.direction || "unknown", directionClass(impact.direction), "Speculated stock value direction from this event: bullish, bearish, mixed, neutral, or unknown."),
+          pill(formatNumber(impact.confidence), "green", "Confidence for this specific impacted entity, based on how direct and explicit the causal path is."),
+          escapeHtml(impact.reason || ""),
+        ]) : [[
+          pill("legacy", "amber", "This older result predates structured impact rationales."),
+          escapeHtml(parseArray(item.companies).join(", ") || "See memo"),
+          escapeHtml(parseArray(item.symbols).join(", ") || "n/a"),
+          pill(score > 0.1 ? "bullish" : score < -0.1 ? "bearish" : "mixed", scoreClass, "Legacy direction inferred from article-level score."),
+          pill(formatNumber(item.confidence), "green", "Article-level confidence from the legacy analysis."),
+          escapeHtml(item.summary || "Open memo for details."),
+        ]];
         return '<article class="result">' +
-          '<a class="result-title" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || "Untitled") + '</a>' +
+          '<a class="result-title" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(eventTitle) + '</a>' +
           '<div class="row">' +
             pill(item.source_name || "Source", "blue", "News source that originally published or syndicated this article.") +
             pill("published " + formatDate(item.published_at || item.created_at), "blue", "Article publication time used as the baseline for ticker price comparisons.") +
@@ -847,8 +872,9 @@ const DASHBOARD_HTML = `<!doctype html>
             pill(item.impact_horizon || "unknown", "amber", "Expected duration of market perception impact: immediate, short, medium, long, or unknown.") +
             pill("conf " + formatNumber(item.confidence), "green", "Codex confidence from 0 to 1 based on source specificity, clarity of affected companies/sectors, and how directly the article maps to known market patterns.") +
           '</div>' +
-          '<p class="summary">' + escapeHtml(item.summary || "") + '</p>' +
-          '<div class="row">' + renderArrayPills(item.symbols, "blue", "Ticker identified by Codex as potentially exposed to this article's perception impact.") + '</div>' +
+          '<p class="summary">' + escapeHtml(blurb) + '</p>' +
+          table(["Type", "Impacted", "Ticker", "Direction", "Conf", "Why"], impactRows) +
+          '<details><summary>Source article</summary><p class="summary"><a href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || "Article") + '</a></p></details>' +
           '<details><summary>Memo</summary><pre>' + escapeHtml(item.memo || "") + '</pre></details>' +
         '</article>';
       }).join("");
@@ -879,42 +905,6 @@ const DASHBOARD_HTML = `<!doctype html>
         escapeHtml(article.source_name || article.source_id || ""),
         '<a class="truncate" href="' + escapeAttr(article.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(article.title || "Article") + '</a>',
       ]));
-    }
-
-    function renderImpacts(tickers) {
-      impactsMeta.textContent = tickers.length + " tickers";
-      if (!tickers.length) {
-        impactsEl.innerHTML = '<div class="empty">No ticker signals yet. They appear after analyzed articles include public tickers.</div>';
-        return;
-      }
-      impactsEl.innerHTML = '<div class="results">' + tickers.map((ticker) => {
-        const score = Number(ticker.score || 0);
-        const scoreClass = score > 0.1 ? "green" : score < -0.1 ? "red" : "amber";
-        const rows = (ticker.impacts || []).map((impact) => [
-          '<a class="truncate" href="' + escapeAttr(impact.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(impact.title || "Article") + '</a>',
-          pill(formatNumber(impact.sentiment_score), Number(impact.sentiment_score || 0) > 0.1 ? "green" : Number(impact.sentiment_score || 0) < -0.1 ? "red" : "amber", "This article's individual sentiment score for expected perception impact."),
-          pill(formatNumber(impact.confidence), "green", "This article's individual Codex confidence score."),
-          escapeHtml(formatDate(impact.published_at || impact.baseline_at)),
-          impactPill(impact.intervals && impact.intervals["1h"], "1h"),
-          impactPill(impact.intervals && impact.intervals["6h"], "6h"),
-          impactPill(impact.intervals && impact.intervals["1d"], "1d"),
-        ]);
-
-        return '<article class="result">' +
-          '<div class="row" style="justify-content:space-between;margin-top:0">' +
-            '<strong style="font-size:20px">' + escapeHtml(ticker.symbol) + '</strong>' +
-            '<span>' +
-              pill("score " + formatNumber(score), scoreClass, "Ticker-level score: confidence-weighted average of article sentiment scores mentioning this ticker.") +
-              pill("conf " + formatNumber(ticker.confidence), "green", "Ticker-level confidence: weighted article confidence, reduced when article scores disagree in direction.") +
-              pill(String(ticker.article_count) + " articles", "blue", "Number of analyzed articles contributing to this ticker signal.") +
-            '</span>' +
-          '</div>' +
-          '<div class="summary">Latest mention: ' + escapeHtml(formatDate(ticker.latest_published_at)) + '</div>' +
-          '<details><summary>Article breakdown</summary>' +
-            table(["Article", "Score", "Conf", "Published", "1h", "6h", "1d"], rows) +
-          '</details>' +
-        '</article>';
-      }).join("") + '</div>';
     }
 
     function renderSimulation(simulation) {
@@ -1000,6 +990,54 @@ const DASHBOARD_HTML = `<!doctype html>
       return parsed.slice(0, 12).map((item) => pill(String(item), cls, hint)).join("");
     }
 
+    function parseArray(value) {
+      try {
+        const parsed = Array.isArray(value) ? value : JSON.parse(value || "[]");
+        return Array.isArray(parsed) ? parsed.map(String) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function parseMemoJson(value) {
+      const text = String(value || "");
+      const start = text.indexOf("{");
+      if (start < 0) return {};
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = start; index < text.length; index += 1) {
+        const char = text[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === "\\\\") escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') inString = true;
+        else if (char === "{") depth += 1;
+        else if (char === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            try { return JSON.parse(text.slice(start, index + 1)); } catch { return {}; }
+          }
+        }
+      }
+      return {};
+    }
+
+    function normalizeImpactDetailsClient(value) {
+      if (!Array.isArray(value)) return [];
+      return value.filter((item) => item && typeof item === "object").map((item) => ({
+        kind: String(item.kind || ""),
+        name: String(item.name || ""),
+        symbol: item.symbol ? String(item.symbol).toUpperCase() : "",
+        direction: String(item.direction || ""),
+        confidence: item.confidence,
+        reason: String(item.reason || ""),
+      })).filter((item) => item.name || item.symbol || item.reason);
+    }
+
     function pill(text, cls, hint = "") {
       return '<span class="pill ' + escapeAttr(cls || "") + '" title="' + escapeAttr(hint) + '">' + escapeHtml(text) + '</span>';
     }
@@ -1018,6 +1056,13 @@ const DASHBOARD_HTML = `<!doctype html>
       if (status === "failed") return "red";
       if (status === "running") return "blue";
       return "amber";
+    }
+
+    function directionClass(direction) {
+      if (direction === "bullish") return "green";
+      if (direction === "bearish") return "red";
+      if (direction === "mixed") return "amber";
+      return "";
     }
 
     function formatNumber(value) {
@@ -1242,7 +1287,18 @@ function researchPrompt(article: Article): string {
 Analyze this news item quickly. Focus on how it could shape investor/public perception of companies, sectors, and supply chains. Use the supplied article fields and your prior knowledge; do not do extended browsing unless the item is impossible to understand without it.
 
 Return a JSON object followed by a concise memo under 350 words. The JSON object must have these fields:
-event_type, companies, industries, symbols, sentiment_score, impact_horizon, confidence, summary.
+event_title, event_type, event_blurb, impact_details, companies, industries, symbols, sentiment_score, impact_horizon, confidence, summary.
+
+impact_details must be an array of objects with:
+kind, name, symbol, direction, confidence, reason.
+
+Use these logical steps before choosing symbols:
+1. Identify the concrete event, not just the article topic.
+2. Identify direct actors named in the event.
+3. Identify customers, suppliers, competitors, substitutes, and platform owners only when the article creates a specific economic or perception link.
+4. Exclude broad peers or famous related companies unless the article gives a clear causal path.
+5. For each included public ticker, write the causal path in reason.
+6. If the article is about Apple, xAI, OpenAI, or another company, do not include GOOGL/GOOG unless Google/Alphabet is directly named or clearly affected as a competitor, supplier, customer, platform owner, or regulatory target.
 
 Article:
 Title: ${article.title}
@@ -1254,19 +1310,52 @@ Rules:
 - sentiment_score is from -1 to 1 for perceived market impact.
 - impact_horizon is one of immediate, short, medium, long, unknown.
 - confidence is from 0 to 1.
-- If symbols are uncertain, include likely public tickers only and explain uncertainty in the memo.
+- direction is one of bullish, bearish, mixed, neutral.
+- symbols must include only public tickers from impact_details where symbol is not null and reason gives a concrete causal path.
+- If a company is private, put symbol null.
+- If symbols are uncertain, omit them or use null and explain uncertainty in the memo.
 - Mention comparable historical events or patterns when useful.`;
 }
 
 function parseResearchFields(memo: string): ResearchResultFields {
-  const match = memo.match(/\{[\s\S]*?\}/);
-  if (!match) return {};
+  const jsonText = extractFirstJsonObject(memo);
+  if (!jsonText) return {};
   try {
-    const parsed = JSON.parse(match[0]) as ResearchResultFields;
+    const parsed = JSON.parse(jsonText) as ResearchResultFields;
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
   }
+}
+
+function extractFirstJsonObject(value: string): string | null {
+  const start = value.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return value.slice(start, index + 1);
+    }
+  }
+  return null;
 }
 
 async function runContainerResearch(env: Env, prompt: string): Promise<string> {
@@ -1321,21 +1410,29 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   try {
     const memo = await runContainerResearch(env, researchPrompt(article));
     const fields = parseResearchFields(memo);
+    const impactDetails = normalizeImpactDetails(fields.impact_details);
+    const companies = impactDetails.length
+      ? [...new Set(impactDetails.filter((item) => item.kind === "company" && item.name).map((item) => String(item.name)))]
+      : fields.companies || [];
+    const industries = impactDetails.length
+      ? [...new Set(impactDetails.filter((item) => item.kind !== "company" && item.name).map((item) => String(item.name)))]
+      : fields.industries || [];
+    const symbols = impactDetails.length ? symbolsFromImpactDetails(impactDetails) : fields.symbols || [];
     await env.NEWS_DB.batch([
       env.NEWS_DB.prepare(
-        "INSERT INTO research_results (id, job_id, article_id, event_type, companies, industries, symbols, sentiment_score, impact_horizon, confidence, summary, memo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO research_results (id, job_id, article_id, event_type, companies, industries, symbols, sentiment_score, impact_horizon, confidence, summary, memo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET event_type = excluded.event_type, companies = excluded.companies, industries = excluded.industries, symbols = excluded.symbols, sentiment_score = excluded.sentiment_score, impact_horizon = excluded.impact_horizon, confidence = excluded.confidence, summary = excluded.summary, memo = excluded.memo, created_at = CURRENT_TIMESTAMP",
       ).bind(
         crypto.randomUUID(),
         jobId,
         article.id,
         fields.event_type || null,
-        JSON.stringify(fields.companies || []),
-        JSON.stringify(fields.industries || []),
-        JSON.stringify(fields.symbols || []),
+        JSON.stringify(companies),
+        JSON.stringify(industries),
+        JSON.stringify(symbols),
         typeof fields.sentiment_score === "number" ? fields.sentiment_score : null,
         fields.impact_horizon || null,
         typeof fields.confidence === "number" ? fields.confidence : null,
-        fields.summary || null,
+        fields.event_blurb || fields.summary || null,
         memo,
       ),
       env.NEWS_DB.prepare("UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?").bind(jobId),
@@ -1374,6 +1471,28 @@ async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: num
   return { requeued: pending.results?.length || 0 };
 }
 
+async function reanalyzeRecentJobs(env: Env, limit = 20): Promise<{ requeued: number }> {
+  const clamped = Math.min(Math.max(limit, 1), 50);
+  const jobs = await env.NEWS_DB.prepare(
+    "SELECT research_jobs.id, research_jobs.article_id FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE research_jobs.status = 'succeeded' ORDER BY COALESCE(articles.published_at, articles.discovered_at) DESC LIMIT ?",
+  )
+    .bind(clamped)
+    .all<{ id: string; article_id: string }>();
+
+  for (const job of jobs.results || []) {
+    await env.NEWS_DB.batch([
+      env.NEWS_DB.prepare(
+        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL WHERE id = ?",
+      ).bind(job.id),
+      env.NEWS_DB.prepare("UPDATE articles SET status = 'queued' WHERE id = ?").bind(job.article_id),
+      env.NEWS_DB.prepare("DELETE FROM price_impacts WHERE article_id = ?").bind(job.article_id),
+    ]);
+    await env.RESEARCH_QUEUE.send({ jobId: job.id });
+  }
+
+  return { requeued: jobs.results?.length || 0 };
+}
+
 function parseJsonArray(value: string | null | undefined): string[] {
   if (!value) return [];
   try {
@@ -1382,6 +1501,49 @@ function parseJsonArray(value: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+function normalizeImpactDetails(value: unknown): ImpactDetail[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item) => ({
+      kind: typeof item.kind === "string" ? (item.kind as ImpactDetail["kind"]) : undefined,
+      name: typeof item.name === "string" ? item.name.trim() : undefined,
+      symbol: typeof item.symbol === "string" && item.symbol.trim() ? item.symbol.trim().toUpperCase() : null,
+      direction: typeof item.direction === "string" ? (item.direction as ImpactDetail["direction"]) : undefined,
+      confidence: typeof item.confidence === "number" ? item.confidence : undefined,
+      reason: typeof item.reason === "string" ? item.reason.trim() : undefined,
+    }))
+    .filter((item) => Boolean(item.name || item.symbol || item.reason));
+}
+
+function symbolsFromImpactDetails(details: ImpactDetail[]): string[] {
+  return [
+    ...new Set(
+      details
+        .filter((item) => item.symbol && item.reason && item.direction !== "neutral")
+        .map((item) => normalizeTicker(item.symbol || ""))
+        .filter((symbol): symbol is string => Boolean(symbol)),
+    ),
+  ];
+}
+
+function impactDetailsFromMemo(memo: string | null | undefined): ImpactDetail[] {
+  if (!memo) return [];
+  return normalizeImpactDetails(parseResearchFields(memo).impact_details);
+}
+
+function impactDetailForSymbol(row: ResearchResultRow, symbol: string): ImpactDetail | null {
+  const normalized = normalizeTicker(symbol);
+  if (!normalized) return null;
+  return impactDetailsFromMemo(row.memo).find((item) => normalizeTicker(item.symbol || "") === normalized && item.direction !== "neutral") || null;
+}
+
+function symbolsForResearchRow(row: ResearchResultRow): string[] {
+  const structured = symbolsFromImpactDetails(impactDetailsFromMemo(row.memo));
+  if (structured.length) return structured;
+  return [...new Set(parseJsonArray(row.symbols).map(normalizeTicker).filter((symbol): symbol is string => Boolean(symbol)))];
 }
 
 function normalizeTicker(symbol: string): string | null {
@@ -1480,7 +1642,7 @@ async function fetchYahooChart(symbol: string, publishedAt: string): Promise<{ t
   };
 }
 
-async function computePriceImpact(article: ResearchResultRow, symbol: string): Promise<PriceImpact> {
+async function computePriceImpact(article: ResearchResultRow, symbol: string, detail: ImpactDetail | null = null): Promise<PriceImpact> {
   const publishedAt = article.published_at || article.created_at;
   const chart = await fetchYahooChart(symbol, publishedAt);
   const baseline = nearestPoint(chart.timestamps, chart.closes, unixSeconds(publishedAt), "after");
@@ -1503,6 +1665,9 @@ async function computePriceImpact(article: ResearchResultRow, symbol: string): P
     sentiment_score: article.sentiment_score,
     confidence: article.confidence,
     symbol,
+    company: detail?.name || null,
+    direction: detail?.direction || null,
+    rationale: detail?.reason || null,
     baseline_price: baseline?.price ?? null,
     baseline_at: baseline ? isoFromUnix(baseline.at) : null,
     intervals,
@@ -1512,12 +1677,12 @@ async function computePriceImpact(article: ResearchResultRow, symbol: string): P
 async function getRecentResearchRows(env: Env, limit: number): Promise<ResearchResultRow[]> {
   return listRows<ResearchResultRow>(
     env.NEWS_DB,
-    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id ORDER BY research_results.created_at DESC LIMIT ?",
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id ORDER BY research_results.created_at DESC LIMIT ?",
     limit,
   );
 }
 
-async function getCachedPriceImpact(env: Env, article: ResearchResultRow, symbol: string): Promise<PriceImpact | null> {
+async function getCachedPriceImpact(env: Env, article: ResearchResultRow, symbol: string, detail: ImpactDetail | null = null): Promise<PriceImpact | null> {
   const cached = await env.NEWS_DB.prepare(
     "SELECT baseline_price, baseline_at, intervals_json FROM price_impacts WHERE article_id = ? AND symbol = ? AND datetime(updated_at) > datetime('now', '-6 hours')",
   )
@@ -1533,18 +1698,21 @@ async function getCachedPriceImpact(env: Env, article: ResearchResultRow, symbol
     sentiment_score: article.sentiment_score,
     confidence: article.confidence,
     symbol,
+    company: detail?.name || null,
+    direction: detail?.direction || null,
+    rationale: detail?.reason || null,
     baseline_price: cached.baseline_price,
     baseline_at: cached.baseline_at,
     intervals: JSON.parse(cached.intervals_json),
   };
 }
 
-async function getPriceImpact(env: Env, article: ResearchResultRow, symbol: string): Promise<PriceImpact | null> {
-  const cached = await getCachedPriceImpact(env, article, symbol);
+async function getPriceImpact(env: Env, article: ResearchResultRow, symbol: string, detail: ImpactDetail | null = null): Promise<PriceImpact | null> {
+  const cached = await getCachedPriceImpact(env, article, symbol, detail);
   if (cached) return cached;
 
   try {
-    const impact = await computePriceImpact(article, symbol);
+    const impact = await computePriceImpact(article, symbol, detail);
     await env.NEWS_DB.prepare(
       "INSERT INTO price_impacts (article_id, symbol, baseline_price, baseline_at, intervals_json, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(article_id, symbol) DO UPDATE SET baseline_price = excluded.baseline_price, baseline_at = excluded.baseline_at, intervals_json = excluded.intervals_json, updated_at = CURRENT_TIMESTAMP",
     )
@@ -1561,9 +1729,9 @@ async function buildMarketImpacts(env: Env, limit: number): Promise<PriceImpact[
   const impacts: PriceImpact[] = [];
 
   for (const row of rows) {
-    const symbols = [...new Set(parseJsonArray(row.symbols).map(normalizeTicker).filter((symbol): symbol is string => Boolean(symbol)))].slice(0, 5);
+    const symbols = symbolsForResearchRow(row).slice(0, 5);
     for (const symbol of symbols) {
-      const impact = await getPriceImpact(env, row, symbol);
+      const impact = await getPriceImpact(env, row, symbol, impactDetailForSymbol(row, symbol));
       if (impact) impacts.push(impact);
     }
   }
@@ -1654,12 +1822,12 @@ async function buildSimulation(env: Env, limit: number): Promise<{
     const confidence = Number(row.confidence || 0);
     if (Math.abs(score) < 0.15 || confidence < 0.35) continue;
 
-    const symbols = [...new Set(parseJsonArray(row.symbols).map(normalizeTicker).filter((symbol): symbol is string => Boolean(symbol)))].slice(0, 4);
+    const symbols = symbolsForResearchRow(row).slice(0, 4);
     if (!symbols.length) continue;
 
     const prices = new Map<string, number>();
     for (const symbol of symbols) {
-      const impact = await getPriceImpact(env, row, symbol);
+      const impact = await getPriceImpact(env, row, symbol, impactDetailForSymbol(row, symbol));
       if (impact?.baseline_price) prices.set(symbol, impact.baseline_price);
     }
     if (!prices.size) continue;
@@ -1741,9 +1909,9 @@ async function buildSimulation(env: Env, limit: number): Promise<{
 
   const latestPrices = new Map<string, number>();
   for (const [symbol] of positions) {
-    const latestRow = rows.find((row) => parseJsonArray(row.symbols).map(normalizeTicker).includes(symbol));
+    const latestRow = rows.find((row) => symbolsForResearchRow(row).includes(symbol));
     if (!latestRow) continue;
-    const impact = await getPriceImpact(env, latestRow, symbol);
+    const impact = await getPriceImpact(env, latestRow, symbol, impactDetailForSymbol(latestRow, symbol));
     const current = impact?.intervals["1m"]?.price || impact?.intervals["1w"]?.price || impact?.intervals["1d"]?.price || impact?.baseline_price;
     if (current) latestPrices.set(symbol, current);
   }
@@ -1851,6 +2019,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...(await requeuePendingJobs(env, limit)) });
   }
 
+  if (url.pathname === "/api/reanalyze-recent" && request.method === "POST") {
+    return json({ ok: true, ...(await reanalyzeRecentJobs(env, limit)) });
+  }
+
   return json({ error: "Not found" }, { status: 404 });
 }
 
@@ -1927,6 +2099,7 @@ export default {
           "/api/jobs",
           "/api/results",
           "/api/ticker-signals",
+          "/api/reanalyze-recent",
           "/container/health",
           "/container/mcp-check",
           "/container/research",
