@@ -20,7 +20,8 @@ const STRATEGIES = [
         maxHalfLife: 24,
         minStationarityT: -2.4,
         maxBetaDrift: 0.22,
-        costBps: 5
+        costBps: 5,
+        riskLabel: "Low"
     },
     {
         id: "beta_balanced",
@@ -39,7 +40,8 @@ const STRATEGIES = [
         maxHalfLife: 32,
         minStationarityT: -2.0,
         maxBetaDrift: 0.3,
-        costBps: 5
+        costBps: 5,
+        riskLabel: "Medium"
     },
     {
         id: "ratio_active",
@@ -58,7 +60,8 @@ const STRATEGIES = [
         maxHalfLife: 42,
         minStationarityT: -1.8,
         maxBetaDrift: 0.45,
-        costBps: 6
+        costBps: 6,
+        riskLabel: "High"
     },
     {
         id: "filtered_quality",
@@ -77,7 +80,68 @@ const STRATEGIES = [
         maxHalfLife: 18,
         minStationarityT: -2.7,
         maxBetaDrift: 0.18,
-        costBps: 5
+        costBps: 5,
+        riskLabel: "Low"
+    },
+    {
+        id: "beta_aggressive",
+        name: "Beta spread / aggressive",
+        method: "beta",
+        lookback: 252,
+        entryZ: 1.25,
+        exitZ: 0.85,
+        stopZ: 4.8,
+        maxHold: 75,
+        riskPct: 0.018,
+        grossCap: 1.3,
+        profitR: 1.15,
+        minCorr: 0.55,
+        minHalfLife: 1,
+        maxHalfLife: 85,
+        minStationarityT: -0.8,
+        maxBetaDrift: 0.75,
+        costBps: 7,
+        riskLabel: "Very high"
+    },
+    {
+        id: "ratio_scalper",
+        name: "Log ratio / frequent trader",
+        method: "ratio",
+        lookback: 126,
+        entryZ: 1.0,
+        exitZ: 0.35,
+        stopZ: 5.5,
+        maxHold: 90,
+        riskPct: 0.022,
+        grossCap: 1.65,
+        profitR: 0.9,
+        minCorr: 0.45,
+        minHalfLife: 1,
+        maxHalfLife: 120,
+        minStationarityT: -0.35,
+        maxBetaDrift: 1.2,
+        costBps: 8,
+        riskLabel: "Extreme"
+    },
+    {
+        id: "raw_ratio_max",
+        name: "Raw ratio / maximum trades",
+        method: "ratio",
+        lookback: 84,
+        entryZ: 0.75,
+        exitZ: 0.2,
+        stopZ: 6.0,
+        maxHold: 100,
+        riskPct: 0.03,
+        grossCap: 2.0,
+        profitR: 0.75,
+        minCorr: 0.25,
+        minHalfLife: 1,
+        maxHalfLife: 180,
+        minStationarityT: 0.25,
+        maxBetaDrift: 2,
+        costBps: 10,
+        riskLabel: "Speculative"
     }
 ];
 
@@ -500,6 +564,7 @@ function renderStrategyTable() {
         return `
             <tr data-strategy="${strategy.id}"${active}>
                 <td>${strategy.name}</td>
+                <td><span class="risk-badge ${riskClass(strategy.riskLabel)}">${strategy.riskLabel}</span></td>
                 <td>${strategy.entryZ.toFixed(2)}z</td>
                 <td>${strategy.exitZ.toFixed(2)}z</td>
                 <td>${strategy.stopZ.toFixed(2)}z</td>
@@ -511,6 +576,11 @@ function renderStrategyTable() {
             </tr>
         `;
     }).join("");
+}
+
+function riskClass(label) {
+    const key = String(label).toLowerCase().replace(/\s+/g, "-");
+    return `risk-${key}`;
 }
 
 function renderTradeTable(result) {
