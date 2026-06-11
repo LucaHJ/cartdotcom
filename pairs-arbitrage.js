@@ -114,7 +114,7 @@ const els = {
 let appState = {
     data: [],
     results: new Map(),
-    selectedId: STRATEGIES[0].id,
+    selectedId: "beta_balanced",
     dayIndex: 0,
     timer: null
 };
@@ -536,10 +536,12 @@ function render() {
     const row = result.daily[dayIndex];
     const model = row.model;
 
+    els.strategySelect.value = appState.selectedId;
     els.daySlider.max = String(result.daily.length - 1);
     els.daySlider.value = String(dayIndex);
-    els.finalEquity.textContent = money(result.finalEquity);
-    els.totalReturn.textContent = `${pct(result.totalReturn)} total return`;
+    const replayReturn = row.equity / STARTING_EQUITY - 1;
+    els.finalEquity.textContent = money(row.equity);
+    els.totalReturn.textContent = `${pct(replayReturn)} as of selected day`;
     els.maxDrawdown.textContent = pct(result.maxDrawdown);
     els.sharpeRatio.textContent = `${num(result.sharpe, 2)} Sharpe`;
     els.tradeCount.textContent = String(result.trades.length);
