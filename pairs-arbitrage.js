@@ -1,4 +1,4 @@
-const DATA_URL = "data/pairs-universe.json?v=20260611-scanner2";
+const DATA_URL = "data/pairs-universe.json?v=20260611-ledger2";
 const STARTING_EQUITY = 100000;
 const TRADING_DAYS = 252;
 
@@ -569,13 +569,15 @@ function renderTradeTable(result) {
             <td>${trade.closeDate}</td>
             <td>${trade.pairLabel}</td>
             <td>${trade.label}</td>
+            <td class="num">${money(trade.gross)}</td>
             <td class="num">${num(trade.entryZ, 2)}</td>
             <td class="num">${num(trade.exitZ, 2)}</td>
             <td class="num ${trade.pnl >= 0 ? "positive" : "negative"}">${money(trade.pnl)}</td>
+            <td class="num ${trade.pnl >= 0 ? "positive" : "negative"}">${pct(trade.gross ? trade.pnl / trade.gross : 0)}</td>
             <td>${trade.reason}</td>
         </tr>
     `);
-    els.tradeBody.innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"8\" class=\"muted\">No closed trades</td></tr>";
+    els.tradeBody.innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"10\" class=\"muted\">No closed trades</td></tr>";
 }
 
 function renderUniverse() {
