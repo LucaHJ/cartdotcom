@@ -559,6 +559,30 @@ const DASHBOARD_HTML = `<!doctype html>
       padding: 0 18px 14px;
     }
 
+    .rangebar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 0 18px 12px;
+    }
+
+    .range-btn {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--muted);
+      padding: 5px 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .range-btn.active {
+      color: var(--text);
+      border-color: #123c69;
+      background: #e8f1ff;
+    }
+
     .chart {
       width: 100%;
       height: 260px;
@@ -672,6 +696,7 @@ const DASHBOARD_HTML = `<!doctype html>
           <span class="pill blue" id="portfolio-cash">Cash $0</span>
           <span class="pill green" id="portfolio-investments">Investments $0</span>
         </div>
+        <div class="rangebar" id="portfolio-rangebar"></div>
         <div class="chart" id="portfolio-chart"></div>
       </section>
 
@@ -706,10 +731,23 @@ const DASHBOARD_HTML = `<!doctype html>
     const portfolioMoveEl = document.getElementById("portfolio-move");
     const portfolioCashEl = document.getElementById("portfolio-cash");
     const portfolioInvestmentsEl = document.getElementById("portfolio-investments");
+    const portfolioRangebarEl = document.getElementById("portfolio-rangebar");
     const portfolioChartEl = document.getElementById("portfolio-chart");
     const tradesEl = document.getElementById("trades");
     const tradesMeta = document.getElementById("trades-meta");
     let simulationLoaded = false;
+    let activeSimulation = null;
+    let activeChartRange = "all";
+    const chartRanges = [
+      { key: "all", label: "All", hours: null },
+      { key: "12h", label: "12h", hours: 12 },
+      { key: "24h", label: "24h", hours: 24 },
+      { key: "1w", label: "1w", hours: 24 * 7 },
+      { key: "2w", label: "2w", hours: 24 * 14 },
+      { key: "1m", label: "1m", hours: 24 * 30 },
+      { key: "6m", label: "6m", hours: 24 * 183 },
+      { key: "1y", label: "1y", hours: 24 * 365 },
+    ];
 
     const TOKEN_KEY = "newsSignalToken";
     tokenInput.value = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || "";
@@ -739,6 +777,7 @@ const DASHBOARD_HTML = `<!doctype html>
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
     settingsBtn.addEventListener("click", () => setTab("settings"));
+    renderRangeButtons();
 
     function setTab(tab) {
       const simulation = tab === "simulation";
@@ -814,7 +853,7 @@ const DASHBOARD_HTML = `<!doctype html>
     async function loadSimulation() {
       setBusy(true);
       try {
-        const payload = await api("/api/simulation?limit=60");
+        const payload = await api("/api/simulation?limit=500");
         renderSimulation(payload.simulation);
         simulationLoaded = true;
       } catch (error) {
@@ -930,15 +969,13 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function renderSimulation(simulation) {
+      activeSimulation = simulation;
       portfolioValueEl.textContent = formatMoney(simulation.current_value);
-      const move = Number(simulation.movement_pct || 0);
-      portfolioMoveEl.textContent = signedPct(move) + " since funding";
-      portfolioMoveEl.style.color = move >= 0 ? "var(--green)" : "var(--red)";
       portfolioCashEl.textContent = "Cash " + formatMoney(simulation.cash);
       portfolioCashEl.title = "Uninvested cash remaining in the simulated account.";
       portfolioInvestmentsEl.textContent = "Investments " + formatMoney(simulation.investment_value);
       portfolioInvestmentsEl.title = "Current market value of simulated stock positions.";
-      renderChart(simulation.points || []);
+      renderFilteredChart();
       const trades = simulation.trades || [];
       tradesMeta.textContent = trades.length + " rows";
       if (!trades.length) {
@@ -954,6 +991,40 @@ const DASHBOARD_HTML = `<!doctype html>
         escapeHtml(formatDate(trade.action_at)),
         '<a class="truncate" href="' + escapeAttr(trade.article_url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(trade.article_title || "Article") + '</a>',
       ]));
+    }
+
+    function renderRangeButtons() {
+      portfolioRangebarEl.innerHTML = chartRanges.map((range) =>
+        '<button class="range-btn' + (range.key === activeChartRange ? " active" : "") + '" type="button" data-range="' + escapeAttr(range.key) + '">' + escapeHtml(range.label) + '</button>'
+      ).join("");
+      for (const button of portfolioRangebarEl.querySelectorAll("button")) {
+        button.addEventListener("click", () => {
+          activeChartRange = button.getAttribute("data-range") || "all";
+          renderRangeButtons();
+          renderFilteredChart();
+        });
+      }
+    }
+
+    function rangeFilteredPoints(points) {
+      const clean = (points || []).filter((point) => Number.isFinite(Number(point.value)) && Number.isFinite(new Date(point.at).getTime()));
+      const range = chartRanges.find((item) => item.key === activeChartRange);
+      if (!range || !range.hours) return clean;
+      const cutoff = Date.now() - range.hours * 60 * 60 * 1000;
+      const filtered = clean.filter((point) => new Date(point.at).getTime() >= cutoff);
+      return filtered.length >= 2 ? filtered : clean.slice(-Math.min(clean.length, 2));
+    }
+
+    function renderFilteredChart() {
+      if (!activeSimulation) return;
+      const points = rangeFilteredPoints(activeSimulation.points || []);
+      const first = points[0];
+      const last = points[points.length - 1];
+      const move = first && last && Number(first.value) ? ((Number(last.value) - Number(first.value)) / Number(first.value)) * 100 : 0;
+      const range = chartRanges.find((item) => item.key === activeChartRange);
+      portfolioMoveEl.textContent = signedPct(move) + " " + ((range && range.key !== "all") ? "over " + range.label : "all time");
+      portfolioMoveEl.style.color = move >= 0 ? "var(--green)" : "var(--red)";
+      renderChart(points);
     }
 
     function renderChart(points) {
@@ -992,8 +1063,6 @@ const DASHBOARD_HTML = `<!doctype html>
         '<path d="' + makePath("value") + '" fill="none" stroke="#123c69" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' +
         '<path d="' + makePath("cash") + '" fill="none" stroke="#1457a8" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' +
         '<path d="' + makePath("investments") + '" fill="none" stroke="#097a55" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>' +
-        '<text x="' + pad + '" y="22" fill="#667085" font-size="12">' + escapeHtml(formatMoney(max)) + '</text>' +
-        '<text x="' + pad + '" y="' + (height - 8) + '" fill="#667085" font-size="12">' + escapeHtml(formatMoney(min)) + '</text>' +
         '<text x="' + (width - 190) + '" y="22" fill="#123c69" font-size="12">Total</text>' +
         '<text x="' + (width - 135) + '" y="22" fill="#1457a8" font-size="12">Cash</text>' +
         '<text x="' + (width - 88) + '" y="22" fill="#097a55" font-size="12">Invested</text>' +
@@ -2079,7 +2148,7 @@ async function buildSimulation(env: Env, limit: number): Promise<{
     await recordSimulationSnapshot(env, new Date().toISOString(), cash);
   }
 
-  const snapshotLimit = Math.min(Math.max(limit, 2), 100);
+  const snapshotLimit = Math.min(Math.max(limit, 2), 1000);
   const pointResult = await env.NEWS_DB.prepare(
     "SELECT at, total_value, cash, investment_value FROM (SELECT at, total_value, cash, investment_value FROM simulation_snapshots ORDER BY datetime(at) DESC LIMIT ?) ORDER BY datetime(at) ASC",
   )
