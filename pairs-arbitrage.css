@@ -379,13 +379,6 @@ tbody tr.active {
     color: #ffe0a0;
 }
 
-.risk-very-high,
-.risk-extreme,
-.risk-speculative {
-    border-color: rgba(239, 129, 125, 0.65);
-    color: #ffb4b1;
-}
-
 .muted {
     color: var(--muted);
 }

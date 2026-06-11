@@ -1,19 +1,20 @@
-const DATA_URL = "data/pairs-ko-pep.json?v=20260611";
+const DATA_URL = "data/pairs-universe.json?v=20260611";
 const STARTING_EQUITY = 100000;
 const TRADING_DAYS = 252;
 
 const STRATEGIES = [
     {
-        id: "beta_conservative",
-        name: "Beta spread / conservative",
+        id: "scanner_conservative",
+        name: "Scanner / conservative",
         method: "beta",
         lookback: 504,
         entryZ: 2.2,
         exitZ: 0.35,
         stopZ: 3.4,
         maxHold: 35,
-        riskPct: 0.005,
-        grossCap: 0.55,
+        riskPct: 0.0035,
+        grossCap: 0.45,
+        maxOpenPairs: 3,
         profitR: 1.35,
         minCorr: 0.78,
         minHalfLife: 2,
@@ -24,57 +25,60 @@ const STRATEGIES = [
         riskLabel: "Low"
     },
     {
-        id: "beta_balanced",
-        name: "Beta spread / balanced",
+        id: "scanner_balanced",
+        name: "Scanner / balanced",
         method: "beta",
         lookback: 378,
-        entryZ: 2.0,
+        entryZ: 1.85,
         exitZ: 0.5,
         stopZ: 3.8,
         maxHold: 45,
-        riskPct: 0.008,
-        grossCap: 0.75,
-        profitR: 1.8,
-        minCorr: 0.72,
+        riskPct: 0.006,
+        grossCap: 0.65,
+        maxOpenPairs: 4,
+        profitR: 1.6,
+        minCorr: 0.68,
         minHalfLife: 2,
-        maxHalfLife: 32,
-        minStationarityT: -2.0,
-        maxBetaDrift: 0.3,
+        maxHalfLife: 36,
+        minStationarityT: -1.85,
+        maxBetaDrift: 0.35,
         costBps: 5,
         riskLabel: "Medium"
     },
     {
-        id: "ratio_active",
-        name: "Log ratio / active",
-        method: "ratio",
+        id: "scanner_active",
+        name: "Scanner / active",
+        method: "beta",
         lookback: 252,
         entryZ: 1.55,
         exitZ: 0.65,
         stopZ: 4.2,
         maxHold: 60,
-        riskPct: 0.01,
-        grossCap: 0.95,
-        profitR: 2.2,
-        minCorr: 0.66,
+        riskPct: 0.008,
+        grossCap: 0.85,
+        maxOpenPairs: 5,
+        profitR: 1.8,
+        minCorr: 0.6,
         minHalfLife: 1,
-        maxHalfLife: 42,
-        minStationarityT: -1.8,
+        maxHalfLife: 48,
+        minStationarityT: -1.55,
         maxBetaDrift: 0.45,
         costBps: 6,
         riskLabel: "High"
     },
     {
-        id: "filtered_quality",
-        name: "Quality gate / low turnover",
+        id: "scanner_quality",
+        name: "Scanner / quality gate",
         method: "beta",
         lookback: 504,
-        entryZ: 2.5,
+        entryZ: 2.45,
         exitZ: 0.25,
         stopZ: 3.25,
         maxHold: 30,
-        riskPct: 0.004,
-        grossCap: 0.45,
-        profitR: 1.2,
+        riskPct: 0.003,
+        grossCap: 0.4,
+        maxOpenPairs: 2,
+        profitR: 1.15,
         minCorr: 0.82,
         minHalfLife: 2,
         maxHalfLife: 18,
@@ -82,66 +86,6 @@ const STRATEGIES = [
         maxBetaDrift: 0.18,
         costBps: 5,
         riskLabel: "Low"
-    },
-    {
-        id: "beta_aggressive",
-        name: "Beta spread / aggressive",
-        method: "beta",
-        lookback: 252,
-        entryZ: 1.25,
-        exitZ: 0.85,
-        stopZ: 4.8,
-        maxHold: 75,
-        riskPct: 0.018,
-        grossCap: 1.3,
-        profitR: 1.15,
-        minCorr: 0.55,
-        minHalfLife: 1,
-        maxHalfLife: 85,
-        minStationarityT: -0.8,
-        maxBetaDrift: 0.75,
-        costBps: 7,
-        riskLabel: "Very high"
-    },
-    {
-        id: "ratio_scalper",
-        name: "Log ratio / frequent trader",
-        method: "ratio",
-        lookback: 126,
-        entryZ: 1.0,
-        exitZ: 0.35,
-        stopZ: 5.5,
-        maxHold: 90,
-        riskPct: 0.022,
-        grossCap: 1.65,
-        profitR: 0.9,
-        minCorr: 0.45,
-        minHalfLife: 1,
-        maxHalfLife: 120,
-        minStationarityT: -0.35,
-        maxBetaDrift: 1.2,
-        costBps: 8,
-        riskLabel: "Extreme"
-    },
-    {
-        id: "raw_ratio_max",
-        name: "Raw ratio / maximum trades",
-        method: "ratio",
-        lookback: 84,
-        entryZ: 0.75,
-        exitZ: 0.2,
-        stopZ: 6.0,
-        maxHold: 100,
-        riskPct: 0.03,
-        grossCap: 2.0,
-        profitR: 0.75,
-        minCorr: 0.25,
-        minHalfLife: 1,
-        maxHalfLife: 180,
-        minStationarityT: 0.25,
-        maxBetaDrift: 2,
-        costBps: 10,
-        riskLabel: "Speculative"
     }
 ];
 
@@ -163,6 +107,7 @@ const els = {
     zPill: document.getElementById("zPill"),
     positionPill: document.getElementById("positionPill"),
     chart: document.getElementById("simulationChart"),
+    pairName: document.getElementById("pairName"),
     koPrice: document.getElementById("koPrice"),
     pepPrice: document.getElementById("pepPrice"),
     hedgeBeta: document.getElementById("hedgeBeta"),
@@ -177,8 +122,9 @@ const els = {
 
 let appState = {
     data: [],
+    pairs: [],
     results: new Map(),
-    selectedId: "beta_balanced",
+    selectedId: "scanner_balanced",
     dayIndex: 0,
     timer: null
 };
@@ -240,8 +186,8 @@ function num(value, digits = 2) {
     return Number.isFinite(value) ? value.toFixed(digits) : "-";
 }
 
-function getWindow(data, endIndex, length) {
-    return data.slice(endIndex - length, endIndex);
+function price(row, symbol) {
+    return row.symbols[symbol]?.adjClose;
 }
 
 function returns(values) {
@@ -252,23 +198,28 @@ function returns(values) {
     return out;
 }
 
-function modelForDay(data, index, strategy) {
+function modelForPair(data, index, strategy, pair) {
     if (index < strategy.lookback) return null;
 
-    const window = getWindow(data, index, strategy.lookback);
-    const koLogs = window.map((row) => Math.log(row.ko));
-    const pepLogs = window.map((row) => Math.log(row.pep));
-    const koReturns = returns(window.map((row) => row.ko));
-    const pepReturns = returns(window.map((row) => row.pep));
-    const beta = strategy.method === "ratio" ? 1 : regressionSlope(pepLogs, koLogs);
+    const window = data.slice(index - strategy.lookback, index);
+    const leftPrices = window.map((row) => price(row, pair.left));
+    const rightPrices = window.map((row) => price(row, pair.right));
+    if (leftPrices.some((value) => !value) || rightPrices.some((value) => !value)) return null;
+
+    const leftLogs = leftPrices.map(Math.log);
+    const rightLogs = rightPrices.map(Math.log);
+    const beta = strategy.method === "ratio" ? 1 : regressionSlope(rightLogs, leftLogs);
     const shortWindow = window.slice(Math.floor(window.length / 2));
     const shortBeta = strategy.method === "ratio"
         ? 1
-        : regressionSlope(shortWindow.map((row) => Math.log(row.pep)), shortWindow.map((row) => Math.log(row.ko)));
-    const spreads = window.map((row) => Math.log(row.ko) - beta * Math.log(row.pep));
+        : regressionSlope(
+            shortWindow.map((row) => Math.log(price(row, pair.right))),
+            shortWindow.map((row) => Math.log(price(row, pair.left)))
+        );
+    const spreads = window.map((row) => Math.log(price(row, pair.left)) - beta * Math.log(price(row, pair.right)));
     const spreadMean = mean(spreads);
     const spreadStd = stdDev(spreads);
-    const currentSpread = Math.log(data[index].ko) - beta * Math.log(data[index].pep);
+    const currentSpread = Math.log(price(data[index], pair.left)) - beta * Math.log(price(data[index], pair.right));
     const lagged = [];
     const deltas = [];
 
@@ -280,7 +231,7 @@ function modelForDay(data, index, strategy) {
     const meanReversion = olsSlopeTStat(lagged, deltas);
     const halfLife = meanReversion.slope < 0 ? -Math.log(2) / meanReversion.slope : Infinity;
     const z = spreadStd ? (currentSpread - spreadMean) / spreadStd : 0;
-    const corr = correlation(koReturns, pepReturns);
+    const corr = correlation(returns(leftPrices), returns(rightPrices));
     const betaDrift = beta ? Math.abs(shortBeta / beta - 1) : 0;
     const filtersPass = corr >= strategy.minCorr
         && halfLife >= strategy.minHalfLife
@@ -290,6 +241,7 @@ function modelForDay(data, index, strategy) {
         && spreadStd > strategy.costBps / 10000;
 
     return {
+        pair,
         beta,
         z,
         corr,
@@ -301,56 +253,66 @@ function modelForDay(data, index, strategy) {
     };
 }
 
-function openPosition(row, model, strategy, equity) {
+function openPosition(row, model, strategy, equity, index) {
+    const { pair } = model;
+    const leftPrice = price(row, pair.left);
+    const rightPrice = price(row, pair.right);
     const direction = model.z > 0 ? -1 : 1;
     const riskDollars = equity * strategy.riskPct;
     const stopMove = Math.max((strategy.stopZ - Math.abs(model.z)) * model.spreadStd, 0.006);
     const rawUnit = riskDollars / stopMove;
-    const grossUnitCap = (equity * strategy.grossCap) / (1 + Math.abs(model.beta));
+    const pairGrossCap = (equity * strategy.grossCap) / Math.max(strategy.maxOpenPairs, 1);
+    const grossUnitCap = pairGrossCap / (1 + Math.abs(model.beta));
     const unit = Math.max(0, Math.min(rawUnit, grossUnitCap));
-    const koShares = direction * unit / row.ko;
-    const pepShares = -direction * model.beta * unit / row.pep;
-    const gross = Math.abs(koShares * row.ko) + Math.abs(pepShares * row.pep);
+    const leftShares = direction * unit / leftPrice;
+    const rightShares = -direction * model.beta * unit / rightPrice;
+    const gross = Math.abs(leftShares * leftPrice) + Math.abs(rightShares * rightPrice);
     const cost = gross * strategy.costBps / 10000;
 
     return {
+        pair,
         openDate: row.date,
         direction,
-        label: direction > 0 ? "Long KO / Short PEP" : "Short KO / Long PEP",
+        label: direction > 0
+            ? `Long ${pair.left} / Short ${pair.right}`
+            : `Short ${pair.left} / Long ${pair.right}`,
         entryZ: model.z,
-        entryKo: row.ko,
-        entryPep: row.pep,
-        koShares,
-        pepShares,
+        entryLeft: leftPrice,
+        entryRight: rightPrice,
+        leftShares,
+        rightShares,
         gross,
         initialRisk: riskDollars,
         entryCost: cost,
-        openIndex: row.index
+        openIndex: index
     };
 }
 
 function positionPnl(position, row) {
     if (!position) return 0;
-    return position.koShares * (row.ko - position.entryKo)
-        + position.pepShares * (row.pep - position.entryPep);
+    return position.leftShares * (price(row, position.pair.left) - position.entryLeft)
+        + position.rightShares * (price(row, position.pair.right) - position.entryRight);
 }
 
-function shouldClose(position, row, model, strategy, unrealized) {
+function shouldClose(position, row, model, strategy, unrealized, index) {
     const sameSideStop = Math.sign(model.z) === Math.sign(position.entryZ) && Math.abs(model.z) >= strategy.stopZ;
     if (sameSideStop) return "spread stop";
     if (unrealized <= -position.initialRisk) return "risk stop";
     if (unrealized >= position.initialRisk * strategy.profitR) return "profit target";
     if (Math.abs(model.z) <= strategy.exitZ || Math.sign(model.z) !== Math.sign(position.entryZ)) return "convergence";
-    if (row.index - position.openIndex >= strategy.maxHold) return "time stop";
+    if (index - position.openIndex >= strategy.maxHold) return "time stop";
     return "";
 }
 
-function closePosition(position, row, model, strategy, reason, unrealized) {
-    const exitGross = Math.abs(position.koShares * row.ko) + Math.abs(position.pepShares * row.pep);
+function closePosition(position, row, model, strategy, reason, unrealized, index) {
+    const exitGross = Math.abs(position.leftShares * price(row, position.pair.left))
+        + Math.abs(position.rightShares * price(row, position.pair.right));
     const exitCost = exitGross * strategy.costBps / 10000;
     const pnl = unrealized - position.entryCost - exitCost;
 
     return {
+        pairId: position.pair.id,
+        pairLabel: position.pair.label,
         openDate: position.openDate,
         closeDate: row.date,
         label: position.label,
@@ -359,51 +321,65 @@ function closePosition(position, row, model, strategy, reason, unrealized) {
         gross: position.gross,
         pnl,
         reason,
-        holdDays: row.index - position.openIndex
+        holdDays: index - position.openIndex
     };
 }
 
-function simulateStrategy(data, strategy) {
+function rankSignals(models, openPositions, strategy) {
+    return models
+        .filter((model) => model?.filtersPass)
+        .filter((model) => !openPositions.has(model.pair.id))
+        .filter((model) => Math.abs(model.z) >= strategy.entryZ)
+        .sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
+}
+
+function simulateStrategy(data, pairs, strategy) {
     let cash = STARTING_EQUITY;
-    let position = null;
     let peak = STARTING_EQUITY;
     let maxDrawdown = 0;
+    const openPositions = new Map();
     const daily = [];
     const trades = [];
     const returnsSeries = [];
 
     for (let index = 0; index < data.length; index += 1) {
-        const row = { ...data[index], index };
-        const model = modelForDay(data, index, strategy);
-        let decision = "warming up";
-        let unrealized = position ? positionPnl(position, row) : 0;
+        const row = data[index];
+        const models = pairs.map((pair) => modelForPair(data, index, strategy, pair));
+        const modelsByPair = new Map(models.filter(Boolean).map((model) => [model.pair.id, model]));
+        const decisions = [];
 
-        if (model) {
-            decision = model.filtersPass ? "wait" : "filtered";
-
-            if (position) {
-                const reason = shouldClose(position, row, model, strategy, unrealized);
-                if (reason) {
-                    const trade = closePosition(position, row, model, strategy, reason, unrealized);
-                    trades.push(trade);
-                    cash += trade.pnl;
-                    position = null;
-                    unrealized = 0;
-                    decision = `close: ${reason}`;
-                } else {
-                    decision = "hold";
-                }
-            }
-
-            if (!position && model.filtersPass && Math.abs(model.z) >= strategy.entryZ) {
-                position = openPosition(row, model, strategy, cash);
-                cash -= position.entryCost;
-                unrealized = 0;
-                decision = `open: ${position.label}`;
+        for (const [pairId, position] of [...openPositions]) {
+            const model = modelsByPair.get(pairId);
+            if (!model) continue;
+            const unrealized = positionPnl(position, row);
+            const reason = shouldClose(position, row, model, strategy, unrealized, index);
+            if (reason) {
+                const trade = closePosition(position, row, model, strategy, reason, unrealized, index);
+                trades.push(trade);
+                cash += trade.pnl;
+                openPositions.delete(pairId);
+                decisions.push(`close ${position.pair.left}/${position.pair.right}: ${reason}`);
             }
         }
 
+        const equityBeforeOpen = cash + [...openPositions.values()].reduce((sum, position) => sum + positionPnl(position, row), 0);
+        for (const model of rankSignals(models, openPositions, strategy)) {
+            if (openPositions.size >= strategy.maxOpenPairs) break;
+            const position = openPosition(row, model, strategy, equityBeforeOpen, index);
+            if (position.gross <= 0) continue;
+            cash -= position.entryCost;
+            openPositions.set(model.pair.id, position);
+            decisions.push(`open ${position.pair.left}/${position.pair.right}`);
+        }
+
+        const unrealized = [...openPositions.values()].reduce((sum, position) => sum + positionPnl(position, row), 0);
+        const exposure = [...openPositions.values()].reduce((sum, position) => sum + position.gross, 0);
         const equity = cash + unrealized;
+        const strongest = models
+            .filter(Boolean)
+            .sort((a, b) => Math.abs(b.z) - Math.abs(a.z))[0] || null;
+        const qualifying = models.filter((model) => model?.filtersPass && Math.abs(model.z) >= strategy.entryZ).length;
+
         peak = Math.max(peak, equity);
         maxDrawdown = Math.max(maxDrawdown, peak ? (peak - equity) / peak : 0);
         if (daily.length) {
@@ -412,31 +388,31 @@ function simulateStrategy(data, strategy) {
 
         daily.push({
             date: row.date,
-            ko: row.ko,
-            pep: row.pep,
-            model,
+            strongest,
             equity,
             cash,
             unrealized,
-            exposure: position ? position.gross : 0,
-            positionLabel: position ? position.label : "Flat",
-            decision
+            exposure,
+            openCount: openPositions.size,
+            decision: decisions.length ? decisions.join("; ") : qualifying ? `${qualifying} split${qualifying === 1 ? "" : "s"} detected` : "scan clear"
         });
     }
 
-    if (position) {
-        const row = { ...data[data.length - 1], index: data.length - 1 };
-        const model = modelForDay(data, data.length - 1, strategy);
-        const unrealized = positionPnl(position, row);
-        const trade = closePosition(position, row, model, strategy, "final day", unrealized);
+    const finalRow = data[data.length - 1];
+    for (const [pairId, position] of [...openPositions]) {
+        const model = modelForPair(data, data.length - 1, strategy, position.pair);
+        const unrealized = positionPnl(position, finalRow);
+        const trade = closePosition(position, finalRow, model, strategy, "final day", unrealized, data.length - 1);
         trades.push(trade);
         cash += trade.pnl;
+        openPositions.delete(pairId);
+    }
+    if (daily.length) {
         daily[daily.length - 1].equity = cash;
         daily[daily.length - 1].cash = cash;
         daily[daily.length - 1].unrealized = 0;
         daily[daily.length - 1].exposure = 0;
-        daily[daily.length - 1].positionLabel = "Flat";
-        daily[daily.length - 1].decision = "close: final day";
+        daily[daily.length - 1].openCount = 0;
     }
 
     const finalEquity = daily[daily.length - 1].equity;
@@ -480,7 +456,7 @@ function drawChart(result, dayIndex) {
     const visible = result.daily.slice(0, dayIndex + 1);
     if (visible.length < 2) return;
 
-    const zValues = visible.map((row) => row.model?.z ?? 0);
+    const zValues = visible.map((row) => row.strongest?.z ?? 0);
     const equityValues = visible.map((row) => row.equity);
     const zAbsMax = Math.max(3, ...zValues.map((value) => Math.abs(value)));
     const eqMin = Math.min(...equityValues);
@@ -527,7 +503,7 @@ function drawChart(result, dayIndex) {
     ctx.beginPath();
     visible.forEach((row, index) => {
         const x = xFor(index);
-        const y = yZ(row.model?.z ?? 0);
+        const y = yZ(row.strongest?.z ?? 0);
         if (index === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
     });
@@ -552,9 +528,14 @@ function drawChart(result, dayIndex) {
     ctx.stroke();
 
     ctx.fillStyle = "#e7e9ee";
-    ctx.fillText("z-score", pad.left, height - 12);
+    ctx.fillText("strongest split z-score", pad.left, height - 12);
     ctx.fillStyle = "#86b7ff";
-    ctx.fillText("equity", pad.left + 62, height - 12);
+    ctx.fillText("equity", pad.left + 142, height - 12);
+}
+
+function riskClass(label) {
+    const key = String(label).toLowerCase().replace(/\s+/g, "-");
+    return `risk-${key}`;
 }
 
 function renderStrategyTable() {
@@ -578,16 +559,12 @@ function renderStrategyTable() {
     }).join("");
 }
 
-function riskClass(label) {
-    const key = String(label).toLowerCase().replace(/\s+/g, "-");
-    return `risk-${key}`;
-}
-
 function renderTradeTable(result) {
     const rows = result.trades.slice().reverse().map((trade) => `
         <tr>
             <td>${trade.openDate}</td>
             <td>${trade.closeDate}</td>
+            <td>${trade.pairLabel}</td>
             <td>${trade.label}</td>
             <td class="num">${num(trade.entryZ, 2)}</td>
             <td class="num">${num(trade.exitZ, 2)}</td>
@@ -595,7 +572,7 @@ function renderTradeTable(result) {
             <td>${trade.reason}</td>
         </tr>
     `);
-    els.tradeBody.innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"7\" class=\"muted\">No closed trades</td></tr>";
+    els.tradeBody.innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"8\" class=\"muted\">No closed trades</td></tr>";
 }
 
 function render() {
@@ -604,7 +581,7 @@ function render() {
     const dayIndex = Math.min(appState.dayIndex, result.daily.length - 1);
     appState.dayIndex = dayIndex;
     const row = result.daily[dayIndex];
-    const model = row.model;
+    const model = row.strongest;
 
     els.strategySelect.value = appState.selectedId;
     els.daySlider.max = String(result.daily.length - 1);
@@ -619,12 +596,13 @@ function render() {
     els.currentSignal.textContent = row.decision;
     els.currentDate.textContent = row.date;
     els.chartTitle.textContent = result.strategy.name;
-    els.zPill.textContent = model ? `${num(model.z, 2)}z` : "warming";
+    els.zPill.textContent = model ? `${model.pair.left}/${model.pair.right} ${num(model.z, 2)}z` : "warming";
     els.zPill.className = `pill ${model && Math.abs(model.z) >= result.strategy.entryZ ? "good" : ""}`;
-    els.positionPill.textContent = row.positionLabel;
-    els.positionPill.className = `pill ${row.positionLabel === "Flat" ? "" : "bad"}`;
-    els.koPrice.textContent = money(row.ko);
-    els.pepPrice.textContent = money(row.pep);
+    els.positionPill.textContent = `${row.openCount} open`;
+    els.positionPill.className = `pill ${row.openCount ? "bad" : ""}`;
+    els.pairName.textContent = model ? model.pair.label : "-";
+    els.koPrice.textContent = model ? `${model.pair.left} ${money(price(appState.data[dayIndex], model.pair.left))}` : "-";
+    els.pepPrice.textContent = model ? `${model.pair.right} ${money(price(appState.data[dayIndex], model.pair.right))}` : "-";
     els.hedgeBeta.textContent = model ? num(model.beta, 3) : "-";
     els.correlation.textContent = model ? num(model.corr, 3) : "-";
     els.halfLife.textContent = model && Number.isFinite(model.halfLife) ? `${num(model.halfLife, 1)} days` : "-";
@@ -694,14 +672,16 @@ async function boot() {
     const response = await fetch(DATA_URL);
     if (!response.ok) throw new Error(`Unable to load ${DATA_URL}`);
     const payload = await response.json();
+    appState.pairs = payload.metadata.pairs;
     appState.data = payload.prices.map((row) => ({
         date: row.date,
-        ko: row.koAdjClose,
-        pep: row.pepAdjClose
+        symbols: Object.fromEntries(
+            Object.entries(row.symbols).map(([symbol, values]) => [symbol, { adjClose: values.adjClose, close: values.close }])
+        )
     }));
 
     STRATEGIES.forEach((strategy) => {
-        appState.results.set(strategy.id, simulateStrategy(appState.data, strategy));
+        appState.results.set(strategy.id, simulateStrategy(appState.data, appState.pairs, strategy));
         const option = document.createElement("option");
         option.value = strategy.id;
         option.textContent = strategy.name;

@@ -9,7 +9,7 @@
 <body>
     <header class="topbar">
         <div>
-            <p class="eyebrow">KO / PEP statistical arbitrage</p>
+            <p class="eyebrow">multi-pair statistical arbitrage</p>
             <h1>Pairs Arbitrage Simulator</h1>
         </div>
         <nav class="topnav" aria-label="Main navigation">
@@ -76,7 +76,7 @@
             <article class="panel chart-panel">
                 <div class="panel-head">
                     <div>
-                        <p class="eyebrow">daily replay</p>
+                    <p class="eyebrow">portfolio replay</p>
                         <h2 id="chartTitle">Spread and equity</h2>
                     </div>
                     <div class="pill-row">
@@ -84,7 +84,7 @@
                         <span id="positionPill" class="pill">flat</span>
                     </div>
                 </div>
-                <canvas id="simulationChart" width="1200" height="520" aria-label="Spread z-score and equity curve"></canvas>
+                <canvas id="simulationChart" width="1200" height="520" aria-label="Scanner z-score and equity curve"></canvas>
             </article>
 
             <aside class="panel state-panel">
@@ -95,8 +95,9 @@
                     </div>
                 </div>
                 <dl class="state-list">
-                    <div><dt>KO adjusted close</dt><dd id="koPrice">-</dd></div>
-                    <div><dt>PEP adjusted close</dt><dd id="pepPrice">-</dd></div>
+                    <div><dt>Detected pair</dt><dd id="pairName">-</dd></div>
+                    <div><dt>Left leg price</dt><dd id="koPrice">-</dd></div>
+                    <div><dt>Right leg price</dt><dd id="pepPrice">-</dd></div>
                     <div><dt>Hedge beta</dt><dd id="hedgeBeta">-</dd></div>
                     <div><dt>Correlation</dt><dd id="correlation">-</dd></div>
                     <div><dt>Half-life</dt><dd id="halfLife">-</dd></div>
@@ -148,6 +149,7 @@
                         <tr>
                             <th scope="col">Opened</th>
                             <th scope="col">Closed</th>
+                            <th scope="col">Pair</th>
                             <th scope="col">Position</th>
                             <th scope="col">Entry z</th>
                             <th scope="col">Exit z</th>
