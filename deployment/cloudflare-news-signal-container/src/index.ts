@@ -122,6 +122,23 @@ type SimulationPoint = {
   investments: number;
 };
 
+type SimulationStateRow = {
+  id: string;
+  starting_cash: number;
+  cash: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type SimulationPositionRow = {
+  symbol: string;
+  shares: number;
+  average_price: number;
+  last_action_at: string | null;
+  last_buy_at: string | null;
+  updated_at: string;
+};
+
 class ResearchBusyError extends Error {
   constructor() {
     super("Another research job is already running");
@@ -1438,6 +1455,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
       env.NEWS_DB.prepare("UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?").bind(jobId),
       env.NEWS_DB.prepare("UPDATE articles SET status = 'analyzed' WHERE id = ?").bind(article.id),
     ]);
+    await processSimulationPending(env, 10).catch((error) => console.error("Simulation processing failed after research", error));
     return { ok: true, jobId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1777,71 +1795,150 @@ async function buildTickerSignals(env: Env, limit: number): Promise<TickerSignal
     .sort((a, b) => Math.abs(b.score) * b.confidence * Math.log1p(b.article_count) - Math.abs(a.score) * a.confidence * Math.log1p(a.article_count));
 }
 
-async function buildSimulation(env: Env, limit: number): Promise<{
-  starting_cash: number;
-  current_value: number;
-  movement_pct: number;
-  cash: number;
-  investment_value: number;
-  positions: Record<string, number>;
-  points: SimulationPoint[];
-  trades: SimulationTrade[];
-}> {
+async function ensureSimulationTables(env: Env): Promise<void> {
+  await env.NEWS_DB.batch([
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS simulation_state (id TEXT PRIMARY KEY, starting_cash REAL NOT NULL, cash REAL NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    ),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS simulation_positions (symbol TEXT PRIMARY KEY, shares REAL NOT NULL, average_price REAL NOT NULL, last_action_at TEXT, last_buy_at TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    ),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS simulation_processed_results (result_id TEXT PRIMARY KEY, article_id TEXT NOT NULL, processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, skipped_reason TEXT)",
+    ),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS simulation_trades (id TEXT PRIMARY KEY, result_id TEXT NOT NULL, article_id TEXT NOT NULL, action TEXT NOT NULL, symbol TEXT NOT NULL, article_title TEXT NOT NULL, article_url TEXT NOT NULL, event_type TEXT, sentiment_score REAL NOT NULL, confidence REAL NOT NULL, price REAL NOT NULL, shares REAL NOT NULL, notional REAL NOT NULL, cash_after REAL NOT NULL, portfolio_value REAL NOT NULL, action_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    ),
+    env.NEWS_DB.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_simulation_trades_result_symbol_action ON simulation_trades(result_id, symbol, action)",
+    ),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_simulation_trades_action_at ON simulation_trades(action_at DESC)"),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS simulation_snapshots (id TEXT PRIMARY KEY, at TEXT NOT NULL, cash REAL NOT NULL, investment_value REAL NOT NULL, total_value REAL NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    ),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_simulation_snapshots_at ON simulation_snapshots(at DESC)"),
+  ]);
+
+  await env.NEWS_DB.prepare(
+    "INSERT OR IGNORE INTO simulation_state (id, starting_cash, cash) VALUES ('default', ?, ?)",
+  )
+    .bind(100000, 100000)
+    .run();
+}
+
+async function getSimulationState(env: Env): Promise<SimulationStateRow> {
+  await ensureSimulationTables(env);
+  const row = await env.NEWS_DB.prepare("SELECT * FROM simulation_state WHERE id = 'default'").first<SimulationStateRow>();
+  if (!row) throw new Error("Simulation state could not be initialized");
+  return row;
+}
+
+async function listSimulationPositions(env: Env): Promise<SimulationPositionRow[]> {
+  await ensureSimulationTables(env);
+  const result = await env.NEWS_DB.prepare("SELECT * FROM simulation_positions WHERE shares > 0 ORDER BY symbol").all<SimulationPositionRow>();
+  return result.results || [];
+}
+
+async function latestKnownPrice(symbol: string): Promise<number | null> {
+  try {
+    const chart = await fetchYahooChart(symbol, new Date().toISOString());
+    const points = chart.timestamps
+      .map((at, index) => ({ at, price: chart.closes[index] }))
+      .filter((point): point is { at: number; price: number } => typeof point.price === "number" && Number.isFinite(point.price))
+      .sort((a, b) => b.at - a.at);
+    return points[0]?.price ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function currentPositionValue(env: Env, fallbackPrices = new Map<string, number>()): Promise<number> {
+  const positions = await listSimulationPositions(env);
+  let value = 0;
+  for (const position of positions) {
+    const price = fallbackPrices.get(position.symbol) || (await latestKnownPrice(position.symbol)) || position.average_price;
+    value += Number(position.shares || 0) * price;
+  }
+  return value;
+}
+
+async function recordSimulationSnapshot(env: Env, at: string, cash: number, fallbackPrices = new Map<string, number>()): Promise<number> {
+  const investmentValue = await currentPositionValue(env, fallbackPrices);
+  const totalValue = cash + investmentValue;
+  await env.NEWS_DB.prepare(
+    "INSERT INTO simulation_snapshots (id, at, cash, investment_value, total_value) VALUES (?, ?, ?, ?, ?)",
+  )
+    .bind(crypto.randomUUID(), at, cash, investmentValue, totalValue)
+    .run();
+  return totalValue;
+}
+
+async function processSimulationPending(env: Env, limit = 25): Promise<{ processed: number; skipped: number; trades: number }> {
+  await ensureSimulationTables(env);
+  const rows = await listRows<ResearchResultRow>(
+    env.NEWS_DB,
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN simulation_processed_results ON simulation_processed_results.result_id = research_results.id WHERE simulation_processed_results.result_id IS NULL ORDER BY COALESCE(articles.published_at, research_results.created_at) ASC LIMIT ?",
+    limit,
+  );
+
+  let processed = 0;
+  let skipped = 0;
+  let trades = 0;
   const startingCash = 100000;
-  let cash = startingCash;
-  const positions = new Map<string, number>();
-  const lastActionAt = new Map<string, number>();
-  const lastBuyAt = new Map<string, number>();
-  const trades: SimulationTrade[] = [];
-  const points: SimulationPoint[] = [];
-  const rows = (await getRecentResearchRows(env, limit)).reverse();
   const actionCooldownMs = 12 * 60 * 60 * 1000;
   const minimumHoldMs = 3 * 24 * 60 * 60 * 1000;
-
-  function investmentValue(prices: Map<string, number>): number {
-    let value = 0;
-    for (const [symbol, shares] of positions) {
-      value += shares * (prices.get(symbol) || 0);
-    }
-    return value;
-  }
-
-  function portfolioValue(prices: Map<string, number>): number {
-    return cash + investmentValue(prices);
-  }
-
-  function addPoint(at: string, prices: Map<string, number>): number {
-    const investments = investmentValue(prices);
-    const value = cash + investments;
-    points.push({ at, value, cash, investments });
-    return value;
-  }
 
   for (const row of rows) {
     const score = Number(row.sentiment_score || 0);
     const confidence = Number(row.confidence || 0);
-    if (Math.abs(score) < 0.15 || confidence < 0.35) continue;
+    const actionAt = row.published_at || row.created_at;
+    const actionTime = new Date(actionAt).getTime();
+
+    async function markProcessed(reason: string | null): Promise<void> {
+      await env.NEWS_DB.prepare(
+        "INSERT OR IGNORE INTO simulation_processed_results (result_id, article_id, skipped_reason) VALUES (?, ?, ?)",
+      )
+        .bind(row.id, row.article_id, reason)
+        .run();
+      if (reason) skipped += 1;
+      else processed += 1;
+    }
+
+    if (Math.abs(score) < 0.15 || confidence < 0.35) {
+      await markProcessed("low_signal");
+      continue;
+    }
 
     const symbols = symbolsForResearchRow(row).slice(0, 4);
-    if (!symbols.length) continue;
+    if (!symbols.length) {
+      await markProcessed("no_symbols");
+      continue;
+    }
 
     const prices = new Map<string, number>();
     for (const symbol of symbols) {
       const impact = await getPriceImpact(env, row, symbol, impactDetailForSymbol(row, symbol));
       if (impact?.baseline_price) prices.set(symbol, impact.baseline_price);
     }
-    if (!prices.size) continue;
+    if (!prices.size) {
+      await markProcessed("no_prices");
+      continue;
+    }
 
-    const currentValue = portfolioValue(prices);
+    const state = await getSimulationState(env);
+    let cash = Number(state.cash ?? startingCash);
+    const currentValue = cash + (await currentPositionValue(env, prices));
     const totalNotional = Math.min(currentValue * 0.12, currentValue * Math.abs(score) * confidence * 0.18);
     const perSymbol = totalNotional / prices.size;
-    const actionAt = row.published_at || row.created_at;
-    const actionTime = new Date(actionAt).getTime();
+    let rowTrades = 0;
 
     for (const [symbol, price] of prices) {
+      const position = await env.NEWS_DB.prepare("SELECT * FROM simulation_positions WHERE symbol = ?").bind(symbol).first<SimulationPositionRow>();
+      const held = Number(position?.shares || 0);
+      const lastAction = position?.last_action_at ? new Date(position.last_action_at).getTime() : 0;
+      const lastBuy = position?.last_buy_at ? new Date(position.last_buy_at).getTime() : 0;
+
       if (score > 0) {
-        const held = positions.get(symbol) || 0;
-        const lastAction = lastActionAt.get(symbol) || 0;
         const existingValue = held * price;
         const maxPositionValue = currentValue * 0.15;
         const canAddToExisting = actionTime - lastAction >= 24 * 60 * 60 * 1000 && score >= 0.45 && confidence >= 0.65;
@@ -1854,30 +1951,24 @@ async function buildSimulation(env: Env, limit: number): Promise<{
         const shares = Math.floor((cappedNotional / price) * 10000) / 10000;
         if (shares <= 0) continue;
         cash -= shares * price;
-        positions.set(symbol, (positions.get(symbol) || 0) + shares);
-        lastActionAt.set(symbol, actionTime);
-        lastBuyAt.set(symbol, actionTime);
-        const value = addPoint(actionAt, prices);
-        trades.push({
-          action: "BUY",
-          symbol,
-          article_title: row.title,
-          article_url: row.url,
-          event_type: row.event_type,
-          sentiment_score: score,
-          confidence,
-          price,
-          shares,
-          notional: shares * price,
-          cash_after: cash,
-          portfolio_value: value,
-          action_at: actionAt,
-        });
+        const newShares = held + shares;
+        const previousCost = held * Number(position?.average_price || price);
+        const averagePrice = (previousCost + shares * price) / newShares;
+        await env.NEWS_DB.batch([
+          env.NEWS_DB.prepare(
+            "INSERT INTO simulation_positions (symbol, shares, average_price, last_action_at, last_buy_at, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(symbol) DO UPDATE SET shares = excluded.shares, average_price = excluded.average_price, last_action_at = excluded.last_action_at, last_buy_at = excluded.last_buy_at, updated_at = CURRENT_TIMESTAMP",
+          ).bind(symbol, newShares, averagePrice, actionAt, actionAt),
+          env.NEWS_DB.prepare("UPDATE simulation_state SET cash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'default'").bind(cash),
+        ]);
+        const value = await recordSimulationSnapshot(env, actionAt, cash, prices);
+        await env.NEWS_DB.prepare(
+          "INSERT OR IGNORE INTO simulation_trades (id, result_id, article_id, action, symbol, article_title, article_url, event_type, sentiment_score, confidence, price, shares, notional, cash_after, portfolio_value, action_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+          .bind(crypto.randomUUID(), row.id, row.article_id, "BUY", symbol, row.title, row.url, row.event_type, score, confidence, price, shares, shares * price, cash, value, actionAt)
+          .run();
+        rowTrades += 1;
       } else {
-        const held = positions.get(symbol) || 0;
         if (held <= 0) continue;
-        const lastAction = lastActionAt.get(symbol) || 0;
-        const lastBuy = lastBuyAt.get(symbol) || 0;
         const criticalBearishExit = score <= -0.65 && confidence >= 0.75;
         if (actionTime - lastAction < actionCooldownMs && !criticalBearishExit) continue;
         if (actionTime - lastBuy < minimumHoldMs && !criticalBearishExit) continue;
@@ -1885,51 +1976,85 @@ async function buildSimulation(env: Env, limit: number): Promise<{
         const shares = criticalBearishExit ? held : Math.min(held, Math.floor((perSymbol / price) * 10000) / 10000);
         if (shares <= 0) continue;
         cash += shares * price;
-        positions.set(symbol, held - shares);
-        lastActionAt.set(symbol, actionTime);
-        const value = addPoint(actionAt, prices);
-        trades.push({
-          action: "SELL",
-          symbol,
-          article_title: row.title,
-          article_url: row.url,
-          event_type: row.event_type,
-          sentiment_score: score,
-          confidence,
-          price,
-          shares,
-          notional: shares * price,
-          cash_after: cash,
-          portfolio_value: value,
-          action_at: actionAt,
-        });
+        const remaining = Math.max(0, held - shares);
+        await env.NEWS_DB.batch([
+          env.NEWS_DB.prepare(
+            "INSERT INTO simulation_positions (symbol, shares, average_price, last_action_at, last_buy_at, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(symbol) DO UPDATE SET shares = excluded.shares, average_price = excluded.average_price, last_action_at = excluded.last_action_at, last_buy_at = excluded.last_buy_at, updated_at = CURRENT_TIMESTAMP",
+          ).bind(symbol, remaining, Number(position?.average_price || price), actionAt, position?.last_buy_at || null),
+          env.NEWS_DB.prepare("UPDATE simulation_state SET cash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'default'").bind(cash),
+        ]);
+        const value = await recordSimulationSnapshot(env, actionAt, cash, prices);
+        await env.NEWS_DB.prepare(
+          "INSERT OR IGNORE INTO simulation_trades (id, result_id, article_id, action, symbol, article_title, article_url, event_type, sentiment_score, confidence, price, shares, notional, cash_after, portfolio_value, action_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+          .bind(crypto.randomUUID(), row.id, row.article_id, "SELL", symbol, row.title, row.url, row.event_type, score, confidence, price, shares, shares * price, cash, value, actionAt)
+          .run();
+        rowTrades += 1;
       }
     }
+
+    trades += rowTrades;
+    await markProcessed(rowTrades ? null : "no_trade");
   }
 
-  const latestPrices = new Map<string, number>();
-  for (const [symbol] of positions) {
-    const latestRow = rows.find((row) => symbolsForResearchRow(row).includes(symbol));
-    if (!latestRow) continue;
-    const impact = await getPriceImpact(env, latestRow, symbol, impactDetailForSymbol(latestRow, symbol));
-    const current = impact?.intervals["1m"]?.price || impact?.intervals["1w"]?.price || impact?.intervals["1d"]?.price || impact?.baseline_price;
-    if (current) latestPrices.set(symbol, current);
+  return { processed, skipped, trades };
+}
+
+async function buildSimulation(env: Env, limit: number): Promise<{
+  starting_cash: number;
+  current_value: number;
+  movement_pct: number;
+  cash: number;
+  investment_value: number;
+  positions: Record<string, number>;
+  points: SimulationPoint[];
+  trades: SimulationTrade[];
+}> {
+  await processSimulationPending(env, 10);
+  const state = await getSimulationState(env);
+  const positions = await listSimulationPositions(env);
+  const cash = Number(state.cash);
+  const investmentValue = await currentPositionValue(env);
+  const currentValue = cash + investmentValue;
+  const snapshot = await env.NEWS_DB.prepare(
+    "SELECT at FROM simulation_snapshots ORDER BY datetime(at) DESC LIMIT 1",
+  ).first<{ at: string }>();
+  if (!snapshot || Date.now() - new Date(snapshot.at).getTime() > 30 * 60 * 1000) {
+    await recordSimulationSnapshot(env, new Date().toISOString(), cash);
   }
 
-  const currentValue = portfolioValue(latestPrices);
-  const currentInvestmentValue = investmentValue(latestPrices);
-  if (!points.length) points.push({ at: new Date().toISOString(), value: startingCash, cash: startingCash, investments: 0 });
-  points.push({ at: new Date().toISOString(), value: currentValue, cash, investments: currentInvestmentValue });
+  const snapshotLimit = Math.min(Math.max(limit, 2), 100);
+  const pointResult = await env.NEWS_DB.prepare(
+    "SELECT at, total_value, cash, investment_value FROM (SELECT at, total_value, cash, investment_value FROM simulation_snapshots ORDER BY datetime(at) DESC LIMIT ?) ORDER BY datetime(at) ASC",
+  )
+    .bind(snapshotLimit)
+    .all<{ at: string; total_value: number; cash: number; investment_value: number }>();
+  const pointRows = pointResult.results || [];
+  const points = pointRows.map((point) => ({
+    at: point.at,
+    value: Number(point.total_value),
+    cash: Number(point.cash),
+    investments: Number(point.investment_value),
+  }));
+  if (!points.length) {
+    points.push({ at: state.created_at, value: Number(state.starting_cash), cash: Number(state.starting_cash), investments: 0 });
+  }
+
+  const tradeRows = await listRows<SimulationTrade>(
+    env.NEWS_DB,
+    "SELECT action, symbol, article_title, article_url, event_type, sentiment_score, confidence, price, shares, notional, cash_after, portfolio_value, action_at FROM simulation_trades ORDER BY datetime(action_at) DESC LIMIT ?",
+    limit,
+  );
 
   return {
-    starting_cash: startingCash,
+    starting_cash: Number(state.starting_cash),
     current_value: currentValue,
-    movement_pct: ((currentValue - startingCash) / startingCash) * 100,
+    movement_pct: ((currentValue - Number(state.starting_cash)) / Number(state.starting_cash)) * 100,
     cash,
-    investment_value: currentInvestmentValue,
-    positions: Object.fromEntries(positions),
+    investment_value: investmentValue,
+    positions: Object.fromEntries(positions.map((position) => [position.symbol, position.shares])),
     points,
-    trades: trades.sort((a, b) => new Date(b.action_at).getTime() - new Date(a.action_at).getTime()),
+    trades: tradeRows,
   };
 }
 
@@ -2003,6 +2128,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
   if (url.pathname === "/api/simulation") {
     return json({ ok: true, simulation: await buildSimulation(env, limit) });
+  }
+
+  if (url.pathname === "/api/simulation/process" && request.method === "POST") {
+    return json({ ok: true, ...(await processSimulationPending(env, limit)) });
   }
 
   if (url.pathname === "/api/ingest" && request.method === "POST") {
@@ -2099,6 +2228,7 @@ export default {
           "/api/jobs",
           "/api/results",
           "/api/ticker-signals",
+          "/api/simulation/process",
           "/api/reanalyze-recent",
           "/container/health",
           "/container/mcp-check",
@@ -2117,6 +2247,7 @@ export default {
     ctx.waitUntil(
       ingestFeeds(env).then(async () => {
         await requeuePendingJobs(env, 25);
+        await processSimulationPending(env, 50).catch((error) => console.error("Scheduled simulation processing failed", error));
       }),
     );
   },
@@ -2125,6 +2256,7 @@ export default {
     for (const message of batch.messages) {
       try {
         await processJob(env, message.body.jobId);
+        await processSimulationPending(env, 10).catch((error) => console.error("Queue simulation processing failed", error));
         message.ack();
         await requeuePendingJobs(env, 1);
       } catch (error) {
