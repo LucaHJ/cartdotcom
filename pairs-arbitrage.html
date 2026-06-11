@@ -3,14 +3,14 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Pairs Arbitrage Simulator</title>
-    <link rel="stylesheet" href="pairs-arbitrage.css?v=20260611">
+    <title>Pairs Scanner Backtest</title>
+    <link rel="stylesheet" href="pairs-arbitrage.css?v=20260611-scanner2">
 </head>
 <body>
     <header class="topbar">
         <div>
             <p class="eyebrow">multi-pair statistical arbitrage</p>
-            <h1>Pairs Arbitrage Simulator</h1>
+            <h1>Pairs Scanner Backtest</h1>
         </div>
         <nav class="topnav" aria-label="Main navigation">
             <a href="home.html">Home</a>
@@ -72,11 +72,22 @@
             </article>
         </section>
 
+        <section class="panel universe-panel" aria-labelledby="universeTitle">
+            <div class="panel-head">
+                <div>
+                    <p class="eyebrow">scanner universe</p>
+                    <h2 id="universeTitle">Candidate pairs</h2>
+                </div>
+                <span class="pill" id="universeSummary">Loading universe</span>
+            </div>
+            <div class="universe-list" id="universeList"></div>
+        </section>
+
         <section class="workspace">
             <article class="panel chart-panel">
                 <div class="panel-head">
                     <div>
-                    <p class="eyebrow">portfolio replay</p>
+                        <p class="eyebrow">portfolio replay</p>
                         <h2 id="chartTitle">Spread and equity</h2>
                     </div>
                     <div class="pill-row">
@@ -164,6 +175,6 @@
     </main>
 
     <script src="/refresh-button.js?v=20260526-refresh"></script>
-    <script src="pairs-arbitrage.js?v=20260611"></script>
+    <script src="pairs-arbitrage.js?v=20260611-scanner2"></script>
 </body>
 </html>

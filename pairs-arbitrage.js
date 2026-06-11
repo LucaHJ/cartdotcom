@@ -1,4 +1,4 @@
-const DATA_URL = "data/pairs-universe.json?v=20260611";
+const DATA_URL = "data/pairs-universe.json?v=20260611-scanner2";
 const STARTING_EQUITY = 100000;
 const TRADING_DAYS = 252;
 
@@ -117,12 +117,15 @@ const els = {
     exposure: document.getElementById("exposure"),
     unrealized: document.getElementById("unrealized"),
     strategyBody: document.getElementById("strategyBody"),
-    tradeBody: document.getElementById("tradeBody")
+    tradeBody: document.getElementById("tradeBody"),
+    universeSummary: document.getElementById("universeSummary"),
+    universeList: document.getElementById("universeList")
 };
 
 let appState = {
     data: [],
     pairs: [],
+    metadata: null,
     results: new Map(),
     selectedId: "scanner_balanced",
     dayIndex: 0,
@@ -575,6 +578,18 @@ function renderTradeTable(result) {
     els.tradeBody.innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"8\" class=\"muted\">No closed trades</td></tr>";
 }
 
+function renderUniverse() {
+    const metadata = appState.metadata;
+    if (!metadata) return;
+    els.universeSummary.textContent = `${metadata.pairs.length} pairs · ${metadata.symbols.length} tickers · ${metadata.startDate} to ${metadata.endDate}`;
+    els.universeList.innerHTML = metadata.pairs.map((pair) => `
+        <article class="pair-chip">
+            <strong>${pair.left}/${pair.right} · ${pair.label}</strong>
+            <span>${pair.theme}</span>
+        </article>
+    `).join("");
+}
+
 function render() {
     const result = appState.results.get(appState.selectedId);
     if (!result) return;
@@ -613,6 +628,7 @@ function render() {
 
     renderStrategyTable();
     renderTradeTable(result);
+    renderUniverse();
     drawChart(result, dayIndex);
 }
 
@@ -672,6 +688,7 @@ async function boot() {
     const response = await fetch(DATA_URL);
     if (!response.ok) throw new Error(`Unable to load ${DATA_URL}`);
     const payload = await response.json();
+    appState.metadata = payload.metadata;
     appState.pairs = payload.metadata.pairs;
     appState.data = payload.prices.map((row) => ({
         date: row.date,
