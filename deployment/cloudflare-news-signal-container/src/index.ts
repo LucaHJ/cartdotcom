@@ -1080,7 +1080,7 @@ const DASHBOARD_HTML = `<!doctype html>
       const rows = impacts.map((impact) => [
         escapeHtml(impact.symbol || ""),
         escapeHtml(impact.company || ""),
-        escapeHtml(formatMoney(impact.baseline_price)),
+        priceCell(impact.baseline_price, impact.baseline_at, "Closest available release-time baseline price."),
         impactPill(impact.intervals && impact.intervals["1h"], "1h"),
         impactPill(impact.intervals && impact.intervals["6h"], "6h"),
         impactPill(impact.intervals && impact.intervals["12h"], "12h"),
@@ -1165,13 +1165,22 @@ const DASHBOARD_HTML = `<!doctype html>
       return '<span class="pill ' + escapeAttr(cls || "") + '" title="' + escapeAttr(hint) + '">' + escapeHtml(text) + '</span>';
     }
 
+    function priceCell(price, at, hint) {
+      const title = [hint, at ? "Sampled: " + formatDate(at) : ""].filter(Boolean).join(" ");
+      return '<span title="' + escapeAttr(title) + '">' + escapeHtml(formatMoney(price)) + '</span>';
+    }
+
     function impactPill(point, label) {
       if (!point || point.change_pct === null || point.change_pct === undefined) {
-        return pill("n/a", "", "No market price was available for the " + label + " interval yet.");
+        return pill("n/a", "", "No market price at or after the " + label + " post-publication target is available yet.");
       }
       const value = Number(point.change_pct);
       const cls = value > 0 ? "green" : value < 0 ? "red" : "amber";
-      return pill(signedPct(value), cls, "Price change at " + label + " after publication versus the closest available market price at article publication time.");
+      return pill(
+        formatMoney(point.price) + " " + signedPct(value),
+        cls,
+        "Price sampled at " + formatDate(point.at) + ". Change at " + label + " after publication versus the closest available market price at article publication time.",
+      );
     }
 
     function statusClass(status) {
@@ -1730,10 +1739,8 @@ function nearestElapsedPoint(timestamps: number[], closes: Array<number | null>,
   if (!candidates.length) return null;
 
   const afterTarget = candidates.filter((point) => point.at >= elapsedTarget);
-  const beforeTarget = candidates.filter((point) => point.at <= elapsedTarget);
-  const pool = afterTarget.length ? afterTarget : beforeTarget;
-  if (!pool.length) return null;
-  return pool.reduce((best, point) => (Math.abs(point.at - elapsedTarget) < Math.abs(best.at - elapsedTarget) ? point : best), pool[0]);
+  if (!afterTarget.length) return null;
+  return afterTarget.reduce((best, point) => (Math.abs(point.at - elapsedTarget) < Math.abs(best.at - elapsedTarget) ? point : best), afterTarget[0]);
 }
 
 async function fetchYahooChart(symbol: string, publishedAt: string): Promise<{ timestamps: number[]; closes: Array<number | null> }> {
@@ -1813,6 +1820,14 @@ async function getCachedPriceImpact(env: Env, article: ResearchResultRow, symbol
     .bind(article.article_id, symbol)
     .first<{ baseline_price: number | null; baseline_at: string | null; intervals_json: string }>();
   if (!cached) return null;
+  const intervals = JSON.parse(cached.intervals_json) as Record<string, PricePoint>;
+  const now = Math.floor(Date.now() / 1000);
+  for (const [label, target] of Object.entries(intervalTargets(article.published_at || article.created_at))) {
+    const point = intervals[label];
+    if (point?.price !== null && point?.price !== undefined && unixSeconds(point.at) < target && target <= now) {
+      return null;
+    }
+  }
 
   return {
     article_id: article.article_id,
@@ -1827,7 +1842,7 @@ async function getCachedPriceImpact(env: Env, article: ResearchResultRow, symbol
     rationale: detail?.reason || null,
     baseline_price: cached.baseline_price,
     baseline_at: cached.baseline_at,
-    intervals: JSON.parse(cached.intervals_json),
+    intervals,
   };
 }
 
