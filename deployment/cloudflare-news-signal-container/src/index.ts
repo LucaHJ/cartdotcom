@@ -1852,11 +1852,11 @@ async function latestKnownPrice(symbol: string): Promise<number | null> {
   }
 }
 
-async function currentPositionValue(env: Env, fallbackPrices = new Map<string, number>()): Promise<number> {
+async function currentPositionValue(env: Env, fallbackPrices = new Map<string, number>(), refreshLatest = false): Promise<number> {
   const positions = await listSimulationPositions(env);
   let value = 0;
   for (const position of positions) {
-    const price = fallbackPrices.get(position.symbol) || (await latestKnownPrice(position.symbol)) || position.average_price;
+    const price = fallbackPrices.get(position.symbol) || (refreshLatest ? await latestKnownPrice(position.symbol) : null) || position.average_price;
     value += Number(position.shares || 0) * price;
   }
   return value;
