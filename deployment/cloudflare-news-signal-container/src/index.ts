@@ -685,18 +685,25 @@ const DASHBOARD_HTML = `<!doctype html>
     const tradesMeta = document.getElementById("trades-meta");
     let simulationLoaded = false;
 
-    tokenInput.value = sessionStorage.getItem("newsSignalToken") || "";
+    const TOKEN_KEY = "newsSignalToken";
+    tokenInput.value = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || "";
     syncAuthState();
 
     document.getElementById("save-token-btn").addEventListener("click", () => {
-      sessionStorage.setItem("newsSignalToken", tokenInput.value.trim());
+      const token = tokenInput.value.trim();
+      localStorage.setItem(TOKEN_KEY, token);
+      sessionStorage.setItem(TOKEN_KEY, token);
+      simulationLoaded = false;
       syncAuthState();
       loadAll();
+      if (!simulationPanel.classList.contains("hidden")) loadSimulation();
     });
 
     document.getElementById("clear-token-btn").addEventListener("click", () => {
-      sessionStorage.removeItem("newsSignalToken");
+      localStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_KEY);
       tokenInput.value = "";
+      simulationLoaded = false;
       syncAuthState();
     });
 
@@ -720,7 +727,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function headers() {
-      const token = sessionStorage.getItem("newsSignalToken") || tokenInput.value.trim();
+      const token = tokenInput.value.trim() || localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
       return token ? { Authorization: "Bearer " + token } : {};
     }
 
@@ -730,7 +737,12 @@ const DASHBOARD_HTML = `<!doctype html>
         headers: { ...(options.headers || {}), ...headers() },
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "HTTP " + response.status);
+      if (!response.ok) {
+        const message = response.status === 401
+          ? "Unauthorized: paste the dashboard token and click Save token."
+          : payload.error || "HTTP " + response.status;
+        throw new Error(message);
+      }
       return payload;
     }
 
