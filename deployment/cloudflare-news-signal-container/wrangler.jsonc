@@ -8,7 +8,7 @@
     "enabled": true
   },
   "triggers": {
-    "crons": ["*/10 * * * *"]
+    "crons": ["*/5 * * * *"]
   },
   "vars": {
     "CODEX_RESEARCH_MODEL": "gpt-5.5"

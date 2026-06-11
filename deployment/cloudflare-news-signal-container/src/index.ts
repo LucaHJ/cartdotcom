@@ -614,8 +614,7 @@ const DASHBOARD_HTML = `<!doctype html>
       <div class="actions">
         <button class="btn" id="refresh-btn" type="button">Refresh</button>
         <button class="btn" id="ingest-btn" type="button">Ingest</button>
-        <button class="btn" id="reanalyze-btn" type="button">Reanalyze</button>
-        <button class="btn primary" id="requeue-btn" type="button">Requeue</button>
+        <button class="btn primary" id="settings-btn" type="button">Settings</button>
       </div>
     </header>
 
@@ -633,30 +632,30 @@ const DASHBOARD_HTML = `<!doctype html>
     </nav>
 
     <section id="overview-panel">
-      <section class="layout">
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title">Event Summaries</div>
-            <div class="panel-meta" id="results-meta">0 rows</div>
-          </div>
-          <div class="results" id="results"></div>
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Event Summaries</div>
+          <div class="panel-meta" id="results-meta">0 rows</div>
         </div>
+        <div class="results" id="results"></div>
+      </section>
+    </section>
 
-        <div class="split">
-          <div class="panel">
-            <div class="panel-header">
-              <div class="panel-title">Recent Jobs</div>
-              <div class="panel-meta" id="jobs-meta">0 rows</div>
-            </div>
-            <div id="jobs"></div>
-          </div>
-
+    <section id="settings-panel" class="hidden">
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Recent Jobs</div>
+          <div class="panel-meta" id="jobs-meta">0 rows</div>
+        </div>
+        <div id="jobs"></div>
+        <div class="row">
+          <button class="btn" id="requeue-btn" type="button">Requeue Pending</button>
         </div>
       </section>
 
       <section class="panel" style="margin-top:14px">
         <div class="panel-header">
-          <div class="panel-title">Recent Articles</div>
+          <div class="panel-title">Article Impacts</div>
           <div class="panel-meta" id="articles-meta">0 rows</div>
         </div>
         <div id="articles"></div>
@@ -699,8 +698,10 @@ const DASHBOARD_HTML = `<!doctype html>
     const articlesMeta = document.getElementById("articles-meta");
     const overviewTab = document.getElementById("overview-tab");
     const simulationTab = document.getElementById("simulation-tab");
+    const settingsBtn = document.getElementById("settings-btn");
     const overviewPanel = document.getElementById("overview-panel");
     const simulationPanel = document.getElementById("simulation-panel");
+    const settingsPanel = document.getElementById("settings-panel");
     const portfolioValueEl = document.getElementById("portfolio-value");
     const portfolioMoveEl = document.getElementById("portfolio-move");
     const portfolioCashEl = document.getElementById("portfolio-cash");
@@ -734,17 +735,20 @@ const DASHBOARD_HTML = `<!doctype html>
 
     document.getElementById("refresh-btn").addEventListener("click", loadAll);
     document.getElementById("ingest-btn").addEventListener("click", () => runAction("/api/ingest"));
-    document.getElementById("reanalyze-btn").addEventListener("click", () => runAction("/api/reanalyze-recent?limit=20"));
     document.getElementById("requeue-btn").addEventListener("click", () => runAction("/api/requeue-pending?limit=10"));
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
+    settingsBtn.addEventListener("click", () => setTab("settings"));
 
     function setTab(tab) {
       const simulation = tab === "simulation";
-      overviewTab.classList.toggle("active", !simulation);
+      const settings = tab === "settings";
+      overviewTab.classList.toggle("active", !simulation && !settings);
       simulationTab.classList.toggle("active", simulation);
-      overviewPanel.classList.toggle("hidden", simulation);
+      overviewPanel.classList.toggle("hidden", simulation || settings);
       simulationPanel.classList.toggle("hidden", !simulation);
+      settingsPanel.classList.toggle("hidden", !settings);
+      settingsBtn.classList.toggle("active", settings);
       if (simulation && !simulationLoaded) loadSimulation();
     }
 
@@ -787,16 +791,15 @@ const DASHBOARD_HTML = `<!doctype html>
     async function loadAll() {
       setBusy(true);
       try {
-        const [status, results, jobs, articles] = await Promise.all([
+        const [status, results, jobs] = await Promise.all([
           api("/api/status"),
           api("/api/results?limit=20"),
           api("/api/jobs?limit=12"),
-          api("/api/articles?limit=12"),
         ]);
         renderMetrics(status);
         renderResults(results.results || []);
         renderJobs(jobs.jobs || []);
-        renderArticles(articles.articles || []);
+        renderArticles(results.results || []);
         lastUpdated.textContent = "Updated " + new Date().toLocaleTimeString();
       } catch (error) {
         showError(metricsEl, error);
@@ -891,6 +894,7 @@ const DASHBOARD_HTML = `<!doctype html>
           '</div>' +
           '<p class="summary">' + escapeHtml(blurb) + '</p>' +
           table(["Type", "Impacted", "Ticker", "Direction", "Conf", "Why"], impactRows) +
+          renderPriceImpacts(item.price_impacts || []) +
           '<details><summary>Source article</summary><p class="summary"><a href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || "Article") + '</a></p></details>' +
           '<details><summary>Memo</summary><pre>' + escapeHtml(item.memo || "") + '</pre></details>' +
         '</article>';
@@ -910,17 +914,18 @@ const DASHBOARD_HTML = `<!doctype html>
       ]));
     }
 
-    function renderArticles(articles) {
-      articlesMeta.textContent = articles.length + " rows";
-      if (!articles.length) {
-        articlesEl.innerHTML = '<div class="empty">No articles.</div>';
+    function renderArticles(results) {
+      articlesMeta.textContent = results.length + " rows";
+      if (!results.length) {
+        articlesEl.innerHTML = '<div class="empty">No analyzed article impacts yet.</div>';
         return;
       }
-      articlesEl.innerHTML = table(["Status", "Published", "Source", "Article"], articles.map((article) => [
-        pill(article.status || "unknown", statusClass(article.status), "Article ingestion state: queued means discovered, analyzed means a research result has been stored."),
-        escapeHtml(formatDate(article.published_at || article.discovered_at)),
-        escapeHtml(article.source_name || article.source_id || ""),
-        '<a class="truncate" href="' + escapeAttr(article.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(article.title || "Article") + '</a>',
+      articlesEl.innerHTML = table(["Published", "Article", "Tickers", "Score", "Conf"], results.map((item) => [
+        escapeHtml(formatDate(item.published_at || item.created_at)),
+        '<a class="truncate" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || "Article") + '</a>',
+        renderImpactTickerPills(item),
+        pill(formatNumber(item.sentiment_score), Number(item.sentiment_score || 0) > 0.1 ? "green" : Number(item.sentiment_score || 0) < -0.1 ? "red" : "amber", "Article-level perception score used by the simulation."),
+        pill(formatNumber(item.confidence), "green", "Article-level confidence."),
       ]));
     }
 
@@ -999,6 +1004,38 @@ const DASHBOARD_HTML = `<!doctype html>
       return '<table><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody>' +
         rows.map((row) => '<tr>' + row.map((cell) => '<td>' + cell + '</td>').join("") + '</tr>').join("") +
         '</tbody></table>';
+    }
+
+    function renderPriceImpacts(impacts) {
+      if (!impacts || !impacts.length) return '<div class="summary">No ticker price history is available for this event yet.</div>';
+      const rows = impacts.map((impact) => [
+        escapeHtml(impact.symbol || ""),
+        escapeHtml(impact.company || ""),
+        escapeHtml(formatMoney(impact.baseline_price)),
+        impactPill(impact.intervals && impact.intervals["1h"], "1h"),
+        impactPill(impact.intervals && impact.intervals["6h"], "6h"),
+        impactPill(impact.intervals && impact.intervals["12h"], "12h"),
+        impactPill(impact.intervals && impact.intervals["1d"], "1d"),
+      ]);
+      return '<details open><summary>Ticker price movement from publication</summary>' +
+        table(["Ticker", "Company", "Release", "1h", "6h", "12h", "1d"], rows) +
+      '</details>';
+    }
+
+    function renderImpactTickerPills(item) {
+      const impacts = item.price_impacts || [];
+      if (impacts.length) {
+        return impacts.slice(0, 8).map((impact) => {
+          const detail = [impact.company, impact.direction, impact.rationale].filter(Boolean).join(" - ");
+          return pill(impact.symbol || "n/a", directionClass(impact.direction), detail || "Ticker with a stored article price impact.");
+        }).join("");
+      }
+      const parsed = parseMemoJson(item.memo || "");
+      return normalizeImpactDetailsClient(parsed.impact_details)
+        .filter((impact) => impact.symbol)
+        .slice(0, 8)
+        .map((impact) => pill(impact.symbol, directionClass(impact.direction), impact.reason || "Impacted ticker."))
+        .join("") || renderArrayPills(item.symbols, "blue", "Legacy ticker identified by the older article analysis.");
     }
 
     function renderArrayPills(value, cls, hint) {
@@ -1795,6 +1832,25 @@ async function buildTickerSignals(env: Env, limit: number): Promise<TickerSignal
     .sort((a, b) => Math.abs(b.score) * b.confidence * Math.log1p(b.article_count) - Math.abs(a.score) * a.confidence * Math.log1p(a.article_count));
 }
 
+async function buildEventSummaries(env: Env, limit: number): Promise<Array<ResearchResultRow & Record<string, unknown>>> {
+  const rows = await listRows<ResearchResultRow & Record<string, unknown>>(
+    env.NEWS_DB,
+    "SELECT research_results.*, articles.title, articles.url, articles.published_at, sources.name AS source_name FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN sources ON sources.id = articles.source_id ORDER BY research_results.created_at DESC LIMIT ?",
+    limit,
+  );
+
+  const enriched = [];
+  for (const row of rows) {
+    const priceImpacts = [];
+    for (const symbol of symbolsForResearchRow(row).slice(0, 5)) {
+      const impact = await getPriceImpact(env, row, symbol, impactDetailForSymbol(row, symbol));
+      if (impact) priceImpacts.push(impact);
+    }
+    enriched.push({ ...row, price_impacts: priceImpacts });
+  }
+  return enriched;
+}
+
 async function ensureSimulationTables(env: Env): Promise<void> {
   await env.NEWS_DB.batch([
     env.NEWS_DB.prepare(
@@ -2110,11 +2166,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/api/results") {
     return json({
       ok: true,
-      results: await listRows(
-        env.NEWS_DB,
-        "SELECT research_results.*, articles.title, articles.url, sources.name AS source_name FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN sources ON sources.id = articles.source_id ORDER BY research_results.created_at DESC LIMIT ?",
-        limit,
-      ),
+      results: await buildEventSummaries(env, limit),
     });
   }
 
