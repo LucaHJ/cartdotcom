@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pairs Arbitrage Simulator</title>
+    <link rel="stylesheet" href="pairs-arbitrage.css?v=20260611">
+</head>
+<body>
+    <header class="topbar">
+        <div>
+            <p class="eyebrow">KO / PEP statistical arbitrage</p>
+            <h1>Pairs Arbitrage Simulator</h1>
+        </div>
+        <nav class="topnav" aria-label="Main navigation">
+            <a href="home.html">Home</a>
+            <a href="price-watch.html">Price Watch</a>
+            <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh simulator" title="Refresh simulator">
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path>
+                    <path d="M3 21v-5h5"></path>
+                    <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"></path>
+                    <path d="M21 3v5h-5"></path>
+                </svg>
+            </button>
+        </nav>
+    </header>
+
+    <main class="shell">
+        <section class="control-strip" aria-label="Simulation controls">
+            <div class="select-wrap">
+                <label for="strategySelect">Formula</label>
+                <select id="strategySelect"></select>
+            </div>
+            <div class="select-wrap">
+                <label for="daySlider">Trading day</label>
+                <input id="daySlider" type="range" min="0" max="0" value="0">
+            </div>
+            <div class="button-group" aria-label="Playback controls">
+                <button class="icon-button" id="stepBack" type="button" aria-label="Previous trading day" title="Previous trading day">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg>
+                </button>
+                <button class="icon-button primary" id="playPause" type="button" aria-label="Play simulation" title="Play simulation">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
+                </button>
+                <button class="icon-button" id="stepForward" type="button" aria-label="Next trading day" title="Next trading day">
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>
+                </button>
+            </div>
+        </section>
+
+        <section class="metric-grid" aria-label="Selected formula results">
+            <article class="metric">
+                <span>Final equity</span>
+                <strong id="finalEquity">-</strong>
+                <small id="totalReturn">-</small>
+            </article>
+            <article class="metric">
+                <span>Max drawdown</span>
+                <strong id="maxDrawdown">-</strong>
+                <small id="sharpeRatio">-</small>
+            </article>
+            <article class="metric">
+                <span>Trades</span>
+                <strong id="tradeCount">-</strong>
+                <small id="winRate">-</small>
+            </article>
+            <article class="metric">
+                <span>Current signal</span>
+                <strong id="currentSignal">-</strong>
+                <small id="currentDate">-</small>
+            </article>
+        </section>
+
+        <section class="workspace">
+            <article class="panel chart-panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">daily replay</p>
+                        <h2 id="chartTitle">Spread and equity</h2>
+                    </div>
+                    <div class="pill-row">
+                        <span id="zPill" class="pill">z -</span>
+                        <span id="positionPill" class="pill">flat</span>
+                    </div>
+                </div>
+                <canvas id="simulationChart" width="1200" height="520" aria-label="Spread z-score and equity curve"></canvas>
+            </article>
+
+            <aside class="panel state-panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="eyebrow">decision state</p>
+                        <h2>Day snapshot</h2>
+                    </div>
+                </div>
+                <dl class="state-list">
+                    <div><dt>KO adjusted close</dt><dd id="koPrice">-</dd></div>
+                    <div><dt>PEP adjusted close</dt><dd id="pepPrice">-</dd></div>
+                    <div><dt>Hedge beta</dt><dd id="hedgeBeta">-</dd></div>
+                    <div><dt>Correlation</dt><dd id="correlation">-</dd></div>
+                    <div><dt>Half-life</dt><dd id="halfLife">-</dd></div>
+                    <div><dt>Stationarity t</dt><dd id="stationarity">-</dd></div>
+                    <div><dt>Open exposure</dt><dd id="exposure">-</dd></div>
+                    <div><dt>Unrealized P/L</dt><dd id="unrealized">-</dd></div>
+                </dl>
+            </aside>
+        </section>
+
+        <section class="panel">
+            <div class="panel-head">
+                <div>
+                    <p class="eyebrow">formula sweep</p>
+                    <h2>Risk profiles</h2>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th scope="col">Formula</th>
+                            <th scope="col">Entry</th>
+                            <th scope="col">Exit</th>
+                            <th scope="col">Stop</th>
+                            <th scope="col">Return</th>
+                            <th scope="col">Sharpe</th>
+                            <th scope="col">Drawdown</th>
+                            <th scope="col">Trades</th>
+                            <th scope="col">Win rate</th>
+                        </tr>
+                    </thead>
+                    <tbody id="strategyBody"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-head">
+                <div>
+                    <p class="eyebrow">closed positions</p>
+                    <h2>Trade ledger</h2>
+                </div>
+            </div>
+            <div class="table-wrap ledger-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th scope="col">Opened</th>
+                            <th scope="col">Closed</th>
+                            <th scope="col">Position</th>
+                            <th scope="col">Entry z</th>
+                            <th scope="col">Exit z</th>
+                            <th scope="col">P/L</th>
+                            <th scope="col">Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradeBody"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="/refresh-button.js?v=20260526-refresh"></script>
+    <script src="pairs-arbitrage.js?v=20260611"></script>
+</body>
+</html>
