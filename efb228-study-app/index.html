@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EFB228 Study App</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">EFB228</p>
+          <h1>Microeconomics Study</h1>
+        </div>
+
+        <section class="controls" aria-label="Study controls">
+          <label>
+            Topic
+            <select id="topicFilter"></select>
+          </label>
+          <label>
+            Question type
+            <select id="typeFilter"></select>
+          </label>
+          <label>
+            Mode
+            <select id="modeSelect">
+              <option value="mixed">Mixed practice</option>
+              <option value="weak">Weak areas first</option>
+              <option value="unseen">Unseen first</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="score-panel" aria-live="polite">
+          <div>
+            <span class="score-value" id="scoreValue">0%</span>
+            <span class="score-label">accuracy</span>
+          </div>
+          <div class="mini-stats">
+            <span id="answeredCount">0 answered</span>
+            <span id="streakCount">0 streak</span>
+          </div>
+        </section>
+
+        <section>
+          <h2>Focus</h2>
+          <div id="weakAreas" class="weak-areas">Answer questions to reveal weak areas.</div>
+        </section>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <div>
+            <p class="question-meta" id="questionMeta"></p>
+            <h2 id="questionTitle"></h2>
+          </div>
+          <div class="top-actions">
+            <button class="icon-button" id="resetProgress" title="Reset progress" aria-label="Reset progress">R</button>
+            <button class="primary" id="nextQuestion">Next</button>
+          </div>
+        </header>
+
+        <section class="question-card">
+          <p id="questionPrompt" class="prompt"></p>
+          <div id="questionTags" class="question-tags"></div>
+          <div id="questionBody"></div>
+          <div class="actions">
+            <button class="primary" id="submitAnswer">Mark answer</button>
+            <button id="showAnswer">Show answer</button>
+          </div>
+          <div id="feedback" class="feedback" hidden></div>
+        </section>
+
+        <section class="study-panel" id="studyPanel" hidden>
+          <button id="backToQuestion" class="back-button">Back to question</button>
+          <p class="question-meta" id="studyMeta"></p>
+          <h2 id="studyTitle"></h2>
+          <div id="studyContent" class="study-content"></div>
+        </section>
+
+        <section class="history-panel">
+          <h2>Recent Attempts</h2>
+          <div id="historyList" class="history-list">No attempts yet.</div>
+        </section>
+      </main>
+    </div>
+
+    <script src="studyContent.js"></script>
+    <script src="questions.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
