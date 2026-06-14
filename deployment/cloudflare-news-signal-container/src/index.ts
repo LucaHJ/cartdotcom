@@ -2475,6 +2475,18 @@ async function cleanupPrematureEodReports(env: Env): Promise<{ removed: number }
   return { removed: reports.results?.length || 0 };
 }
 
+async function resetEodSimulation(env: Env): Promise<{ reset: true }> {
+  await ensureEodSimulationTables(env);
+  await env.NEWS_DB.batch([
+    env.NEWS_DB.prepare("DELETE FROM eod_simulation_trades"),
+    env.NEWS_DB.prepare("DELETE FROM eod_simulation_snapshots"),
+    env.NEWS_DB.prepare("DELETE FROM eod_simulation_positions"),
+    env.NEWS_DB.prepare("DELETE FROM eod_reports"),
+    env.NEWS_DB.prepare("UPDATE eod_simulation_state SET starting_cash = 100000, cash = 100000, updated_at = CURRENT_TIMESTAMP WHERE id = 'default'"),
+  ]);
+  return { reset: true };
+}
+
 async function processEodSimulation(env: Env): Promise<{ processed: boolean; report_date?: string; trades?: number; skipped?: string }> {
   await ensureEodSimulationTables(env);
   await cleanupPrematureEodReports(env);
@@ -2525,11 +2537,21 @@ async function processEodSimulation(env: Env): Promise<{ processed: boolean; rep
   }).sort((a, b) => Math.abs(b.score) * b.confidence * Math.log1p(b.event_count) - Math.abs(a.score) * a.confidence * Math.log1p(a.event_count));
 
   const qualified = candidates.filter((item) => Math.abs(item.score) >= 0.15 && item.confidence >= 0.5);
-  const chosen = qualified.length >= 10 ? qualified.slice(0, 10) : [];
+  const executable = [];
+  const prices = new Map<string, number>();
+  for (const item of qualified.slice(0, 25)) {
+    const row = (rows.results || []).find((candidate) => candidate.id === item.result_id);
+    if (!row) continue;
+    const impact = await getPriceImpact(env, row, item.symbol, impactDetailForSymbol(row, item.symbol));
+    if (!impact?.baseline_price) continue;
+    prices.set(item.symbol, impact.baseline_price);
+    executable.push(item);
+  }
+  const chosen = executable.length >= 10 ? executable.slice(0, 10) : [];
   const reportId = crypto.randomUUID();
   const summary = chosen.length
     ? `EOD model selected ${chosen.length} high-confidence ticker movement(s) from ${candidates.length} candidates for ${reportDate}.`
-    : `EOD model found ${qualified.length} qualifying movement(s) for ${reportDate}; no trades were placed because at least 10 qualifying candidates are required.`;
+    : `EOD model found ${qualified.length} qualifying movement(s) and ${executable.length} executable movement(s) for ${reportDate}; no trades were placed because 10 executable candidates are required.`;
   await env.NEWS_DB.prepare("INSERT INTO eod_reports (id, report_date, summary, candidates_json, chosen_json) VALUES (?, ?, ?, ?, ?)")
     .bind(reportId, reportDate, summary, JSON.stringify(candidates), JSON.stringify(chosen))
     .run();
@@ -2537,13 +2559,6 @@ async function processEodSimulation(env: Env): Promise<{ processed: boolean; rep
   let trades = 0;
   const state = await env.NEWS_DB.prepare("SELECT * FROM eod_simulation_state WHERE id = 'default'").first<SimulationStateRow>();
   let cash = Number(state?.cash || 100000);
-  const prices = new Map<string, number>();
-  for (const item of chosen) {
-    const row = (rows.results || []).find((candidate) => candidate.id === item.result_id);
-    if (!row) continue;
-    const impact = await getPriceImpact(env, row, item.symbol, impactDetailForSymbol(row, item.symbol));
-    if (impact?.baseline_price) prices.set(item.symbol, impact.baseline_price);
-  }
   const portfolioValue = cash + (await eodPositionValue(env, prices));
   const perTradeBudget = chosen.length ? Math.min(portfolioValue * 0.08, portfolioValue * 0.45 / chosen.length) : 0;
   const actionAt = new Date().toISOString();
@@ -2712,6 +2727,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
   if (url.pathname === "/api/simulation/eod/cleanup-premature" && request.method === "POST") {
     return json({ ok: true, ...(await cleanupPrematureEodReports(env)) });
+  }
+
+  if (url.pathname === "/api/simulation/eod/reset" && request.method === "POST") {
+    return json({ ok: true, ...(await resetEodSimulation(env)) });
   }
 
   if (url.pathname === "/api/ingest" && request.method === "POST") {
