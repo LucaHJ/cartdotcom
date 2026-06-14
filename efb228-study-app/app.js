@@ -785,8 +785,9 @@
       ${result.revealOnly ? "" : `<p class="study-impact">Study page used for ${formatDuration(state.offering?.studyTimeMs || 0)} during this offering. Effective scheduling score: ${Math.round(effectiveScore(result.max ? result.score / result.max : 0, state.offering?.studyTimeMs || 0) * 100)}%.</p>`}
       ${result.matched.length ? `<strong>What you got right</strong><ul>${result.matched.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : ""}
       ${result.missed.length ? `<strong>Where the errors were</strong><ul>${result.missed.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : ""}
-      <strong>Model answer</strong>
+      ${result.revealOnly ? "" : "<strong>Model answer</strong>"}
       <p>${escapeHtml(result.answerText)}</p>
+      ${question.answerDiagram ? answerDiagramSvg(question.answerDiagram) : ""}
     `;
   }
 
@@ -1128,6 +1129,125 @@
         </style>
         ${(diagrams[diagram] || diagrams.demandIncreaseCorrect).join("")}
       </svg>
+    `;
+  }
+
+  function answerDiagramSvg(diagram) {
+    const diagrams = {
+      indifferenceCurve: `
+        <svg class="answer-diagram" viewBox="0 0 620 360" role="img" aria-label="Indifference curve and MRS diagram">
+          <path d="M70 30V302H570" class="axis"/>
+          <text x="24" y="38" class="axis-label">Good Y</text>
+          <text x="520" y="334" class="axis-label">Good X</text>
+          <path d="M112 76C192 95 255 143 312 208C350 252 403 282 514 294" class="curve"/>
+          <text x="490" y="275" class="label blue">IC</text>
+          <circle cx="300" cy="195" r="6" class="point"/>
+          <path d="M210 150L410 235" class="tangent"/>
+          <text x="414" y="235" class="label orange">slope at this point = MRS</text>
+          <path d="M302 198H385V234" class="step"/>
+          <text x="323" y="192" class="small">gain X</text>
+          <text x="391" y="219" class="small">give up Y</text>
+          <text x="104" y="330" class="caption">Every point on IC gives the same utility. MRS is the local tradeoff along the curve.</text>
+        </svg>
+      `,
+      consumerEquilibrium: `
+        <svg class="answer-diagram" viewBox="0 0 620 360" role="img" aria-label="Consumer equilibrium diagram">
+          <path d="M70 30V302H570" class="axis"/>
+          <text x="24" y="38" class="axis-label">Good Y</text>
+          <text x="520" y="334" class="axis-label">Good X</text>
+          <path d="M92 70L520 296" class="budget"/>
+          <text x="486" y="285" class="label orange">Budget line</text>
+          <path d="M132 88C220 100 282 150 335 212C374 258 430 286 532 297" class="curve muted"/>
+          <path d="M110 48C203 64 270 123 326 190C374 248 435 281 546 292" class="curve"/>
+          <circle cx="323" cy="188" r="7" class="point"/>
+          <text x="334" y="184" class="label">Best affordable bundle</text>
+          <text x="110" y="330" class="caption">At an interior optimum, the highest reachable IC just touches the budget line: MRS = price ratio.</text>
+        </svg>
+      `,
+      budgetLine: `
+        <svg class="answer-diagram" viewBox="0 0 620 340" role="img" aria-label="Budget line diagram">
+          <path d="M70 30V282H570" class="axis"/>
+          <text x="26" y="38" class="axis-label">Good Y</text>
+          <text x="520" y="315" class="axis-label">Good X</text>
+          <path d="M92 58L525 282" class="budget"/>
+          <circle cx="220" cy="124" r="6" class="point good"/>
+          <text x="230" y="121" class="label">affordable</text>
+          <circle cx="420" cy="112" r="6" class="point bad"/>
+          <text x="430" y="109" class="label">unaffordable</text>
+          <text x="118" y="306" class="caption">The line is all bundles that exactly spend income. Points below it are affordable; points above it are not.</text>
+        </svg>
+      `,
+      supplyDemandEquilibrium: `
+        <svg class="answer-diagram" viewBox="0 0 620 360" role="img" aria-label="Supply demand equilibrium diagram">
+          <path d="M70 30V302H570" class="axis"/>
+          <text x="42" y="38" class="axis-label">P</text>
+          <text x="528" y="334" class="axis-label">Q</text>
+          <path d="M110 260L510 72" class="supply"/>
+          <path d="M110 72L510 260" class="demand"/>
+          <circle cx="310" cy="166" r="7" class="point"/>
+          <path d="M70 166H310V302" class="guide"/>
+          <text x="321" y="158" class="label">equilibrium</text>
+          <path d="M70 108H545" class="policy"/>
+          <text x="430" y="99" class="label orange">price above equilibrium</text>
+          <text x="168" y="126" class="small">QD</text>
+          <text x="444" y="126" class="small">QS</text>
+          <text x="256" y="131" class="caption">QS &gt; QD: surplus creates downward pressure on price.</text>
+        </svg>
+      `,
+      monopolyMr: `
+        <svg class="answer-diagram" viewBox="0 0 620 360" role="img" aria-label="Monopoly demand and marginal revenue diagram">
+          <path d="M70 30V302H570" class="axis"/>
+          <text x="42" y="38" class="axis-label">P</text>
+          <text x="528" y="334" class="axis-label">Q</text>
+          <path d="M110 68L522 270" class="demand"/>
+          <path d="M118 105L364 300" class="mr"/>
+          <text x="526" y="273" class="label blue">D = price</text>
+          <text x="368" y="297" class="label green">MR</text>
+          <path d="M236 130H330V178" class="step"/>
+          <text x="213" y="119" class="small">lower price on previous units</text>
+          <text x="124" y="328" class="caption">To sell one more unit, a monopolist lowers price, so MR lies below demand.</text>
+        </svg>
+      `,
+      negativeExternality: `
+        <svg class="answer-diagram" viewBox="0 0 620 360" role="img" aria-label="Negative production externality diagram">
+          <path d="M70 30V302H570" class="axis"/>
+          <text x="42" y="38" class="axis-label">P</text>
+          <text x="528" y="334" class="axis-label">Q</text>
+          <path d="M108 248L510 88" class="supply"/>
+          <path d="M108 194L510 34" class="msc"/>
+          <path d="M110 64L518 270" class="demand"/>
+          <text x="514" y="91" class="label orange">MPC</text>
+          <text x="514" y="37" class="label green">MSC</text>
+          <text x="522" y="270" class="label blue">MB</text>
+          <circle cx="317" cy="169" r="6" class="point"/>
+          <circle cx="260" cy="139" r="6" class="point good"/>
+          <path d="M317 169V302M260 139V302" class="guide"/>
+          <text x="306" y="326" class="small">Qm</text>
+          <text x="249" y="326" class="small">Q*</text>
+          <text x="116" y="334" class="caption">When MSC is above MPC, the market output Qm is greater than efficient output Q*.</text>
+        </svg>
+      `,
+      publicGoodVerticalSum: `
+        <svg class="answer-diagram" viewBox="0 0 620 360" role="img" aria-label="Vertical summing of public good marginal benefits">
+          <path d="M70 30V302H570" class="axis"/>
+          <text x="34" y="38" class="axis-label">MB</text>
+          <text x="528" y="334" class="axis-label">Q</text>
+          <path d="M110 104L500 250" class="demand muted"/>
+          <path d="M110 148L500 272" class="demand muted2"/>
+          <path d="M110 62L500 214" class="demand"/>
+          <text x="506" y="216" class="label blue">MSB = MB A + MB B</text>
+          <text x="506" y="252" class="small">MB A</text>
+          <text x="506" y="274" class="small">MB B</text>
+          <path d="M270 302V124" class="guide"/>
+          <text x="285" y="135" class="caption">For the same quantity, add each person's willingness to pay vertically.</text>
+        </svg>
+      `,
+    };
+    return `
+      <div class="answer-diagram-wrap">
+        <strong>Graphical demonstration</strong>
+        ${diagrams[diagram] || ""}
+      </div>
     `;
   }
 })();

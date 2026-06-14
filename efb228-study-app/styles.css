@@ -476,6 +476,114 @@ canvas {
   font-size: 14px;
 }
 
+.answer-diagram-wrap {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.answer-diagram {
+  width: 100%;
+  max-width: 680px;
+  min-height: 280px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.answer-diagram .axis,
+.answer-diagram .guide,
+.answer-diagram .step {
+  stroke: #66756d;
+  stroke-width: 2;
+  fill: none;
+}
+
+.answer-diagram .guide,
+.answer-diagram .step {
+  stroke-dasharray: 6 5;
+}
+
+.answer-diagram .curve,
+.answer-diagram .demand {
+  stroke: #176b87;
+  stroke-width: 4;
+  fill: none;
+}
+
+.answer-diagram .curve.muted {
+  stroke: #83aeba;
+  stroke-width: 3;
+}
+
+.answer-diagram .demand.muted,
+.answer-diagram .demand.muted2 {
+  stroke-width: 3;
+  opacity: 0.65;
+}
+
+.answer-diagram .supply,
+.answer-diagram .budget,
+.answer-diagram .tangent,
+.answer-diagram .policy {
+  stroke: #b45309;
+  stroke-width: 4;
+  fill: none;
+}
+
+.answer-diagram .mr,
+.answer-diagram .msc {
+  stroke: #0f766e;
+  stroke-width: 4;
+  fill: none;
+}
+
+.answer-diagram .point {
+  fill: #17211c;
+}
+
+.answer-diagram .point.good {
+  fill: #15803d;
+}
+
+.answer-diagram .point.bad {
+  fill: #b91c1c;
+}
+
+.answer-diagram text {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  fill: #17211c;
+}
+
+.answer-diagram .axis-label,
+.answer-diagram .label {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.answer-diagram .small {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.answer-diagram .caption {
+  font-size: 15px;
+  font-weight: 600;
+  fill: #617066;
+}
+
+.answer-diagram .blue {
+  fill: #176b87;
+}
+
+.answer-diagram .orange {
+  fill: #b45309;
+}
+
+.answer-diagram .green {
+  fill: #0f766e;
+}
+
 .history-list {
   display: grid;
   gap: 10px;

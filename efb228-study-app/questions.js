@@ -83,6 +83,7 @@ const QUESTIONS = [
       { label: "Explains downward pressure on price.", points: 1, concepts: ["downwardPricePressure"] },
     ],
     modelAnswer: "Market equilibrium occurs where quantity demanded equals quantity supplied. If price is above equilibrium there is excess supply, so sellers have an incentive to lower price until the surplus disappears.",
+    answerDiagram: "supplyDemandEquilibrium",
   },
   {
     id: "l3-graph-demand-increase",
@@ -157,6 +158,7 @@ const QUESTIONS = [
     ],
     answer: 1,
     explanation: "MRS is the slope of the indifference curve and shows the tradeoff the consumer is willing to make while staying on the same utility level.",
+    answerDiagram: "indifferenceCurve",
   },
   {
     id: "l5-consumer-equilibrium",
@@ -171,6 +173,7 @@ const QUESTIONS = [
       { label: "States MRS equals relative price or slope of budget line.", points: 2, keywords: [["mrs", "relative", "price"], ["mrs", "slope"], ["mrs", "px", "py"]] },
     ],
     modelAnswer: "The consumer chooses the best affordable bundle on the budget line. At an interior optimum, the indifference curve is tangent to the budget line, so MRS equals the relative price ratio.",
+    answerDiagram: "consumerEquilibrium",
   },
   {
     id: "l6-economic-profit",
@@ -302,6 +305,7 @@ const QUESTIONS = [
       { label: "Extra revenue from new unit is partly offset by lower price on previous units.", points: 2, keywords: [["previous"], ["all units"], ["offset"], ["lost", "revenue"]] },
     ],
     modelAnswer: "A monopolist faces the downward-sloping market demand curve, so selling more requires lowering price. The revenue from the extra unit is partly offset by the lower price received on units that could already have been sold, so MR is below price.",
+    answerDiagram: "monopolyMr",
   },
   {
     id: "l9-monopoly-graph",
@@ -396,6 +400,7 @@ const QUESTIONS = [
       { label: "Concludes market output exceeds efficient output.", points: 2, keywords: [["overproduce"], ["too much"], ["exceeds", "efficient"], ["higher", "efficient"]] },
     ],
     modelAnswer: "With a negative production externality, production imposes costs on third parties. Firms base output on private cost, but social cost is private cost plus external cost. Because the market ignores part of the cost, the private equilibrium quantity is greater than the efficient quantity.",
+    answerDiagram: "negativeExternality",
   },
   {
     id: "l11-externality-graph",
@@ -519,6 +524,7 @@ const QUESTIONS = [
       { label: "Recognises the slope as an opportunity cost or relative price.", points: 1, keywords: [["slope"], ["relative price"], ["opportunity cost"]] },
     ],
     modelAnswer: "A budget line shows the combinations of two goods a consumer can afford with a given income and prices. Its slope reflects the relative price, or the opportunity cost of one good in terms of the other.",
+    answerDiagram: "budgetLine",
   },
   {
     id: "l3-supply-shift-mcq",
@@ -733,6 +739,7 @@ const QUESTIONS = [
       { label: "Explains social MB is the sum of each person's MB for each quantity.", points: 2, keywords: [["sum"], ["marginal benefit"], ["vertical"]] },
     ],
     modelAnswer: "Because a public good is non-rival, each unit is consumed by everyone at the same time. For each quantity, society's marginal benefit is the sum of each person's marginal benefit for that same unit, so we vertically sum individual MB curves.",
+    answerDiagram: "publicGoodVerticalSum",
   },
   {
     id: "mix-market-power-efficiency",
