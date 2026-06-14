@@ -750,13 +750,14 @@ const DASHBOARD_HTML = `<!doctype html>
     ];
 
     const TOKEN_KEY = "newsSignalToken";
-    tokenInput.value = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || "";
+    const TOKEN_COOKIE = "news_signal_token";
+    tokenInput.value = storedToken();
+    persistToken(tokenInput.value);
     syncAuthState();
 
     document.getElementById("save-token-btn").addEventListener("click", () => {
       const token = tokenInput.value.trim();
-      localStorage.setItem(TOKEN_KEY, token);
-      sessionStorage.setItem(TOKEN_KEY, token);
+      persistToken(token);
       simulationLoaded = false;
       syncAuthState();
       loadAll();
@@ -764,8 +765,7 @@ const DASHBOARD_HTML = `<!doctype html>
     });
 
     document.getElementById("clear-token-btn").addEventListener("click", () => {
-      localStorage.removeItem(TOKEN_KEY);
-      sessionStorage.removeItem(TOKEN_KEY);
+      clearStoredToken();
       tokenInput.value = "";
       simulationLoaded = false;
       syncAuthState();
@@ -795,8 +795,33 @@ const DASHBOARD_HTML = `<!doctype html>
       authState.textContent = tokenInput.value.trim() ? "Token set" : "Token not set";
     }
 
+    function storedToken() {
+      return localStorage.getItem(TOKEN_KEY) || cookieValue(TOKEN_COOKIE) || sessionStorage.getItem(TOKEN_KEY) || "";
+    }
+
+    function persistToken(token) {
+      if (!token) return;
+      localStorage.setItem(TOKEN_KEY, token);
+      sessionStorage.setItem(TOKEN_KEY, token);
+      document.cookie = TOKEN_COOKIE + "=" + encodeURIComponent(token) + "; Max-Age=31536000; Path=/; SameSite=Lax; Secure";
+    }
+
+    function clearStoredToken() {
+      localStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_KEY);
+      document.cookie = TOKEN_COOKIE + "=; Max-Age=0; Path=/; SameSite=Lax; Secure";
+    }
+
+    function cookieValue(name) {
+      const prefix = name + "=";
+      return document.cookie.split(";").map((value) => value.trim()).filter(Boolean).reduce((found, value) => {
+        if (found) return found;
+        return value.startsWith(prefix) ? decodeURIComponent(value.slice(prefix.length)) : "";
+      }, "");
+    }
+
     function headers() {
-      const token = tokenInput.value.trim() || localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
+      const token = tokenInput.value.trim() || storedToken();
       return token ? { Authorization: "Bearer " + token } : {};
     }
 
