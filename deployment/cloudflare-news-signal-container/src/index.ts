@@ -774,7 +774,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
       <section id="eod-model-panel" class="hidden">
         <section class="panel">
-          <div class="model-blurb">EOD waits for the end of the US market day, compiles that day&apos;s analyzed events into a report, ranks ticker movements by confidence-weighted score, and acts only on the 10 strongest candidates in a separate paper account. It is slower and more selective than Live Trade, but can miss intraday moves and currently uses same-day article analysis rather than external overnight research.</div>
+          <div class="model-blurb">EOD waits until the following UTC day before processing the previous day&apos;s news. It compiles a daily report, ranks ticker movements by confidence-weighted score, and only acts if at least 10 candidates clear the thresholds, placing the 10 strongest into a separate paper account. It is slower and more selective than Live Trade, but can miss intraday moves and currently uses stored article analysis rather than external overnight research.</div>
           <div class="portfolio-head">
             <div class="portfolio-value" id="eod-portfolio-value">$0</div>
             <div class="portfolio-move" id="eod-portfolio-move">0.00%</div>
@@ -2457,13 +2457,28 @@ async function recordEodSnapshot(env: Env, at: string, cash: number, fallbackPri
 }
 
 function eodReportDate(now = new Date()): string | null {
-  if (now.getUTCHours() < 21) return null;
-  return now.toISOString().slice(0, 10);
+  if (now.getUTCHours() === 0 && now.getUTCMinutes() < 30) return null;
+  const previous = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  return previous.toISOString().slice(0, 10);
 }
 
-async function processEodSimulation(env: Env, force = false): Promise<{ processed: boolean; report_date?: string; trades?: number; skipped?: string }> {
+async function cleanupPrematureEodReports(env: Env): Promise<{ removed: number }> {
   await ensureEodSimulationTables(env);
-  const reportDate = force ? new Date().toISOString().slice(0, 10) : eodReportDate();
+  const today = new Date().toISOString().slice(0, 10);
+  const reports = await env.NEWS_DB.prepare("SELECT id FROM eod_reports WHERE report_date >= ?").bind(today).all<{ id: string }>();
+  for (const report of reports.results || []) {
+    await env.NEWS_DB.batch([
+      env.NEWS_DB.prepare("DELETE FROM eod_simulation_trades WHERE report_id = ?").bind(report.id),
+      env.NEWS_DB.prepare("DELETE FROM eod_reports WHERE id = ?").bind(report.id),
+    ]);
+  }
+  return { removed: reports.results?.length || 0 };
+}
+
+async function processEodSimulation(env: Env): Promise<{ processed: boolean; report_date?: string; trades?: number; skipped?: string }> {
+  await ensureEodSimulationTables(env);
+  await cleanupPrematureEodReports(env);
+  const reportDate = eodReportDate();
   if (!reportDate) return { processed: false, skipped: "before_eod_window" };
   const existing = await env.NEWS_DB.prepare("SELECT id FROM eod_reports WHERE report_date = ?").bind(reportDate).first<{ id: string }>();
   if (existing) return { processed: false, report_date: reportDate, skipped: "already_processed" };
@@ -2509,11 +2524,12 @@ async function processEodSimulation(env: Env, force = false): Promise<{ processe
     };
   }).sort((a, b) => Math.abs(b.score) * b.confidence * Math.log1p(b.event_count) - Math.abs(a.score) * a.confidence * Math.log1p(a.event_count));
 
-  const chosen = candidates.filter((item) => Math.abs(item.score) >= 0.15 && item.confidence >= 0.5).slice(0, 10);
+  const qualified = candidates.filter((item) => Math.abs(item.score) >= 0.15 && item.confidence >= 0.5);
+  const chosen = qualified.length >= 10 ? qualified.slice(0, 10) : [];
   const reportId = crypto.randomUUID();
   const summary = chosen.length
     ? `EOD model selected ${chosen.length} high-confidence ticker movement(s) from ${candidates.length} candidates for ${reportDate}.`
-    : `EOD model found no movements clearing confidence and score thresholds for ${reportDate}.`;
+    : `EOD model found ${qualified.length} qualifying movement(s) for ${reportDate}; no trades were placed because at least 10 qualifying candidates are required.`;
   await env.NEWS_DB.prepare("INSERT INTO eod_reports (id, report_date, summary, candidates_json, chosen_json) VALUES (?, ?, ?, ?, ?)")
     .bind(reportId, reportDate, summary, JSON.stringify(candidates), JSON.stringify(chosen))
     .run();
@@ -2691,7 +2707,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   }
 
   if (url.pathname === "/api/simulation/eod/process" && request.method === "POST") {
-    return json({ ok: true, ...(await processEodSimulation(env, url.searchParams.get("force") === "1")) });
+    return json({ ok: true, ...(await processEodSimulation(env)) });
+  }
+
+  if (url.pathname === "/api/simulation/eod/cleanup-premature" && request.method === "POST") {
+    return json({ ok: true, ...(await cleanupPrematureEodReports(env)) });
   }
 
   if (url.pathname === "/api/ingest" && request.method === "POST") {
