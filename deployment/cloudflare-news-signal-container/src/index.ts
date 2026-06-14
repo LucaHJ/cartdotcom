@@ -139,6 +139,15 @@ type SimulationPositionRow = {
   updated_at: string;
 };
 
+type EodReportRow = {
+  id: string;
+  report_date: string;
+  summary: string;
+  candidates_json: string;
+  chosen_json: string;
+  created_at: string;
+};
+
 class ResearchBusyError extends Error {
   constructor() {
     super("Another research job is already running");
@@ -531,6 +540,53 @@ const DASHBOARD_HTML = `<!doctype html>
       border-bottom-color: #123c69;
     }
 
+    .subtabs {
+      display: flex;
+      gap: 8px;
+      margin: 0 0 14px;
+    }
+
+    .subtab {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--muted);
+      padding: 7px 10px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .subtab.active {
+      color: var(--text);
+      border-color: #123c69;
+      background: #e8f1ff;
+    }
+
+    .model-blurb {
+      padding: 12px 18px 0;
+      color: #344054;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .report-select {
+      margin: 0 18px 14px;
+      max-width: 520px;
+      width: calc(100% - 36px);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: #fff;
+    }
+
+    .report-box {
+      margin: 0 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfe;
+    }
+
     .hidden { display: none; }
 
     .portfolio-head {
@@ -687,25 +743,58 @@ const DASHBOARD_HTML = `<!doctype html>
     </section>
 
     <section id="simulation-panel" class="hidden">
-      <section class="panel">
-        <div class="portfolio-head">
-          <div class="portfolio-value" id="portfolio-value">$0</div>
-          <div class="portfolio-move" id="portfolio-move">0.00%</div>
-        </div>
-        <div class="portfolio-breakdown">
-          <span class="pill blue" id="portfolio-cash">Cash $0</span>
-          <span class="pill green" id="portfolio-investments">Investments $0</span>
-        </div>
-        <div class="rangebar" id="portfolio-rangebar"></div>
-        <div class="chart" id="portfolio-chart"></div>
+      <div class="subtabs" aria-label="Simulation models">
+        <button class="subtab active" id="live-model-tab" type="button">Live Trade</button>
+        <button class="subtab" id="eod-model-tab" type="button">EOD</button>
+      </div>
+
+      <section id="live-model-panel">
+        <section class="panel">
+          <div class="model-blurb">Live Trade acts article-by-article as analysis completes. It sizes buys and sells from article score and confidence, enforces a 12 hour gap between actions for the same ticker, avoids repeated adds unless signals are strong, and uses a 3 day minimum hold unless a highly confident bearish signal appears.</div>
+          <div class="portfolio-head">
+            <div class="portfolio-value" id="portfolio-value">$0</div>
+            <div class="portfolio-move" id="portfolio-move">0.00%</div>
+          </div>
+          <div class="portfolio-breakdown">
+            <span class="pill blue" id="portfolio-cash">Cash $0</span>
+            <span class="pill green" id="portfolio-investments">Investments $0</span>
+          </div>
+          <div class="rangebar" id="portfolio-rangebar"></div>
+          <div class="chart" id="portfolio-chart"></div>
+        </section>
+
+        <section class="panel" style="margin-top:14px">
+          <div class="panel-header">
+            <div class="panel-title">Live Trade Actions</div>
+            <div class="panel-meta" id="trades-meta">0 rows</div>
+          </div>
+          <div id="trades"></div>
+        </section>
       </section>
 
-      <section class="panel" style="margin-top:14px">
-        <div class="panel-header">
-          <div class="panel-title">Simulation Trades</div>
-          <div class="panel-meta" id="trades-meta">0 rows</div>
-        </div>
-        <div id="trades"></div>
+      <section id="eod-model-panel" class="hidden">
+        <section class="panel">
+          <div class="model-blurb">EOD waits for the end of the US market day, compiles that day&apos;s analyzed events into a report, ranks ticker movements by confidence-weighted score, and acts only on the 10 strongest candidates in a separate paper account. It is slower and more selective than Live Trade, but can miss intraday moves and currently uses same-day article analysis rather than external overnight research.</div>
+          <div class="portfolio-head">
+            <div class="portfolio-value" id="eod-portfolio-value">$0</div>
+            <div class="portfolio-move" id="eod-portfolio-move">0.00%</div>
+          </div>
+          <div class="portfolio-breakdown">
+            <span class="pill blue" id="eod-portfolio-cash">Cash $0</span>
+            <span class="pill green" id="eod-portfolio-investments">Investments $0</span>
+          </div>
+          <div class="chart" id="eod-portfolio-chart"></div>
+          <select class="report-select" id="eod-report-select"></select>
+          <div class="report-box" id="eod-report"></div>
+        </section>
+
+        <section class="panel" style="margin-top:14px">
+          <div class="panel-header">
+            <div class="panel-title">EOD Actions</div>
+            <div class="panel-meta" id="eod-trades-meta">0 rows</div>
+          </div>
+          <div id="eod-trades"></div>
+        </section>
       </section>
     </section>
   </main>
@@ -724,9 +813,13 @@ const DASHBOARD_HTML = `<!doctype html>
     const overviewTab = document.getElementById("overview-tab");
     const simulationTab = document.getElementById("simulation-tab");
     const settingsBtn = document.getElementById("settings-btn");
+    const liveModelTab = document.getElementById("live-model-tab");
+    const eodModelTab = document.getElementById("eod-model-tab");
     const overviewPanel = document.getElementById("overview-panel");
     const simulationPanel = document.getElementById("simulation-panel");
     const settingsPanel = document.getElementById("settings-panel");
+    const liveModelPanel = document.getElementById("live-model-panel");
+    const eodModelPanel = document.getElementById("eod-model-panel");
     const portfolioValueEl = document.getElementById("portfolio-value");
     const portfolioMoveEl = document.getElementById("portfolio-move");
     const portfolioCashEl = document.getElementById("portfolio-cash");
@@ -735,7 +828,17 @@ const DASHBOARD_HTML = `<!doctype html>
     const portfolioChartEl = document.getElementById("portfolio-chart");
     const tradesEl = document.getElementById("trades");
     const tradesMeta = document.getElementById("trades-meta");
+    const eodPortfolioValueEl = document.getElementById("eod-portfolio-value");
+    const eodPortfolioMoveEl = document.getElementById("eod-portfolio-move");
+    const eodPortfolioCashEl = document.getElementById("eod-portfolio-cash");
+    const eodPortfolioInvestmentsEl = document.getElementById("eod-portfolio-investments");
+    const eodPortfolioChartEl = document.getElementById("eod-portfolio-chart");
+    const eodReportSelectEl = document.getElementById("eod-report-select");
+    const eodReportEl = document.getElementById("eod-report");
+    const eodTradesEl = document.getElementById("eod-trades");
+    const eodTradesMeta = document.getElementById("eod-trades-meta");
     let simulationLoaded = false;
+    let eodSimulationLoaded = false;
     let activeSimulation = null;
     let activeChartRange = "all";
     const chartRanges = [
@@ -759,15 +862,18 @@ const DASHBOARD_HTML = `<!doctype html>
       const token = tokenInput.value.trim();
       persistToken(token);
       simulationLoaded = false;
+      eodSimulationLoaded = false;
       syncAuthState();
       loadAll();
       if (!simulationPanel.classList.contains("hidden")) loadSimulation();
+      if (!eodModelPanel.classList.contains("hidden")) loadEodSimulation();
     });
 
     document.getElementById("clear-token-btn").addEventListener("click", () => {
       clearStoredToken();
       tokenInput.value = "";
       simulationLoaded = false;
+      eodSimulationLoaded = false;
       syncAuthState();
     });
 
@@ -777,6 +883,8 @@ const DASHBOARD_HTML = `<!doctype html>
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
     settingsBtn.addEventListener("click", () => setTab("settings"));
+    liveModelTab.addEventListener("click", () => setSimulationModel("live"));
+    eodModelTab.addEventListener("click", () => setSimulationModel("eod"));
     renderRangeButtons();
 
     function setTab(tab) {
@@ -789,6 +897,16 @@ const DASHBOARD_HTML = `<!doctype html>
       settingsPanel.classList.toggle("hidden", !settings);
       settingsBtn.classList.toggle("active", settings);
       if (simulation && !simulationLoaded) loadSimulation();
+    }
+
+    function setSimulationModel(model) {
+      const eod = model === "eod";
+      liveModelTab.classList.toggle("active", !eod);
+      eodModelTab.classList.toggle("active", eod);
+      liveModelPanel.classList.toggle("hidden", eod);
+      eodModelPanel.classList.toggle("hidden", !eod);
+      if (eod && !eodSimulationLoaded) loadEodSimulation();
+      if (!eod && !simulationLoaded) loadSimulation();
     }
 
     function syncAuthState() {
@@ -883,6 +1001,19 @@ const DASHBOARD_HTML = `<!doctype html>
         simulationLoaded = true;
       } catch (error) {
         showError(tradesEl, error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadEodSimulation() {
+      setBusy(true);
+      try {
+        const payload = await api("/api/simulation/eod?limit=500");
+        renderEodSimulation(payload.simulation);
+        eodSimulationLoaded = true;
+      } catch (error) {
+        showError(eodTradesEl, error);
       } finally {
         setBusy(false);
       }
@@ -1018,6 +1149,55 @@ const DASHBOARD_HTML = `<!doctype html>
       ]));
     }
 
+    function renderEodSimulation(simulation) {
+      eodPortfolioValueEl.textContent = formatMoney(simulation.current_value);
+      const move = Number(simulation.movement_pct || 0);
+      eodPortfolioMoveEl.textContent = signedPct(move) + " all time";
+      eodPortfolioMoveEl.style.color = move >= 0 ? "var(--green)" : "var(--red)";
+      eodPortfolioCashEl.textContent = "Cash " + formatMoney(simulation.cash);
+      eodPortfolioInvestmentsEl.textContent = "Investments " + formatMoney(simulation.investment_value);
+      renderChart(simulation.points || [], eodPortfolioChartEl);
+
+      const reports = simulation.reports || [];
+      eodReportSelectEl.innerHTML = reports.length
+        ? reports.map((report, index) => '<option value="' + index + '">' + escapeHtml(report.report_date + " - " + (report.chosen || []).length + " chosen") + '</option>').join("")
+        : '<option value="">No EOD reports yet</option>';
+      function showReport() {
+        const report = reports[Number(eodReportSelectEl.value || 0)];
+        if (!report) {
+          eodReportEl.innerHTML = '<div class="empty">No EOD report has been generated yet. Reports are created once per day after the EOD window.</div>';
+          return;
+        }
+        const chosen = report.chosen || [];
+        eodReportEl.innerHTML = '<div class="summary"><strong>' + escapeHtml(report.report_date) + '</strong>: ' + escapeHtml(report.summary || "") + '</div>' +
+          table(["Ticker", "Score", "Conf", "Events", "Thesis"], chosen.map((item) => [
+            escapeHtml(item.symbol || ""),
+            pill(formatNumber(item.score), Number(item.score || 0) > 0 ? "green" : "red", "EOD confidence-weighted score."),
+            pill(formatNumber(item.confidence), "green", "EOD aggregate confidence."),
+            escapeHtml(String(item.event_count || 0)),
+            escapeHtml(item.thesis || ""),
+          ]));
+      }
+      eodReportSelectEl.onchange = showReport;
+      showReport();
+
+      const trades = simulation.trades || [];
+      eodTradesMeta.textContent = trades.length + " rows";
+      if (!trades.length) {
+        eodTradesEl.innerHTML = '<div class="empty">No EOD actions yet. The model waits for an end-of-day report and only acts on the 10 strongest confident movements.</div>';
+        return;
+      }
+      eodTradesEl.innerHTML = table(["Action", "Ticker", "Price", "Shares", "Notional", "Time", "Thesis"], trades.map((trade) => [
+        pill(trade.action, trade.action === "BUY" ? "green" : "red", "EOD model action from daily report."),
+        escapeHtml(trade.symbol),
+        escapeHtml(formatMoney(trade.price)),
+        escapeHtml(formatNumber(trade.shares)),
+        escapeHtml(formatMoney(trade.notional)),
+        escapeHtml(formatDate(trade.action_at)),
+        escapeHtml(trade.article_title || ""),
+      ]));
+    }
+
     function renderRangeButtons() {
       portfolioRangebarEl.innerHTML = chartRanges.map((range) =>
         '<button class="range-btn' + (range.key === activeChartRange ? " active" : "") + '" type="button" data-range="' + escapeAttr(range.key) + '">' + escapeHtml(range.label) + '</button>'
@@ -1049,13 +1229,13 @@ const DASHBOARD_HTML = `<!doctype html>
       const range = chartRanges.find((item) => item.key === activeChartRange);
       portfolioMoveEl.textContent = signedPct(move) + " " + ((range && range.key !== "all") ? "over " + range.label : "all time");
       portfolioMoveEl.style.color = move >= 0 ? "var(--green)" : "var(--red)";
-      renderChart(points);
+      renderChart(points, portfolioChartEl);
     }
 
-    function renderChart(points) {
+    function renderChart(points, targetEl = portfolioChartEl) {
       const clean = points.filter((point) => Number.isFinite(Number(point.value)));
       if (clean.length < 2) {
-        portfolioChartEl.innerHTML = '<div class="empty">Not enough simulation points for a chart.</div>';
+        targetEl.innerHTML = '<div class="empty">Not enough simulation points for a chart.</div>';
         return;
       }
       const width = 900;
@@ -1083,7 +1263,7 @@ const DASHBOARD_HTML = `<!doctype html>
           '<text x="' + x.toFixed(2) + '" y="' + labelY + '" fill="#667085" font-size="10" text-anchor="' + (originalIndex === 0 ? "start" : originalIndex === clean.length - 1 ? "end" : "middle") + '">' + escapeHtml(label) + '</text>';
       }).join(" ");
 
-      portfolioChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Portfolio value movement">' +
+      targetEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Portfolio value movement">' +
         slices +
         '<path d="' + makePath("value") + '" fill="none" stroke="#123c69" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' +
         '<path d="' + makePath("cash") + '" fill="none" stroke="#1457a8" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' +
@@ -2223,6 +2403,217 @@ async function buildSimulation(env: Env, limit: number): Promise<{
   };
 }
 
+async function ensureEodSimulationTables(env: Env): Promise<void> {
+  await env.NEWS_DB.batch([
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS eod_simulation_state (id TEXT PRIMARY KEY, starting_cash REAL NOT NULL, cash REAL NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    ),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS eod_simulation_positions (symbol TEXT PRIMARY KEY, shares REAL NOT NULL, average_price REAL NOT NULL, last_action_at TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    ),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS eod_reports (id TEXT PRIMARY KEY, report_date TEXT NOT NULL UNIQUE, summary TEXT NOT NULL, candidates_json TEXT NOT NULL, chosen_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    ),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_eod_reports_date ON eod_reports(report_date DESC)"),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS eod_simulation_trades (id TEXT PRIMARY KEY, report_id TEXT NOT NULL, action TEXT NOT NULL, symbol TEXT NOT NULL, thesis TEXT NOT NULL, event_count INTEGER NOT NULL, score REAL NOT NULL, confidence REAL NOT NULL, price REAL NOT NULL, shares REAL NOT NULL, notional REAL NOT NULL, cash_after REAL NOT NULL, portfolio_value REAL NOT NULL, action_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    ),
+    env.NEWS_DB.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_eod_trades_report_symbol_action ON eod_simulation_trades(report_id, symbol, action)",
+    ),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_eod_trades_action_at ON eod_simulation_trades(action_at DESC)"),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS eod_simulation_snapshots (id TEXT PRIMARY KEY, at TEXT NOT NULL, cash REAL NOT NULL, investment_value REAL NOT NULL, total_value REAL NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    ),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_eod_snapshots_at ON eod_simulation_snapshots(at DESC)"),
+  ]);
+  await env.NEWS_DB.prepare("INSERT OR IGNORE INTO eod_simulation_state (id, starting_cash, cash) VALUES ('default', ?, ?)")
+    .bind(100000, 100000)
+    .run();
+}
+
+async function listEodPositions(env: Env): Promise<SimulationPositionRow[]> {
+  await ensureEodSimulationTables(env);
+  const result = await env.NEWS_DB.prepare("SELECT symbol, shares, average_price, last_action_at, NULL AS last_buy_at, updated_at FROM eod_simulation_positions WHERE shares > 0 ORDER BY symbol").all<SimulationPositionRow>();
+  return result.results || [];
+}
+
+async function eodPositionValue(env: Env, fallbackPrices = new Map<string, number>()): Promise<number> {
+  const positions = await listEodPositions(env);
+  let value = 0;
+  for (const position of positions) {
+    value += Number(position.shares || 0) * (fallbackPrices.get(position.symbol) || position.average_price);
+  }
+  return value;
+}
+
+async function recordEodSnapshot(env: Env, at: string, cash: number, fallbackPrices = new Map<string, number>()): Promise<number> {
+  const investmentValue = await eodPositionValue(env, fallbackPrices);
+  const totalValue = cash + investmentValue;
+  await env.NEWS_DB.prepare("INSERT INTO eod_simulation_snapshots (id, at, cash, investment_value, total_value) VALUES (?, ?, ?, ?, ?)")
+    .bind(crypto.randomUUID(), at, cash, investmentValue, totalValue)
+    .run();
+  return totalValue;
+}
+
+function eodReportDate(now = new Date()): string | null {
+  if (now.getUTCHours() < 21) return null;
+  return now.toISOString().slice(0, 10);
+}
+
+async function processEodSimulation(env: Env, force = false): Promise<{ processed: boolean; report_date?: string; trades?: number; skipped?: string }> {
+  await ensureEodSimulationTables(env);
+  const reportDate = force ? new Date().toISOString().slice(0, 10) : eodReportDate();
+  if (!reportDate) return { processed: false, skipped: "before_eod_window" };
+  const existing = await env.NEWS_DB.prepare("SELECT id FROM eod_reports WHERE report_date = ?").bind(reportDate).first<{ id: string }>();
+  if (existing) return { processed: false, report_date: reportDate, skipped: "already_processed" };
+
+  const start = `${reportDate}T00:00:00.000Z`;
+  const end = `${reportDate}T23:59:59.999Z`;
+  const rows = await env.NEWS_DB.prepare(
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id WHERE COALESCE(articles.published_at, research_results.created_at) BETWEEN ? AND ? ORDER BY COALESCE(articles.published_at, research_results.created_at) ASC",
+  )
+    .bind(start, end)
+    .all<ResearchResultRow>();
+  const grouped = new Map<string, { symbol: string; weightedScore: number; weight: number; confidenceSum: number; events: string[]; latestRow: ResearchResultRow }>();
+
+  for (const row of rows.results || []) {
+    const score = Number(row.sentiment_score || 0);
+    const confidence = Number(row.confidence || 0);
+    if (Math.abs(score) < 0.12 || confidence < 0.4) continue;
+    for (const symbol of symbolsForResearchRow(row).slice(0, 5)) {
+      const detail = impactDetailForSymbol(row, symbol);
+      if (detail?.direction === "neutral") continue;
+      const weight = Math.max(0.05, confidence);
+      const item = grouped.get(symbol) || { symbol, weightedScore: 0, weight: 0, confidenceSum: 0, events: [], latestRow: row };
+      item.weightedScore += score * weight;
+      item.weight += weight;
+      item.confidenceSum += confidence * weight;
+      item.events.push(row.title);
+      if (new Date(row.created_at).getTime() > new Date(item.latestRow.created_at).getTime()) item.latestRow = row;
+      grouped.set(symbol, item);
+    }
+  }
+
+  const candidates = [...grouped.values()].map((item) => {
+    const score = item.weightedScore / (item.weight || 1);
+    const confidence = item.confidenceSum / (item.weight || 1);
+    return {
+      symbol: item.symbol,
+      score,
+      confidence,
+      event_count: item.events.length,
+      thesis: `${item.symbol}: ${score >= 0 ? "bullish" : "bearish"} weighted EOD signal from ${item.events.length} analyzed event(s). Key event: ${item.events[0] || "unknown"}`,
+      article_id: item.latestRow.article_id,
+      result_id: item.latestRow.id,
+    };
+  }).sort((a, b) => Math.abs(b.score) * b.confidence * Math.log1p(b.event_count) - Math.abs(a.score) * a.confidence * Math.log1p(a.event_count));
+
+  const chosen = candidates.filter((item) => Math.abs(item.score) >= 0.15 && item.confidence >= 0.5).slice(0, 10);
+  const reportId = crypto.randomUUID();
+  const summary = chosen.length
+    ? `EOD model selected ${chosen.length} high-confidence ticker movement(s) from ${candidates.length} candidates for ${reportDate}.`
+    : `EOD model found no movements clearing confidence and score thresholds for ${reportDate}.`;
+  await env.NEWS_DB.prepare("INSERT INTO eod_reports (id, report_date, summary, candidates_json, chosen_json) VALUES (?, ?, ?, ?, ?)")
+    .bind(reportId, reportDate, summary, JSON.stringify(candidates), JSON.stringify(chosen))
+    .run();
+
+  let trades = 0;
+  const state = await env.NEWS_DB.prepare("SELECT * FROM eod_simulation_state WHERE id = 'default'").first<SimulationStateRow>();
+  let cash = Number(state?.cash || 100000);
+  const prices = new Map<string, number>();
+  for (const item of chosen) {
+    const row = (rows.results || []).find((candidate) => candidate.id === item.result_id);
+    if (!row) continue;
+    const impact = await getPriceImpact(env, row, item.symbol, impactDetailForSymbol(row, item.symbol));
+    if (impact?.baseline_price) prices.set(item.symbol, impact.baseline_price);
+  }
+  const portfolioValue = cash + (await eodPositionValue(env, prices));
+  const perTradeBudget = chosen.length ? Math.min(portfolioValue * 0.08, portfolioValue * 0.45 / chosen.length) : 0;
+  const actionAt = new Date().toISOString();
+
+  for (const item of chosen) {
+    const price = prices.get(item.symbol);
+    if (!price) continue;
+    const position = await env.NEWS_DB.prepare("SELECT symbol, shares, average_price, last_action_at, NULL AS last_buy_at, updated_at FROM eod_simulation_positions WHERE symbol = ?")
+      .bind(item.symbol)
+      .first<SimulationPositionRow>();
+    const held = Number(position?.shares || 0);
+    if (item.score > 0) {
+      if (held > 0) continue;
+      const shares = Math.floor((Math.min(cash, perTradeBudget) / price) * 10000) / 10000;
+      if (shares <= 0) continue;
+      cash -= shares * price;
+      await env.NEWS_DB.batch([
+        env.NEWS_DB.prepare(
+          "INSERT INTO eod_simulation_positions (symbol, shares, average_price, last_action_at, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(symbol) DO UPDATE SET shares = excluded.shares, average_price = excluded.average_price, last_action_at = excluded.last_action_at, updated_at = CURRENT_TIMESTAMP",
+        ).bind(item.symbol, shares, price, actionAt),
+        env.NEWS_DB.prepare("UPDATE eod_simulation_state SET cash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'default'").bind(cash),
+      ]);
+      const value = await recordEodSnapshot(env, actionAt, cash, prices);
+      await env.NEWS_DB.prepare(
+        "INSERT OR IGNORE INTO eod_simulation_trades (id, report_id, action, symbol, thesis, event_count, score, confidence, price, shares, notional, cash_after, portfolio_value, action_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).bind(crypto.randomUUID(), reportId, "BUY", item.symbol, item.thesis, item.event_count, item.score, item.confidence, price, shares, shares * price, cash, value, actionAt).run();
+      trades += 1;
+    } else if (held > 0) {
+      cash += held * price;
+      await env.NEWS_DB.batch([
+        env.NEWS_DB.prepare("UPDATE eod_simulation_positions SET shares = 0, last_action_at = ?, updated_at = CURRENT_TIMESTAMP WHERE symbol = ?").bind(actionAt, item.symbol),
+        env.NEWS_DB.prepare("UPDATE eod_simulation_state SET cash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'default'").bind(cash),
+      ]);
+      const value = await recordEodSnapshot(env, actionAt, cash, prices);
+      await env.NEWS_DB.prepare(
+        "INSERT OR IGNORE INTO eod_simulation_trades (id, report_id, action, symbol, thesis, event_count, score, confidence, price, shares, notional, cash_after, portfolio_value, action_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).bind(crypto.randomUUID(), reportId, "SELL", item.symbol, item.thesis, item.event_count, item.score, item.confidence, price, held, held * price, cash, value, actionAt).run();
+      trades += 1;
+    }
+  }
+
+  return { processed: true, report_date: reportDate, trades };
+}
+
+async function buildEodSimulation(env: Env, limit: number): Promise<Record<string, unknown>> {
+  await ensureEodSimulationTables(env);
+  const state = await env.NEWS_DB.prepare("SELECT * FROM eod_simulation_state WHERE id = 'default'").first<SimulationStateRow>();
+  const positions = await listEodPositions(env);
+  const cash = Number(state?.cash || 100000);
+  const investmentValue = await eodPositionValue(env);
+  const currentValue = cash + investmentValue;
+  const points = await listRows<{ at: string; total_value: number; cash: number; investment_value: number }>(
+    env.NEWS_DB,
+    "SELECT at, total_value, cash, investment_value FROM (SELECT at, total_value, cash, investment_value FROM eod_simulation_snapshots ORDER BY datetime(at) DESC LIMIT ?) ORDER BY datetime(at) ASC",
+    limit,
+  );
+  const trades = await listRows<Record<string, unknown>>(
+    env.NEWS_DB,
+    "SELECT action, symbol, thesis AS article_title, '' AS article_url, NULL AS event_type, score AS sentiment_score, confidence, price, shares, notional, cash_after, portfolio_value, action_at FROM eod_simulation_trades ORDER BY datetime(action_at) DESC LIMIT ?",
+    limit,
+  );
+  const reports = await listRows<EodReportRow>(
+    env.NEWS_DB,
+    "SELECT * FROM eod_reports ORDER BY report_date DESC LIMIT ?",
+    Math.min(limit, 100),
+  );
+  return {
+    starting_cash: Number(state?.starting_cash || 100000),
+    current_value: currentValue,
+    movement_pct: ((currentValue - Number(state?.starting_cash || 100000)) / Number(state?.starting_cash || 100000)) * 100,
+    cash,
+    investment_value: investmentValue,
+    positions: Object.fromEntries(positions.map((position) => [position.symbol, position.shares])),
+    points: points.map((point) => ({ at: point.at, value: Number(point.total_value), cash: Number(point.cash), investments: Number(point.investment_value) })),
+    trades,
+    reports: reports.map((report) => ({
+      id: report.id,
+      report_date: report.report_date,
+      summary: report.summary,
+      candidates: JSON.parse(report.candidates_json),
+      chosen: JSON.parse(report.chosen_json),
+      created_at: report.created_at,
+    })),
+  };
+}
+
 async function listRows<T>(db: D1Database, query: string, limit: number): Promise<T[]> {
   const clamped = Math.min(Math.max(limit, 1), 100);
   const result = await db.prepare(query).bind(clamped).all<T>();
@@ -2291,8 +2682,16 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, simulation: await buildSimulation(env, limit) });
   }
 
+  if (url.pathname === "/api/simulation/eod") {
+    return json({ ok: true, simulation: await buildEodSimulation(env, limit) });
+  }
+
   if (url.pathname === "/api/simulation/process" && request.method === "POST") {
     return json({ ok: true, ...(await processSimulationPending(env, limit)) });
+  }
+
+  if (url.pathname === "/api/simulation/eod/process" && request.method === "POST") {
+    return json({ ok: true, ...(await processEodSimulation(env, url.searchParams.get("force") === "1")) });
   }
 
   if (url.pathname === "/api/ingest" && request.method === "POST") {
@@ -2390,6 +2789,8 @@ export default {
           "/api/results",
           "/api/ticker-signals",
           "/api/simulation/process",
+          "/api/simulation/eod",
+          "/api/simulation/eod/process",
           "/api/reanalyze-recent",
           "/container/health",
           "/container/mcp-check",
@@ -2409,6 +2810,7 @@ export default {
       ingestFeeds(env).then(async () => {
         await requeuePendingJobs(env, 25);
         await processSimulationPending(env, 50).catch((error) => console.error("Scheduled simulation processing failed", error));
+        await processEodSimulation(env).catch((error) => console.error("Scheduled EOD simulation processing failed", error));
       }),
     );
   },
