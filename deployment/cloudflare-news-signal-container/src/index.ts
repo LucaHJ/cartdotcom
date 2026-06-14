@@ -774,7 +774,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
       <section id="eod-model-panel" class="hidden">
         <section class="panel">
-          <div class="model-blurb">EOD waits until the following UTC day before processing the previous day&apos;s news. It compiles a daily report, ranks ticker movements by confidence-weighted score, and only acts if at least 10 candidates clear the thresholds, placing the 10 strongest into a separate paper account. It is slower and more selective than Live Trade, but can miss intraday moves and currently uses stored article analysis rather than external overnight research.</div>
+          <div class="model-blurb">EOD waits until the following UTC day before processing the previous day&apos;s news. It compiles a daily report, ranks ticker movements by confidence-weighted score, and only acts if at least 10 executable candidates clear the thresholds. Bearish sell signals are only eligible when the EOD account already holds that ticker. It is slower and more selective than Live Trade, but can miss intraday moves and currently uses stored article analysis rather than external overnight research.</div>
           <div class="portfolio-head">
             <div class="portfolio-value" id="eod-portfolio-value">$0</div>
             <div class="portfolio-move" id="eod-portfolio-move">0.00%</div>
@@ -2536,7 +2536,13 @@ async function processEodSimulation(env: Env): Promise<{ processed: boolean; rep
     };
   }).sort((a, b) => Math.abs(b.score) * b.confidence * Math.log1p(b.event_count) - Math.abs(a.score) * a.confidence * Math.log1p(a.event_count));
 
-  const qualified = candidates.filter((item) => Math.abs(item.score) >= 0.15 && item.confidence >= 0.5);
+  const currentPositions = await listEodPositions(env);
+  const heldSymbols = new Map(currentPositions.map((position) => [position.symbol, Number(position.shares || 0)]));
+  const qualified = candidates.filter((item) => {
+    if (Math.abs(item.score) < 0.15 || item.confidence < 0.5) return false;
+    if (item.score < 0 && !heldSymbols.get(item.symbol)) return false;
+    return true;
+  });
   const executable = [];
   const prices = new Map<string, number>();
   for (const item of qualified.slice(0, 25)) {
@@ -2551,7 +2557,7 @@ async function processEodSimulation(env: Env): Promise<{ processed: boolean; rep
   const reportId = crypto.randomUUID();
   const summary = chosen.length
     ? `EOD model selected ${chosen.length} high-confidence ticker movement(s) from ${candidates.length} candidates for ${reportDate}.`
-    : `EOD model found ${qualified.length} qualifying movement(s) and ${executable.length} executable movement(s) for ${reportDate}; no trades were placed because 10 executable candidates are required.`;
+    : `EOD model found ${qualified.length} actionable qualifying movement(s) and ${executable.length} executable movement(s) for ${reportDate}; bearish signals for tickers not held were ignored, and no trades were placed because 10 executable candidates are required.`;
   await env.NEWS_DB.prepare("INSERT INTO eod_reports (id, report_date, summary, candidates_json, chosen_json) VALUES (?, ?, ?, ?, ?)")
     .bind(reportId, reportDate, summary, JSON.stringify(candidates), JSON.stringify(chosen))
     .run();
