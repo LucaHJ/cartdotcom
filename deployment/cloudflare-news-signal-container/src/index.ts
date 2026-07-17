@@ -1999,7 +1999,7 @@ async function reanalyzeRecentJobs(env: Env, limit = 20): Promise<{ requeued: nu
   return { requeued: jobs.results?.length || 0 };
 }
 
-async function reanalyzeLegacyJobs(env: Env, limit = 100): Promise<{ requeued: number }> {
+async function reanalyzeLegacyJobs(env: Env, limit = 100): Promise<{ requeued: number; remaining: number }> {
   await ensurePredictionOutcomeTables(env);
   const clamped = Math.min(Math.max(limit, 1), 500);
   const jobs = await env.NEWS_DB.prepare(
@@ -2020,7 +2020,11 @@ async function reanalyzeLegacyJobs(env: Env, limit = 100): Promise<{ requeued: n
     await env.RESEARCH_QUEUE.send({ jobId: job.id });
   }
 
-  return { requeued: jobs.results?.length || 0 };
+  const remaining = await env.NEWS_DB.prepare(
+    "SELECT COUNT(*) AS count FROM research_results INNER JOIN research_jobs ON research_jobs.id = research_results.job_id WHERE research_jobs.status IN ('succeeded', 'failed') AND (research_results.symbols IS NULL OR research_results.symbols = '[]') AND (research_results.memo IS NULL OR research_results.memo NOT LIKE '%\"impact_details\"%')",
+  ).first<{ count: number }>();
+
+  return { requeued: jobs.results?.length || 0, remaining: Number(remaining?.count || 0) };
 }
 
 function parseJsonArray(value: string | null | undefined): string[] {
