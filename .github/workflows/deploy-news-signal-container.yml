@@ -46,7 +46,7 @@ jobs:
         run: docker version
 
       - name: Deploy Worker and Container
-        run: npx wrangler deploy
+        run: npx wrangler deploy --containers-rollout=immediate
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
