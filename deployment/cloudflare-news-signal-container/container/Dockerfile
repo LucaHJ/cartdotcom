@@ -9,7 +9,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip python3-venv ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @openai/codex@0.139.0
+RUN npm install -g @openai/codex@0.144.5
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
