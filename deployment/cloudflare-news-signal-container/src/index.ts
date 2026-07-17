@@ -1026,7 +1026,7 @@ const DASHBOARD_HTML = `<!doctype html>
       setBusy(true);
       try {
         const payload = await api("/api/predictions?limit=300");
-        renderPredictions(payload.outcomes || [], payload.summary || []);
+        renderPredictions(payload.outcomes || [], payload.summary || [], payload.coverage || {});
         predictionsLoaded = true;
       } catch (error) {
         showError(predictionsEl, error);
@@ -1079,7 +1079,7 @@ const DASHBOARD_HTML = `<!doctype html>
       const failed = count(status.jobs, "failed");
       const results = Number((status.results && status.results.count) || 0);
       metricsEl.innerHTML = [
-        metric("Articles", analyzed + queued, analyzed + " analyzed, " + queued + " queued"),
+        metric("Articles", analyzed + queued, analyzed + " analyzed (including tickerless), " + queued + " queued"),
         metric("Results", results, succeeded + " succeeded"),
         metric("Running", running, "Serialized Codex jobs"),
         metric("Pending", pending, "Queued for research"),
@@ -1174,8 +1174,10 @@ const DASHBOARD_HTML = `<!doctype html>
       ]));
     }
 
-    function renderPredictions(outcomes, summary) {
-      predictionSummaryMeta.textContent = summary.length + " intervals";
+    function renderPredictions(outcomes, summary, coverage) {
+      const trackedPredictions = Number(coverage.predictions || 0);
+      const trackedArticles = Number(coverage.articles || 0);
+      predictionSummaryMeta.textContent = summary.length + " intervals · " + trackedPredictions + " directional ticker predictions across " + trackedArticles + " articles";
       predictionSummaryEl.innerHTML = summary.length
         ? table(["Interval", "Samples", "Bull Accuracy", "Avg Bull Move", "Bear Accuracy", "Avg Bear Move", "Overall"], summary.map((item) => [
           escapeHtml(item.interval || ""),
@@ -2419,6 +2421,10 @@ async function ensurePredictionOutcomeTables(env: Env): Promise<void> {
     ),
     env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_prediction_at ON prediction_outcomes(prediction_at DESC)"),
     env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_symbol ON prediction_outcomes(symbol)"),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS prediction_outcome_scans (result_id TEXT PRIMARY KEY, scanned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, outcome_count INTEGER NOT NULL DEFAULT 0, skipped_count INTEGER NOT NULL DEFAULT 0)",
+    ),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcome_scans_scanned_at ON prediction_outcome_scans(scanned_at ASC)"),
   ]);
 }
 
@@ -2481,11 +2487,14 @@ async function computePredictionOutcome(row: ResearchResultRow, symbol: string, 
   };
 }
 
-async function processPredictionOutcomes(env: Env, limit = 100): Promise<{ processed: number; skipped: number; outcomes: number }> {
+async function processPredictionOutcomes(
+  env: Env,
+  limit = 100,
+): Promise<{ processed: number; skipped: number; outcomes: number; unscanned_results: number }> {
   await ensurePredictionOutcomeTables(env);
   const clamped = Math.min(Math.max(limit, 1), 500);
   const result = await env.NEWS_DB.prepare(
-    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' ORDER BY datetime(research_results.created_at) DESC LIMIT ?",
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' ORDER BY CASE WHEN prediction_outcome_scans.result_id IS NULL THEN 0 ELSE 1 END, datetime(prediction_outcome_scans.scanned_at) ASC, datetime(research_results.created_at) ASC LIMIT ?",
   )
     .bind(clamped)
     .all<ResearchResultRow>();
@@ -2494,12 +2503,15 @@ async function processPredictionOutcomes(env: Env, limit = 100): Promise<{ proce
   let outcomes = 0;
 
   for (const row of rows) {
-    for (const symbol of symbolsForResearchRow(row).slice(0, 8)) {
+    let rowOutcomes = 0;
+    let rowSkipped = 0;
+    for (const symbol of symbolsForResearchRow(row)) {
       const detail = impactDetailForSymbol(row, symbol);
       try {
         const outcome = await computePredictionOutcome(row, symbol, detail);
         if (!outcome) {
           skipped += 1;
+          rowSkipped += 1;
           continue;
         }
         await env.NEWS_DB.prepare(
@@ -2524,14 +2536,24 @@ async function processPredictionOutcomes(env: Env, limit = 100): Promise<{ proce
           )
           .run();
         outcomes += 1;
+        rowOutcomes += 1;
       } catch (error) {
         console.error("Prediction outcome processing failed", symbol, row.id, error);
         skipped += 1;
+        rowSkipped += 1;
       }
     }
+    await env.NEWS_DB.prepare(
+      "INSERT INTO prediction_outcome_scans (result_id, scanned_at, outcome_count, skipped_count) VALUES (?, CURRENT_TIMESTAMP, ?, ?) ON CONFLICT(result_id) DO UPDATE SET scanned_at = CURRENT_TIMESTAMP, outcome_count = excluded.outcome_count, skipped_count = excluded.skipped_count",
+    )
+      .bind(row.id, rowOutcomes, rowSkipped)
+      .run();
   }
 
-  return { processed: rows.length, skipped, outcomes };
+  const remaining = await env.NEWS_DB.prepare(
+    "SELECT COUNT(*) AS count FROM research_results LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' AND prediction_outcome_scans.result_id IS NULL",
+  ).first<{ count: number }>();
+  return { processed: rows.length, skipped, outcomes, unscanned_results: Number(remaining?.count || 0) };
 }
 
 function parsePredictionIntervals(value: string): Record<string, PredictionPoint> {
@@ -2543,9 +2565,50 @@ function parsePredictionIntervals(value: string): Record<string, PredictionPoint
   }
 }
 
-async function buildPredictionOutcomes(env: Env, limit: number): Promise<{ outcomes: PredictionOutcome[]; summary: Record<string, unknown>[] }> {
+type PredictionSummaryRow = {
+  samples: number;
+  bullish_samples: number;
+  bullish_accurate: number;
+  average_bullish_movement_pct: number | null;
+  bearish_samples: number;
+  bearish_accurate: number;
+  average_bearish_movement_pct: number | null;
+  overall_accurate: number;
+};
+
+async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>[]> {
+  const statements = PREDICTION_INTERVALS.map((interval) => {
+    const path = `$."${interval.label}".change_pct`;
+    return env.NEWS_DB.prepare(
+      "SELECT COUNT(*) AS samples, SUM(CASE WHEN direction = 'bullish' THEN 1 ELSE 0 END) AS bullish_samples, SUM(CASE WHEN direction = 'bullish' AND CAST(json_extract(intervals_json, ?) AS REAL) > 0 THEN 1 ELSE 0 END) AS bullish_accurate, AVG(CASE WHEN direction = 'bullish' THEN CAST(json_extract(intervals_json, ?) AS REAL) END) AS average_bullish_movement_pct, SUM(CASE WHEN direction = 'bearish' THEN 1 ELSE 0 END) AS bearish_samples, SUM(CASE WHEN direction = 'bearish' AND CAST(json_extract(intervals_json, ?) AS REAL) < 0 THEN 1 ELSE 0 END) AS bearish_accurate, AVG(CASE WHEN direction = 'bearish' THEN CAST(json_extract(intervals_json, ?) AS REAL) END) AS average_bearish_movement_pct, SUM(CASE WHEN (direction = 'bullish' AND CAST(json_extract(intervals_json, ?) AS REAL) > 0) OR (direction = 'bearish' AND CAST(json_extract(intervals_json, ?) AS REAL) < 0) THEN 1 ELSE 0 END) AS overall_accurate FROM prediction_outcomes WHERE json_type(intervals_json, ?) IN ('integer', 'real')",
+    ).bind(path, path, path, path, path, path, path);
+  });
+  const results = await env.NEWS_DB.batch<PredictionSummaryRow>(statements);
+  return PREDICTION_INTERVALS.map((interval, index) => {
+    const row = results[index]?.results?.[0];
+    const samples = Number(row?.samples || 0);
+    const bullishSamples = Number(row?.bullish_samples || 0);
+    const bearishSamples = Number(row?.bearish_samples || 0);
+    return {
+      interval: interval.label,
+      samples,
+      bullish_samples: bullishSamples,
+      bullish_accuracy_pct: bullishSamples ? (Number(row?.bullish_accurate || 0) / bullishSamples) * 100 : null,
+      average_bullish_movement_pct: row?.average_bullish_movement_pct ?? null,
+      bearish_samples: bearishSamples,
+      bearish_accuracy_pct: bearishSamples ? (Number(row?.bearish_accurate || 0) / bearishSamples) * 100 : null,
+      average_bearish_movement_pct: row?.average_bearish_movement_pct ?? null,
+      overall_accuracy_pct: samples ? (Number(row?.overall_accurate || 0) / samples) * 100 : null,
+    };
+  });
+}
+
+async function buildPredictionOutcomes(
+  env: Env,
+  limit: number,
+): Promise<{ outcomes: PredictionOutcome[]; summary: Record<string, unknown>[]; coverage: Record<string, number> }> {
   await ensurePredictionOutcomeTables(env);
-  await processPredictionOutcomes(env, Math.min(Math.max(limit, 25), 100)).catch((error) =>
+  await processPredictionOutcomes(env, Math.min(Math.max(limit, 5), 10)).catch((error) =>
     console.error("Inline prediction outcome refresh failed", error),
   );
   const rows = await listRows<
@@ -2578,35 +2641,21 @@ async function buildPredictionOutcomes(env: Env, limit: number): Promise<{ outco
     updated_at: row.updated_at,
   })) as PredictionOutcome[];
 
-  const summary = PREDICTION_INTERVALS.map((interval) => {
-    const sampled = outcomes.filter((outcome) => {
-      const point = outcome.intervals[interval.label];
-      return point && typeof point.change_pct === "number";
-    });
-    const bullish = sampled.filter((outcome) => outcome.direction === "bullish");
-    const bearish = sampled.filter((outcome) => outcome.direction === "bearish");
-    const average = (items: PredictionOutcome[]) =>
-      items.length
-        ? items.reduce((sum, outcome) => sum + Number(outcome.intervals[interval.label]?.change_pct || 0), 0) / items.length
-        : null;
-    const accuracy = (items: PredictionOutcome[]) =>
-      items.length
-        ? (items.filter((outcome) => outcome.intervals[interval.label]?.accurate === true).length / items.length) * 100
-        : null;
-    return {
-      interval: interval.label,
-      samples: sampled.length,
-      bullish_samples: bullish.length,
-      bullish_accuracy_pct: accuracy(bullish),
-      average_bullish_movement_pct: average(bullish),
-      bearish_samples: bearish.length,
-      bearish_accuracy_pct: accuracy(bearish),
-      average_bearish_movement_pct: average(bearish),
-      overall_accuracy_pct: accuracy(sampled),
-    };
-  });
+  const [summary, coverage] = await Promise.all([
+    buildPredictionSummary(env),
+    env.NEWS_DB.prepare(
+      "SELECT COUNT(*) AS predictions, COUNT(DISTINCT article_id) AS articles FROM prediction_outcomes",
+    ).first<{ predictions: number; articles: number }>(),
+  ]);
 
-  return { outcomes, summary };
+  return {
+    outcomes,
+    summary,
+    coverage: {
+      predictions: Number(coverage?.predictions || 0),
+      articles: Number(coverage?.articles || 0),
+    },
+  };
 }
 
 async function ensureSimulationTables(env: Env): Promise<void> {
@@ -3316,7 +3365,7 @@ export default {
     ctx.waitUntil(
       ingestFeeds(env).then(async () => {
         await requeuePendingJobs(env, 25);
-        await processPredictionOutcomes(env, 100).catch((error) => console.error("Scheduled prediction outcome processing failed", error));
+        await processPredictionOutcomes(env, 25).catch((error) => console.error("Scheduled prediction outcome processing failed", error));
       }),
     );
   },
@@ -3325,7 +3374,7 @@ export default {
     for (const message of batch.messages) {
       try {
         await processJob(env, message.body.jobId);
-        await processPredictionOutcomes(env, 25).catch((error) => console.error("Queue prediction outcome processing failed", error));
+        await processPredictionOutcomes(env, 5).catch((error) => console.error("Queue prediction outcome processing failed", error));
         message.ack();
         await requeuePendingJobs(env, 1);
       } catch (error) {
