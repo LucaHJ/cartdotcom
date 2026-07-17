@@ -74,6 +74,10 @@ type PricePoint = {
   change_pct: number | null;
 };
 
+type PredictionPoint = PricePoint & {
+  accurate: boolean | null;
+};
+
 type PriceImpact = {
   article_id: string;
   title: string;
@@ -97,6 +101,25 @@ type TickerSignal = {
   article_count: number;
   latest_published_at: string | null;
   impacts: PriceImpact[];
+};
+
+type PredictionOutcome = {
+  id: string;
+  result_id: string;
+  article_id: string;
+  title: string | null;
+  url: string | null;
+  symbol: string;
+  company: string | null;
+  direction: "bullish" | "bearish";
+  score: number | null;
+  confidence: number | null;
+  rationale: string | null;
+  prediction_at: string;
+  baseline_price: number | null;
+  baseline_at: string | null;
+  intervals: Record<string, PredictionPoint>;
+  updated_at: string;
 };
 
 type SimulationTrade = {
@@ -440,6 +463,13 @@ const DASHBOARD_HTML = `<!doctype html>
       line-height: 1.45;
     }
 
+    .note {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
     details {
       margin-top: 10px;
       border-top: 1px solid var(--line);
@@ -708,7 +738,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     <nav class="tabs" aria-label="Dashboard sections">
       <button class="tab active" id="overview-tab" type="button">Overview</button>
-      <button class="tab" id="simulation-tab" type="button">Simulation</button>
+      <button class="tab" id="simulation-tab" type="button">Prediction Accuracy</button>
     </nav>
 
     <section id="overview-panel">
@@ -743,58 +773,21 @@ const DASHBOARD_HTML = `<!doctype html>
     </section>
 
     <section id="simulation-panel" class="hidden">
-      <div class="subtabs" aria-label="Simulation models">
-        <button class="subtab active" id="live-model-tab" type="button">Live Trade</button>
-        <button class="subtab" id="eod-model-tab" type="button">EOD</button>
-      </div>
-
-      <section id="live-model-panel">
-        <section class="panel">
-          <div class="model-blurb">Live Trade acts article-by-article as analysis completes. It sizes buys and sells from article score and confidence, enforces a 12 hour gap between actions for the same ticker, avoids repeated adds unless signals are strong, and uses a 3 day minimum hold unless a highly confident bearish signal appears.</div>
-          <div class="portfolio-head">
-            <div class="portfolio-value" id="portfolio-value">$0</div>
-            <div class="portfolio-move" id="portfolio-move">0.00%</div>
-          </div>
-          <div class="portfolio-breakdown">
-            <span class="pill blue" id="portfolio-cash">Cash $0</span>
-            <span class="pill green" id="portfolio-investments">Investments $0</span>
-          </div>
-          <div class="rangebar" id="portfolio-rangebar"></div>
-          <div class="chart" id="portfolio-chart"></div>
-        </section>
-
-        <section class="panel" style="margin-top:14px">
-          <div class="panel-header">
-            <div class="panel-title">Live Trade Actions</div>
-            <div class="panel-meta" id="trades-meta">0 rows</div>
-          </div>
-          <div id="trades"></div>
-        </section>
+      <section class="panel">
+        <div class="model-blurb">Prediction Accuracy measures every bullish or bearish ticker prediction against real market movement. Each row stores the ticker price at prediction time, then records movement at 12h, 24h, 48h, 1w, 2w, 1m, 3m, 6m, 1y, 2y, 3y, and 4y once those windows have elapsed.</div>
+        <div class="panel-header">
+          <div class="panel-title">Interval Summary</div>
+          <div class="panel-meta" id="prediction-summary-meta">0 intervals</div>
+        </div>
+        <div id="prediction-summary"></div>
       </section>
 
-      <section id="eod-model-panel" class="hidden">
-        <section class="panel">
-          <div class="model-blurb">EOD waits until the following UTC day before processing the previous day&apos;s news. It compiles a daily report, ranks ticker movements by confidence-weighted score, and only acts if at least 10 executable candidates clear the thresholds. Bearish sell signals are only eligible when the EOD account already holds that ticker. It is slower and more selective than Live Trade, but can miss intraday moves and currently uses stored article analysis rather than external overnight research.</div>
-          <div class="portfolio-head">
-            <div class="portfolio-value" id="eod-portfolio-value">$0</div>
-            <div class="portfolio-move" id="eod-portfolio-move">0.00%</div>
-          </div>
-          <div class="portfolio-breakdown">
-            <span class="pill blue" id="eod-portfolio-cash">Cash $0</span>
-            <span class="pill green" id="eod-portfolio-investments">Investments $0</span>
-          </div>
-          <div class="chart" id="eod-portfolio-chart"></div>
-          <select class="report-select" id="eod-report-select"></select>
-          <div class="report-box" id="eod-report"></div>
-        </section>
-
-        <section class="panel" style="margin-top:14px">
-          <div class="panel-header">
-            <div class="panel-title">EOD Actions</div>
-            <div class="panel-meta" id="eod-trades-meta">0 rows</div>
-          </div>
-          <div id="eod-trades"></div>
-        </section>
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Prediction Outcomes</div>
+          <div class="panel-meta" id="predictions-meta">0 rows</div>
+        </div>
+        <div id="predictions"></div>
       </section>
     </section>
   </main>
@@ -813,13 +806,17 @@ const DASHBOARD_HTML = `<!doctype html>
     const overviewTab = document.getElementById("overview-tab");
     const simulationTab = document.getElementById("simulation-tab");
     const settingsBtn = document.getElementById("settings-btn");
-    const liveModelTab = document.getElementById("live-model-tab");
-    const eodModelTab = document.getElementById("eod-model-tab");
     const overviewPanel = document.getElementById("overview-panel");
     const simulationPanel = document.getElementById("simulation-panel");
     const settingsPanel = document.getElementById("settings-panel");
-    const liveModelPanel = document.getElementById("live-model-panel");
-    const eodModelPanel = document.getElementById("eod-model-panel");
+    const predictionSummaryEl = document.getElementById("prediction-summary");
+    const predictionSummaryMeta = document.getElementById("prediction-summary-meta");
+    const predictionsEl = document.getElementById("predictions");
+    const predictionsMeta = document.getElementById("predictions-meta");
+    const liveModelTab = null;
+    const eodModelTab = null;
+    const liveModelPanel = null;
+    const eodModelPanel = null;
     const portfolioValueEl = document.getElementById("portfolio-value");
     const portfolioMoveEl = document.getElementById("portfolio-move");
     const portfolioCashEl = document.getElementById("portfolio-cash");
@@ -837,6 +834,7 @@ const DASHBOARD_HTML = `<!doctype html>
     const eodReportEl = document.getElementById("eod-report");
     const eodTradesEl = document.getElementById("eod-trades");
     const eodTradesMeta = document.getElementById("eod-trades-meta");
+    let predictionsLoaded = false;
     let simulationLoaded = false;
     let eodSimulationLoaded = false;
     let activeSimulation = null;
@@ -861,18 +859,16 @@ const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("save-token-btn").addEventListener("click", () => {
       const token = tokenInput.value.trim();
       persistToken(token);
-      simulationLoaded = false;
+      predictionsLoaded = false;
       eodSimulationLoaded = false;
       syncAuthState();
       loadAll();
-      if (!simulationPanel.classList.contains("hidden")) loadSimulation();
-      if (!eodModelPanel.classList.contains("hidden")) loadEodSimulation();
     });
 
     document.getElementById("clear-token-btn").addEventListener("click", () => {
       clearStoredToken();
       tokenInput.value = "";
-      simulationLoaded = false;
+      predictionsLoaded = false;
       eodSimulationLoaded = false;
       syncAuthState();
     });
@@ -883,9 +879,6 @@ const DASHBOARD_HTML = `<!doctype html>
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
     settingsBtn.addEventListener("click", () => setTab("settings"));
-    liveModelTab.addEventListener("click", () => setSimulationModel("live"));
-    eodModelTab.addEventListener("click", () => setSimulationModel("eod"));
-    renderRangeButtons();
 
     function setTab(tab) {
       const simulation = tab === "simulation";
@@ -896,7 +889,7 @@ const DASHBOARD_HTML = `<!doctype html>
       simulationPanel.classList.toggle("hidden", !simulation);
       settingsPanel.classList.toggle("hidden", !settings);
       settingsBtn.classList.toggle("active", settings);
-      if (simulation && !simulationLoaded) loadSimulation();
+      if (simulation && !predictionsLoaded) loadPredictions();
     }
 
     function setSimulationModel(model) {
@@ -962,6 +955,7 @@ const DASHBOARD_HTML = `<!doctype html>
       setBusy(true);
       try {
         await api(path, { method: "POST" });
+        predictionsLoaded = false;
         await loadAll();
       } catch (error) {
         showError(metricsEl, error);
@@ -983,11 +977,28 @@ const DASHBOARD_HTML = `<!doctype html>
         renderJobs(jobs.jobs || []);
         renderArticles(results.results || []);
         lastUpdated.textContent = "Updated " + new Date().toLocaleTimeString();
+        if (!simulationPanel.classList.contains("hidden")) {
+          predictionsLoaded = false;
+          await loadPredictions();
+        }
       } catch (error) {
         showError(metricsEl, error);
         resultsEl.innerHTML = "";
         jobsEl.innerHTML = "";
         articlesEl.innerHTML = "";
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadPredictions() {
+      setBusy(true);
+      try {
+        const payload = await api("/api/predictions?limit=300");
+        renderPredictions(payload.outcomes || [], payload.summary || []);
+        predictionsLoaded = true;
+      } catch (error) {
+        showError(predictionsEl, error);
       } finally {
         setBusy(false);
       }
@@ -1119,9 +1130,69 @@ const DASHBOARD_HTML = `<!doctype html>
         escapeHtml(formatDate(item.published_at || item.created_at)),
         '<a class="truncate" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || "Article") + '</a>',
         renderImpactTickerPills(item),
-        pill(formatNumber(item.sentiment_score), Number(item.sentiment_score || 0) > 0.1 ? "green" : Number(item.sentiment_score || 0) < -0.1 ? "red" : "amber", "Article-level perception score used by the simulation."),
+        pill(formatNumber(item.sentiment_score), Number(item.sentiment_score || 0) > 0.1 ? "green" : Number(item.sentiment_score || 0) < -0.1 ? "red" : "amber", "Article-level perception score used to record directional prediction outcomes."),
         pill(formatNumber(item.confidence), "green", "Article-level confidence."),
       ]));
+    }
+
+    function renderPredictions(outcomes, summary) {
+      predictionSummaryMeta.textContent = summary.length + " intervals";
+      predictionSummaryEl.innerHTML = summary.length
+        ? table(["Interval", "Samples", "Bull Accuracy", "Avg Bull Move", "Bear Accuracy", "Avg Bear Move", "Overall"], summary.map((item) => [
+          escapeHtml(item.interval || ""),
+          escapeHtml(String(item.samples || 0)),
+          predictionSummaryCell(item.bullish_accuracy_pct, item.bullish_samples),
+          movementCell(item.average_bullish_movement_pct),
+          predictionSummaryCell(item.bearish_accuracy_pct, item.bearish_samples),
+          movementCell(item.average_bearish_movement_pct),
+          predictionSummaryCell(item.overall_accuracy_pct, item.samples),
+        ]))
+        : '<div class="empty">No prediction intervals have elapsed yet.</div>';
+
+      predictionsMeta.textContent = outcomes.length + " rows";
+      if (!outcomes.length) {
+        predictionsEl.innerHTML = '<div class="empty">No directional ticker predictions have been recorded yet.</div>';
+        return;
+      }
+      const intervals = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
+      predictionsEl.innerHTML = '<div class="impact-wrap">' + table(
+        ["Prediction", "Ticker", "Dir", "Score", "Conf", "Baseline", ...intervals],
+        outcomes.map((item) => [
+          '<a class="truncate" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || item.article_id || "Prediction") + '</a><div class="note">' + escapeHtml(formatDate(item.prediction_at)) + '</div>',
+          escapeHtml(item.symbol || ""),
+          pill(item.direction || "unknown", directionClass(item.direction), item.rationale || "Predicted direction for this ticker."),
+          pill(formatNumber(item.score), Number(item.score || 0) > 0 ? "green" : "red", "Article prediction score used when the ticker outcome was recorded."),
+          pill(formatNumber(item.confidence), "green", "Prediction confidence from the analyzed impact detail or article-level result."),
+          priceCell(item.baseline_price, item.baseline_at, "Closest available ticker price at the time the prediction was made."),
+          ...intervals.map((interval) => predictionPointPill(item.intervals && item.intervals[interval], item.direction, interval)),
+        ]),
+      ) + '</div>';
+    }
+
+    function predictionSummaryCell(value, samples) {
+      if (!samples) return pill("n/a", "", "No elapsed samples for this interval yet.");
+      const number = Number(value);
+      const cls = number >= 60 ? "green" : number < 45 ? "red" : "amber";
+      return pill(number.toFixed(1) + "%", cls, "Percent of bullish or bearish predictions that moved in the predicted direction.");
+    }
+
+    function movementCell(value) {
+      if (value === null || value === undefined) return pill("n/a", "", "No elapsed samples for this interval yet.");
+      const number = Number(value);
+      return pill(signedPct(number), number > 0 ? "green" : number < 0 ? "red" : "amber", "Average raw market movement for predictions in this direction.");
+    }
+
+    function predictionPointPill(point, direction, label) {
+      if (!point || point.change_pct === null || point.change_pct === undefined) {
+        return pill("n/a", "", "No market price at or after the " + label + " post-prediction target is available yet.");
+      }
+      const change = Number(point.change_pct);
+      const accurate = direction === "bullish" ? change > 0 : direction === "bearish" ? change < 0 : false;
+      return pill(
+        formatMoney(point.price) + " " + signedPct(change),
+        accurate ? "green" : "red",
+        "Price sampled at " + formatDate(point.at) + ". " + (accurate ? "Accurate" : "Inaccurate") + " " + direction + " prediction at " + label + " after prediction time.",
+      );
     }
 
     function renderSimulation(simulation) {
@@ -1775,7 +1846,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
       env.NEWS_DB.prepare("UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?").bind(jobId),
       env.NEWS_DB.prepare("UPDATE articles SET status = 'analyzed' WHERE id = ?").bind(article.id),
     ]);
-    await processSimulationPending(env, 10).catch((error) => console.error("Simulation processing failed after research", error));
+    await processPredictionOutcomes(env, 25).catch((error) => console.error("Prediction outcome processing failed after research", error));
     return { ok: true, jobId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1948,12 +2019,16 @@ function nearestElapsedPoint(timestamps: number[], closes: Array<number | null>,
   return afterTarget.reduce((best, point) => (Math.abs(point.at - elapsedTarget) < Math.abs(best.at - elapsedTarget) ? point : best), afterTarget[0]);
 }
 
-async function fetchYahooChart(symbol: string, publishedAt: string): Promise<{ timestamps: number[]; closes: Array<number | null> }> {
+async function fetchYahooChart(
+  symbol: string,
+  publishedAt: string,
+  interval = "1h",
+  lookaheadDays = 32,
+): Promise<{ timestamps: number[]; closes: Array<number | null> }> {
   const published = unixSeconds(publishedAt);
-  const now = Math.floor(Date.now() / 1000);
   const period1 = Math.max(0, published - 3 * 24 * 60 * 60);
-  const period2 = Math.max(now, published + 32 * 24 * 60 * 60);
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?period1=${period1}&period2=${period2}&interval=1h&includePrePost=true`;
+  const period2 = published + lookaheadDays * 24 * 60 * 60;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol(symbol))}?period1=${period1}&period2=${period2}&interval=${encodeURIComponent(interval)}&includePrePost=true`;
   const response = await fetch(url, {
     headers: {
       accept: "application/json",
@@ -2138,6 +2213,218 @@ async function buildEventSummaries(env: Env, limit: number): Promise<Array<Resea
     enriched.push({ ...row, price_impacts: priceImpacts });
   }
   return enriched;
+}
+
+const PREDICTION_INTERVALS: Array<{ label: string; seconds: number; chart: "short" | "long" }> = [
+  { label: "12h", seconds: 12 * 60 * 60, chart: "short" },
+  { label: "24h", seconds: 24 * 60 * 60, chart: "short" },
+  { label: "48h", seconds: 48 * 60 * 60, chart: "short" },
+  { label: "1w", seconds: 7 * 24 * 60 * 60, chart: "short" },
+  { label: "2w", seconds: 14 * 24 * 60 * 60, chart: "short" },
+  { label: "1m", seconds: 30 * 24 * 60 * 60, chart: "short" },
+  { label: "3m", seconds: 91 * 24 * 60 * 60, chart: "long" },
+  { label: "6m", seconds: 183 * 24 * 60 * 60, chart: "long" },
+  { label: "1y", seconds: 365 * 24 * 60 * 60, chart: "long" },
+  { label: "2y", seconds: 2 * 365 * 24 * 60 * 60, chart: "long" },
+  { label: "3y", seconds: 3 * 365 * 24 * 60 * 60, chart: "long" },
+  { label: "4y", seconds: 4 * 365 * 24 * 60 * 60, chart: "long" },
+];
+
+async function ensurePredictionOutcomeTables(env: Env): Promise<void> {
+  await env.NEWS_DB.batch([
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS prediction_outcomes (id TEXT PRIMARY KEY, result_id TEXT NOT NULL, article_id TEXT NOT NULL, article_title TEXT, article_url TEXT, symbol TEXT NOT NULL, company TEXT, direction TEXT NOT NULL, score REAL, confidence REAL, rationale TEXT, prediction_at TEXT NOT NULL, baseline_price REAL, baseline_at TEXT, intervals_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(result_id, symbol))",
+    ),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_prediction_at ON prediction_outcomes(prediction_at DESC)"),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_symbol ON prediction_outcomes(symbol)"),
+  ]);
+}
+
+function predictionDirection(row: ResearchResultRow, detail: ImpactDetail | null): "bullish" | "bearish" | null {
+  if (detail?.direction === "bullish" || detail?.direction === "bearish") return detail.direction;
+  const score = Number(row.sentiment_score);
+  if (!Number.isFinite(score) || Math.abs(score) < 0.05) return null;
+  return score > 0 ? "bullish" : "bearish";
+}
+
+function predictionIntervalTargets(predictionAt: string): Record<string, number> {
+  const base = unixSeconds(predictionAt);
+  return Object.fromEntries(PREDICTION_INTERVALS.map((item) => [item.label, base + item.seconds]));
+}
+
+async function computePredictionOutcome(row: ResearchResultRow, symbol: string, detail: ImpactDetail | null): Promise<PredictionOutcome | null> {
+  const direction = predictionDirection(row, detail);
+  if (!direction) return null;
+
+  const predictionAt = row.created_at;
+  const [shortChart, longChart] = await Promise.all([
+    fetchYahooChart(symbol, predictionAt, "1h", 45),
+    fetchYahooChart(symbol, predictionAt, "1d", 4 * 365 + 14),
+  ]);
+  const baseline =
+    nearestPoint(shortChart.timestamps, shortChart.closes, unixSeconds(predictionAt), "after") ||
+    nearestPoint(longChart.timestamps, longChart.closes, unixSeconds(predictionAt), "after");
+  const intervals: Record<string, PredictionPoint> = {};
+  const targets = predictionIntervalTargets(predictionAt);
+
+  for (const interval of PREDICTION_INTERVALS) {
+    const chart = interval.chart === "short" ? shortChart : longChart;
+    const point = nearestElapsedPoint(chart.timestamps, chart.closes, targets[interval.label]);
+    const change = point && baseline ? ((point.price - baseline.price) / baseline.price) * 100 : null;
+    intervals[interval.label] = {
+      at: point ? isoFromUnix(point.at) : isoFromUnix(targets[interval.label]),
+      price: point?.price ?? null,
+      change_pct: change,
+      accurate: change === null ? null : direction === "bullish" ? change > 0 : change < 0,
+    };
+  }
+
+  return {
+    id: `${row.id}:${symbol}`,
+    result_id: row.id,
+    article_id: row.article_id,
+    title: row.title || null,
+    url: row.url || null,
+    symbol,
+    company: detail?.name || null,
+    direction,
+    score: row.sentiment_score,
+    confidence: typeof detail?.confidence === "number" ? detail.confidence : row.confidence,
+    rationale: detail?.reason || row.summary || null,
+    prediction_at: predictionAt,
+    baseline_price: baseline?.price ?? null,
+    baseline_at: baseline ? isoFromUnix(baseline.at) : null,
+    intervals,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+async function processPredictionOutcomes(env: Env, limit = 100): Promise<{ processed: number; skipped: number; outcomes: number }> {
+  await ensurePredictionOutcomeTables(env);
+  const clamped = Math.min(Math.max(limit, 1), 500);
+  const result = await env.NEWS_DB.prepare(
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id ORDER BY datetime(research_results.created_at) DESC LIMIT ?",
+  )
+    .bind(clamped)
+    .all<ResearchResultRow>();
+  const rows = result.results || [];
+  let skipped = 0;
+  let outcomes = 0;
+
+  for (const row of rows) {
+    for (const symbol of symbolsForResearchRow(row).slice(0, 8)) {
+      const detail = impactDetailForSymbol(row, symbol);
+      try {
+        const outcome = await computePredictionOutcome(row, symbol, detail);
+        if (!outcome) {
+          skipped += 1;
+          continue;
+        }
+        await env.NEWS_DB.prepare(
+          "INSERT INTO prediction_outcomes (id, result_id, article_id, article_title, article_url, symbol, company, direction, score, confidence, rationale, prediction_at, baseline_price, baseline_at, intervals_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(result_id, symbol) DO UPDATE SET article_title = excluded.article_title, article_url = excluded.article_url, company = excluded.company, direction = excluded.direction, score = excluded.score, confidence = excluded.confidence, rationale = excluded.rationale, prediction_at = excluded.prediction_at, baseline_price = excluded.baseline_price, baseline_at = excluded.baseline_at, intervals_json = excluded.intervals_json, updated_at = CURRENT_TIMESTAMP",
+        )
+          .bind(
+            outcome.id,
+            outcome.result_id,
+            outcome.article_id,
+            outcome.title,
+            outcome.url,
+            outcome.symbol,
+            outcome.company,
+            outcome.direction,
+            outcome.score,
+            outcome.confidence,
+            outcome.rationale,
+            outcome.prediction_at,
+            outcome.baseline_price,
+            outcome.baseline_at,
+            JSON.stringify(outcome.intervals),
+          )
+          .run();
+        outcomes += 1;
+      } catch (error) {
+        console.error("Prediction outcome processing failed", symbol, row.id, error);
+        skipped += 1;
+      }
+    }
+  }
+
+  return { processed: rows.length, skipped, outcomes };
+}
+
+function parsePredictionIntervals(value: string): Record<string, PredictionPoint> {
+  try {
+    const parsed = JSON.parse(value) as Record<string, PredictionPoint>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function buildPredictionOutcomes(env: Env, limit: number): Promise<{ outcomes: PredictionOutcome[]; summary: Record<string, unknown>[] }> {
+  await ensurePredictionOutcomeTables(env);
+  await processPredictionOutcomes(env, Math.min(Math.max(limit, 25), 100)).catch((error) =>
+    console.error("Inline prediction outcome refresh failed", error),
+  );
+  const rows = await listRows<
+    Omit<PredictionOutcome, "title" | "url" | "intervals"> & {
+      article_title: string | null;
+      article_url: string | null;
+      intervals_json: string;
+    }
+  >(
+    env.NEWS_DB,
+    "SELECT * FROM prediction_outcomes ORDER BY datetime(prediction_at) DESC LIMIT ?",
+    limit,
+  );
+  const outcomes = rows.map((row) => ({
+    id: row.id,
+    result_id: row.result_id,
+    article_id: row.article_id,
+    title: row.article_title,
+    url: row.article_url,
+    symbol: row.symbol,
+    company: row.company,
+    direction: row.direction,
+    score: row.score,
+    confidence: row.confidence,
+    rationale: row.rationale,
+    prediction_at: row.prediction_at,
+    baseline_price: row.baseline_price,
+    baseline_at: row.baseline_at,
+    intervals: parsePredictionIntervals(row.intervals_json),
+    updated_at: row.updated_at,
+  })) as PredictionOutcome[];
+
+  const summary = PREDICTION_INTERVALS.map((interval) => {
+    const sampled = outcomes.filter((outcome) => {
+      const point = outcome.intervals[interval.label];
+      return point && typeof point.change_pct === "number";
+    });
+    const bullish = sampled.filter((outcome) => outcome.direction === "bullish");
+    const bearish = sampled.filter((outcome) => outcome.direction === "bearish");
+    const average = (items: PredictionOutcome[]) =>
+      items.length
+        ? items.reduce((sum, outcome) => sum + Number(outcome.intervals[interval.label]?.change_pct || 0), 0) / items.length
+        : null;
+    const accuracy = (items: PredictionOutcome[]) =>
+      items.length
+        ? (items.filter((outcome) => outcome.intervals[interval.label]?.accurate === true).length / items.length) * 100
+        : null;
+    return {
+      interval: interval.label,
+      samples: sampled.length,
+      bullish_samples: bullish.length,
+      bullish_accuracy_pct: accuracy(bullish),
+      average_bullish_movement_pct: average(bullish),
+      bearish_samples: bearish.length,
+      bearish_accuracy_pct: accuracy(bearish),
+      average_bearish_movement_pct: average(bearish),
+      overall_accuracy_pct: accuracy(sampled),
+    };
+  });
+
+  return { outcomes, summary };
 }
 
 async function ensureSimulationTables(env: Env): Promise<void> {
@@ -2652,7 +2939,7 @@ async function buildEodSimulation(env: Env, limit: number): Promise<Record<strin
 }
 
 async function listRows<T>(db: D1Database, query: string, limit: number): Promise<T[]> {
-  const clamped = Math.min(Math.max(limit, 1), 100);
+  const clamped = Math.min(Math.max(limit, 1), 500);
   const result = await db.prepare(query).bind(clamped).all<T>();
   return result.results || [];
 }
@@ -2715,28 +3002,16 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, tickers: await buildTickerSignals(env, limit) });
   }
 
-  if (url.pathname === "/api/simulation") {
-    return json({ ok: true, simulation: await buildSimulation(env, limit) });
+  if (url.pathname === "/api/predictions") {
+    return json({ ok: true, ...(await buildPredictionOutcomes(env, limit)) });
   }
 
-  if (url.pathname === "/api/simulation/eod") {
-    return json({ ok: true, simulation: await buildEodSimulation(env, limit) });
+  if (url.pathname === "/api/predictions/process" && request.method === "POST") {
+    return json({ ok: true, ...(await processPredictionOutcomes(env, limit)) });
   }
 
-  if (url.pathname === "/api/simulation/process" && request.method === "POST") {
-    return json({ ok: true, ...(await processSimulationPending(env, limit)) });
-  }
-
-  if (url.pathname === "/api/simulation/eod/process" && request.method === "POST") {
-    return json({ ok: true, ...(await processEodSimulation(env)) });
-  }
-
-  if (url.pathname === "/api/simulation/eod/cleanup-premature" && request.method === "POST") {
-    return json({ ok: true, ...(await cleanupPrematureEodReports(env)) });
-  }
-
-  if (url.pathname === "/api/simulation/eod/reset" && request.method === "POST") {
-    return json({ ok: true, ...(await resetEodSimulation(env)) });
+  if (url.pathname.startsWith("/api/simulation")) {
+    return json({ error: "Paper trading simulation has been decommissioned. Use /api/predictions for prediction outcome measurement." }, { status: 410 });
   }
 
   if (url.pathname === "/api/ingest" && request.method === "POST") {
@@ -2833,9 +3108,8 @@ export default {
           "/api/jobs",
           "/api/results",
           "/api/ticker-signals",
-          "/api/simulation/process",
-          "/api/simulation/eod",
-          "/api/simulation/eod/process",
+          "/api/predictions",
+          "/api/predictions/process",
           "/api/reanalyze-recent",
           "/container/health",
           "/container/mcp-check",
@@ -2854,8 +3128,7 @@ export default {
     ctx.waitUntil(
       ingestFeeds(env).then(async () => {
         await requeuePendingJobs(env, 25);
-        await processSimulationPending(env, 50).catch((error) => console.error("Scheduled simulation processing failed", error));
-        await processEodSimulation(env).catch((error) => console.error("Scheduled EOD simulation processing failed", error));
+        await processPredictionOutcomes(env, 100).catch((error) => console.error("Scheduled prediction outcome processing failed", error));
       }),
     );
   },
@@ -2864,7 +3137,7 @@ export default {
     for (const message of batch.messages) {
       try {
         await processJob(env, message.body.jobId);
-        await processSimulationPending(env, 10).catch((error) => console.error("Queue simulation processing failed", error));
+        await processPredictionOutcomes(env, 25).catch((error) => console.error("Queue prediction outcome processing failed", error));
         message.ack();
         await requeuePendingJobs(env, 1);
       } catch (error) {
