@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import logging
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -143,28 +143,29 @@ async def run_research(prompt: str, timeout_seconds: int = 3600) -> str:
         args["model"] = model
 
     params = StdioServerParameters(command=codex_command(), args=["mcp-server"])
-    errlog = io.StringIO()
     previous_disable_level = logging.root.manager.disable
     logging.disable(logging.WARNING)
     try:
-        try:
-            async with stdio_client(params, errlog=errlog) as (read, write):
-                async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=timeout_seconds)) as session:
-                    await session.initialize()
-                    result = await session.call_tool(
-                        "codex",
-                        arguments=args,
-                        read_timeout_seconds=timedelta(seconds=timeout_seconds),
-                    )
-                    text = response_text(result)
-                    if getattr(result, "isError", False) or getattr(result, "is_error", False):
-                        raise RuntimeError(text or "Codex research tool failed")
-                    return text
-        except Exception as exc:
-            stderr = errlog.getvalue().strip()
-            if stderr:
-                raise RuntimeError(f"{exception_text(exc)}; codex stderr: {stderr[-4000:]}") from exc
-            raise
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errlog:
+            try:
+                async with stdio_client(params, errlog=errlog) as (read, write):
+                    async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=timeout_seconds)) as session:
+                        await session.initialize()
+                        result = await session.call_tool(
+                            "codex",
+                            arguments=args,
+                            read_timeout_seconds=timedelta(seconds=timeout_seconds),
+                        )
+                        text = response_text(result)
+                        if getattr(result, "isError", False) or getattr(result, "is_error", False):
+                            raise RuntimeError(text or "Codex research tool failed")
+                        return text
+            except Exception as exc:
+                errlog.seek(0)
+                stderr = errlog.read().strip()
+                if stderr:
+                    raise RuntimeError(f"{exception_text(exc)}; codex stderr: {stderr[-4000:]}") from exc
+                raise
     finally:
         logging.disable(previous_disable_level)
 
