@@ -48,6 +48,23 @@ def current_auth_json() -> str | None:
     return value or None
 
 
+def exception_text(exc: BaseException) -> str:
+    messages: list[str] = []
+
+    def collect(error: BaseException) -> None:
+        nested = getattr(error, "exceptions", None)
+        if nested:
+            for child in nested:
+                collect(child)
+            return
+        message = str(error).strip()
+        if message and message not in messages:
+            messages.append(message)
+
+    collect(exc)
+    return "; ".join(messages) or str(exc) or type(exc).__name__
+
+
 def run_login(flag: str, secret: str) -> None:
     completed = subprocess.run(
         [codex_command(), "login", flag],
@@ -206,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
                         response["auth_json"] = current_auth_json()
                     self.send_json(response)
                 except Exception as exc:
-                    response = {"ok": False, "error": str(exc)}
+                    response = {"ok": False, "error": exception_text(exc)}
                     if include_auth:
                         response["auth_json"] = current_auth_json()
                     self.send_json(response, status=500)
