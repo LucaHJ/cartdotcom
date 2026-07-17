@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS runtime_secrets (
+  name TEXT PRIMARY KEY,
+  ciphertext TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

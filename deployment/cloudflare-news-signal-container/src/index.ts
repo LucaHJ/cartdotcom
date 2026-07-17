@@ -185,6 +185,7 @@ export interface Env {
   OPENAI_API_KEY?: string;
   CODEX_ACCESS_TOKEN?: string;
   CODEX_AUTH_JSON?: string;
+  CODEX_AUTH_STATE_KEY?: string;
   CODEX_RESEARCH_MODEL?: string;
 }
 
@@ -1073,6 +1074,7 @@ const DASHBOARD_HTML = `<!doctype html>
         const impactDetails = normalizeImpactDetailsClient(parsed.impact_details);
         const score = Number(item.sentiment_score || 0);
         const scoreClass = score > 0.1 ? "green" : score < -0.1 ? "red" : "amber";
+        const hasStructuredImpacts = Array.isArray(parsed.impact_details);
         const impactRows = impactDetails.length ? impactDetails.map((impact) => [
           pill(impact.kind || "impact", "blue", "Impact category identified by Codex after reasoning through the event's causal path."),
           escapeHtml(impact.name || impact.symbol || "Unknown"),
@@ -1080,7 +1082,14 @@ const DASHBOARD_HTML = `<!doctype html>
           pill(impact.direction || "unknown", directionClass(impact.direction), "Speculated stock value direction from this event: bullish, bearish, mixed, neutral, or unknown."),
           pill(formatNumber(impact.confidence), "green", "Confidence for this specific impacted entity, based on how direct and explicit the causal path is."),
           escapeHtml(impact.reason || ""),
-        ]) : [[
+        ]) : hasStructuredImpacts ? [[
+          pill("no material impact", "", "Codex completed a structured analysis but found no defensible public-ticker impact."),
+          escapeHtml(parseArray(item.companies).join(", ") || "No directly affected public company"),
+          "n/a",
+          pill("neutral", "", "No bullish or bearish public-ticker prediction was recorded."),
+          pill(formatNumber(item.confidence), "green", "Confidence in the completed event analysis."),
+          escapeHtml(item.summary || parsed.summary || "No concrete public-ticker causal path was identified."),
+        ]] : [[
           pill("legacy", "amber", "This older result predates structured impact rationales."),
           escapeHtml(parseArray(item.companies).join(", ") || "See memo"),
           escapeHtml(parseArray(item.symbols).join(", ") || "n/a"),
@@ -1563,19 +1572,92 @@ function cloneForContainer(request: Request, path: string): Request {
   return new Request(target.toString(), request);
 }
 
-function containerEnv(env: Env): Record<string, string> {
+function containerEnvWithAuth(env: Env, authJson: string): Record<string, string> {
   return {
     CODEX_HOME: "/home/codex/.codex",
     CODEX_RESEARCH_MODEL: env.CODEX_RESEARCH_MODEL || "gpt-5.5",
-    CODEX_AUTH_JSON: env.CODEX_AUTH_JSON || "",
+    CODEX_AUTH_JSON: authJson,
     OPENAI_API_KEY: env.OPENAI_API_KEY || "",
     CODEX_ACCESS_TOKEN: env.CODEX_ACCESS_TOKEN || "",
   };
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+function isCodexAuthJson(value: string): boolean {
+  try {
+    const parsed = JSON.parse(value) as { auth_mode?: unknown; tokens?: unknown; OPENAI_API_KEY?: unknown };
+    return Boolean(parsed && typeof parsed === "object" && (parsed.tokens || parsed.OPENAI_API_KEY || parsed.auth_mode));
+  } catch {
+    return false;
+  }
+}
+
+async function runtimeAuthKey(env: Env): Promise<CryptoKey | null> {
+  if (!env.CODEX_AUTH_STATE_KEY) return null;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(env.CODEX_AUTH_STATE_KEY));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function ensureRuntimeSecretTable(env: Env): Promise<void> {
+  await env.NEWS_DB.prepare(
+    "CREATE TABLE IF NOT EXISTS runtime_secrets (name TEXT PRIMARY KEY, ciphertext TEXT NOT NULL, iv TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+  ).run();
+}
+
+async function loadPersistedCodexAuth(env: Env): Promise<string | null> {
+  const key = await runtimeAuthKey(env);
+  if (!key) return null;
+  await ensureRuntimeSecretTable(env);
+  const row = await env.NEWS_DB.prepare("SELECT ciphertext, iv FROM runtime_secrets WHERE name = 'codex_auth'").first<{
+    ciphertext: string;
+    iv: string;
+  }>();
+  if (!row) return null;
+  try {
+    const decrypted = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64ToBytes(row.iv) },
+      key,
+      base64ToBytes(row.ciphertext),
+    );
+    const authJson = new TextDecoder().decode(decrypted);
+    return isCodexAuthJson(authJson) ? authJson : null;
+  } catch {
+    console.error("Persisted Codex auth could not be decrypted; falling back to the Worker secret");
+    return null;
+  }
+}
+
+async function persistCodexAuth(env: Env, authJson: string | null | undefined): Promise<void> {
+  if (!authJson || !isCodexAuthJson(authJson)) return;
+  const key = await runtimeAuthKey(env);
+  if (!key) return;
+  await ensureRuntimeSecretTable(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(authJson));
+  await env.NEWS_DB.prepare(
+    "INSERT INTO runtime_secrets (name, ciphertext, iv, updated_at) VALUES ('codex_auth', ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(name) DO UPDATE SET ciphertext = excluded.ciphertext, iv = excluded.iv, updated_at = CURRENT_TIMESTAMP",
+  )
+    .bind(bytesToBase64(new Uint8Array(encrypted)), bytesToBase64(iv))
+    .run();
+}
+
 async function startWithSecrets(container: any, env: Env): Promise<void> {
+  const persistedAuth = await loadPersistedCodexAuth(env).catch((error) => {
+    console.error("Failed to load persisted Codex auth", error);
+    return null;
+  });
   await container.startAndWaitForPorts(undefined, undefined, {
-    envVars: containerEnv(env),
+    envVars: containerEnvWithAuth(env, persistedAuth || env.CODEX_AUTH_JSON || ""),
   });
 }
 
@@ -1736,6 +1818,16 @@ function parseResearchFields(memo: string): ResearchResultFields {
   }
 }
 
+function validateResearchFields(fields: ResearchResultFields): string | null {
+  if (!fields.event_title || typeof fields.event_title !== "string") return "missing event_title";
+  if (!fields.event_type || typeof fields.event_type !== "string") return "missing event_type";
+  if (!Array.isArray(fields.impact_details)) return "missing impact_details array";
+  if (typeof fields.sentiment_score !== "number" || !Number.isFinite(fields.sentiment_score)) return "missing sentiment_score";
+  if (typeof fields.confidence !== "number" || !Number.isFinite(fields.confidence)) return "missing confidence";
+  if (!(fields.event_blurb || fields.summary)) return "missing event_blurb or summary";
+  return null;
+}
+
 function extractFirstJsonObject(value: string): string | null {
   const start = value.indexOf("{");
   if (start < 0) return null;
@@ -1770,13 +1862,14 @@ async function runContainerResearch(env: Env, prompt: string): Promise<string> {
   const container = getContainer(env.CODEX_CONTAINER, "research-worker");
   await startWithSecrets(container, env);
   const response = await container.fetch(
-    new Request("https://container.local/research", {
+    new Request("https://container.local/research-internal", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt, timeout_seconds: 300 }),
     }),
   );
-  const payload = (await response.json()) as { ok?: boolean; memo?: string; error?: string };
+  const payload = (await response.json()) as { ok?: boolean; memo?: string; error?: string; auth_json?: string };
+  await persistCodexAuth(env, payload.auth_json).catch((error) => console.error("Failed to persist refreshed Codex auth", error));
   if (!response.ok || !payload.ok || !payload.memo) {
     throw new Error(payload.error || `Container research failed with HTTP ${response.status}`);
   }
@@ -1818,6 +1911,8 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   try {
     const memo = await runContainerResearch(env, researchPrompt(article));
     const fields = parseResearchFields(memo);
+    const validationError = validateResearchFields(fields);
+    if (validationError) throw new Error(`Codex returned an invalid structured analysis: ${validationError}`);
     const impactDetails = normalizeImpactDetails(fields.impact_details);
     const companies = impactDetails.length
       ? [...new Set(impactDetails.filter((item) => item.kind === "company" && item.name).map((item) => String(item.name)))]
@@ -1825,7 +1920,9 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     const industries = impactDetails.length
       ? [...new Set(impactDetails.filter((item) => item.kind !== "company" && item.name).map((item) => String(item.name)))]
       : fields.industries || [];
-    const symbols = impactDetails.length ? symbolsFromImpactDetails(impactDetails) : fields.symbols || [];
+    const symbols = impactDetails.length
+      ? symbolsFromImpactDetails(impactDetails)
+      : [...new Set((Array.isArray(fields.symbols) ? fields.symbols : []).map(normalizeTicker).filter((symbol): symbol is string => Boolean(symbol)))];
     await env.NEWS_DB.batch([
       env.NEWS_DB.prepare(
         "INSERT INTO research_results (id, job_id, article_id, event_type, companies, industries, symbols, sentiment_score, impact_horizon, confidence, summary, memo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET event_type = excluded.event_type, companies = excluded.companies, industries = excluded.industries, symbols = excluded.symbols, sentiment_score = excluded.sentiment_score, impact_horizon = excluded.impact_horizon, confidence = excluded.confidence, summary = excluded.summary, memo = excluded.memo, created_at = CURRENT_TIMESTAMP",
@@ -1895,6 +1992,30 @@ async function reanalyzeRecentJobs(env: Env, limit = 20): Promise<{ requeued: nu
       ).bind(job.id),
       env.NEWS_DB.prepare("UPDATE articles SET status = 'queued' WHERE id = ?").bind(job.article_id),
       env.NEWS_DB.prepare("DELETE FROM price_impacts WHERE article_id = ?").bind(job.article_id),
+    ]);
+    await env.RESEARCH_QUEUE.send({ jobId: job.id });
+  }
+
+  return { requeued: jobs.results?.length || 0 };
+}
+
+async function reanalyzeLegacyJobs(env: Env, limit = 100): Promise<{ requeued: number }> {
+  await ensurePredictionOutcomeTables(env);
+  const clamped = Math.min(Math.max(limit, 1), 500);
+  const jobs = await env.NEWS_DB.prepare(
+    "SELECT research_jobs.id, research_jobs.article_id FROM research_results INNER JOIN research_jobs ON research_jobs.id = research_results.job_id WHERE research_jobs.status IN ('succeeded', 'failed') AND (research_results.symbols IS NULL OR research_results.symbols = '[]') AND (research_results.memo IS NULL OR research_results.memo NOT LIKE '%\"impact_details\"%') ORDER BY datetime(research_results.created_at) DESC LIMIT ?",
+  )
+    .bind(clamped)
+    .all<{ id: string; article_id: string }>();
+
+  for (const job of jobs.results || []) {
+    await env.NEWS_DB.batch([
+      env.NEWS_DB.prepare(
+        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL WHERE id = ?",
+      ).bind(job.id),
+      env.NEWS_DB.prepare("UPDATE articles SET status = 'queued' WHERE id = ?").bind(job.article_id),
+      env.NEWS_DB.prepare("DELETE FROM price_impacts WHERE article_id = ?").bind(job.article_id),
+      env.NEWS_DB.prepare("DELETE FROM prediction_outcomes WHERE article_id = ?").bind(job.article_id),
     ]);
     await env.RESEARCH_QUEUE.send({ jobId: job.id });
   }
@@ -3032,6 +3153,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...(await reanalyzeRecentJobs(env, limit)) });
   }
 
+  if (url.pathname === "/api/reanalyze-legacy" && request.method === "POST") {
+    return json({ ok: true, ...(await reanalyzeLegacyJobs(env, limit)) });
+  }
+
   return json({ error: "Not found" }, { status: 404 });
 }
 
@@ -3041,6 +3166,7 @@ async function handleContainer(request: Request, env: Env): Promise<Response> {
 
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/container/, "") || "/health";
+  if (path === "/research-internal") return json({ error: "Not found" }, { status: 404 });
   const container = getContainer(env.CODEX_CONTAINER, "research-worker");
 
   if (path === "/restart" && request.method === "POST") {
@@ -3111,6 +3237,7 @@ export default {
           "/api/predictions",
           "/api/predictions/process",
           "/api/reanalyze-recent",
+          "/api/reanalyze-legacy",
           "/container/health",
           "/container/mcp-check",
           "/container/research",

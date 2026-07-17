@@ -59,6 +59,14 @@ Optional request auth:
 npx wrangler secret put CONTAINER_API_TOKEN
 ```
 
+To persist refreshed ChatGPT-managed Codex credentials securely across container restarts, also set a random encryption key:
+
+```bash
+npx wrangler secret put CODEX_AUTH_STATE_KEY
+```
+
+The Worker encrypts the refreshed `auth.json` with AES-GCM before storing it in D1. The encryption key remains a Cloudflare Worker secret.
+
 If `CONTAINER_API_TOKEN` is set, protected routes require:
 
 ```text

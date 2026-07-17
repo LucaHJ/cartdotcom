@@ -40,6 +40,14 @@ def response_text(result: Any) -> str:
     return "\n".join(chunks).strip() if chunks else str(result)
 
 
+def current_auth_json() -> str | None:
+    auth_file = CODEX_HOME / "auth.json"
+    if not auth_file.exists():
+        return None
+    value = auth_file.read_text(encoding="utf-8").strip()
+    return value or None
+
+
 def run_login(flag: str, secret: str) -> None:
     completed = subprocess.run(
         [codex_command(), "login", flag],
@@ -128,7 +136,10 @@ async def run_research(prompt: str, timeout_seconds: int = 3600) -> str:
                     arguments=args,
                     read_timeout_seconds=timedelta(seconds=timeout_seconds),
                 )
-                return response_text(result)
+                text = response_text(result)
+                if getattr(result, "isError", False) or getattr(result, "is_error", False):
+                    raise RuntimeError(text or "Codex research tool failed")
+                return text
     finally:
         logging.disable(previous_disable_level)
 
@@ -179,15 +190,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
-            if self.path.startswith("/research"):
+            request_path = self.path.split("?", 1)[0]
+            if request_path in {"/research", "/research-internal"}:
                 payload = self.read_json()
                 prompt = str(payload.get("prompt") or "").strip()
                 if not prompt:
                     self.send_json({"ok": False, "error": "Missing prompt"}, status=400)
                     return
                 timeout_seconds = int(payload.get("timeout_seconds") or 3600)
-                memo = asyncio.run(run_research(prompt, timeout_seconds=timeout_seconds))
-                self.send_json({"ok": True, "memo": memo})
+                include_auth = request_path == "/research-internal"
+                try:
+                    memo = asyncio.run(run_research(prompt, timeout_seconds=timeout_seconds))
+                    response = {"ok": True, "memo": memo}
+                    if include_auth:
+                        response["auth_json"] = current_auth_json()
+                    self.send_json(response)
+                except Exception as exc:
+                    response = {"ok": False, "error": str(exc)}
+                    if include_auth:
+                        response["auth_json"] = current_auth_json()
+                    self.send_json(response, status=500)
                 return
 
             if self.path.startswith("/login-check"):
