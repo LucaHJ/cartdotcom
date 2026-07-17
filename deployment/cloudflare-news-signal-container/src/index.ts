@@ -704,6 +704,10 @@ const DASHBOARD_HTML = `<!doctype html>
       white-space: normal;
     }
 
+    .prediction-outcomes-table {
+      min-width: 1920px;
+    }
+
     .prediction-article-row a {
       color: var(--text);
       font-weight: 750;
@@ -1202,7 +1206,7 @@ const DASHBOARD_HTML = `<!doctype html>
       });
       predictionsMeta.textContent = outcomes.length + " predictions across " + articleGroups.length + " articles";
       const body = articleGroups.map((group) => {
-        const title = group.title || group.article_id || "Prediction";
+        const title = decodeHtmlEntities(group.title || group.article_id || "Prediction");
         const articleRow = '<tr class="prediction-article-row"><th colspan="' + headers.length + '" scope="rowgroup"><a href="' + escapeAttr(group.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(title) + '</a></th></tr>';
         const predictionRows = group.items.map((item) => {
           const cells = [
@@ -1218,7 +1222,8 @@ const DASHBOARD_HTML = `<!doctype html>
         }).join("");
         return articleRow + predictionRows;
       }).join("");
-      predictionsEl.innerHTML = '<div class="impact-wrap"><table class="prediction-outcomes-table"><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody>' + body + '</tbody></table></div>';
+      const columns = [200, 90, 100, 80, 80, 110, ...intervals.map(() => 105)];
+      predictionsEl.innerHTML = '<div class="impact-wrap"><table class="prediction-outcomes-table"><colgroup>' + columns.map((width) => '<col style="width:' + width + 'px">').join("") + '</colgroup><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody>' + body + '</tbody></table></div>';
     }
 
     function predictionSummaryCell(value, samples) {
@@ -1567,6 +1572,12 @@ const DASHBOARD_HTML = `<!doctype html>
         '"': "&quot;",
         "'": "&#39;",
       })[char]);
+    }
+
+    function decodeHtmlEntities(value) {
+      const textarea = document.createElement("textarea");
+      textarea.innerHTML = String(value ?? "");
+      return textarea.value;
     }
 
     function escapeAttr(value) {
