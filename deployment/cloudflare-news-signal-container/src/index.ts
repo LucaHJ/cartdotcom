@@ -2303,7 +2303,7 @@ async function processPredictionOutcomes(env: Env, limit = 100): Promise<{ proce
   await ensurePredictionOutcomeTables(env);
   const clamped = Math.min(Math.max(limit, 1), 500);
   const result = await env.NEWS_DB.prepare(
-    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id ORDER BY datetime(research_results.created_at) DESC LIMIT ?",
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' ORDER BY datetime(research_results.created_at) DESC LIMIT ?",
   )
     .bind(clamped)
     .all<ResearchResultRow>();
