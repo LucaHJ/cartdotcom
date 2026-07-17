@@ -709,6 +709,9 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .prediction-article-row a {
+      display: block;
+      width: min(1000px, calc(100vw - 72px));
+      max-width: 100%;
       color: var(--text);
       font-weight: 750;
       line-height: 1.4;
