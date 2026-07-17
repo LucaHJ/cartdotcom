@@ -695,6 +695,29 @@ const DASHBOARD_HTML = `<!doctype html>
       white-space: nowrap;
     }
 
+    .prediction-outcomes-table .prediction-article-row th {
+      padding: 12px;
+      background: #f8fafc;
+      color: var(--text);
+      font-size: 13px;
+      text-transform: none;
+      white-space: normal;
+    }
+
+    .prediction-article-row a {
+      color: var(--text);
+      font-weight: 750;
+      line-height: 1.4;
+      text-decoration: none;
+      overflow-wrap: anywhere;
+    }
+
+    .prediction-article-row a:hover { text-decoration: underline; }
+
+    .prediction-outcomes-table .prediction-data-row td {
+      white-space: nowrap;
+    }
+
     .pill[title] { cursor: help; }
 
     @media (max-width: 1050px) {
@@ -1158,24 +1181,44 @@ const DASHBOARD_HTML = `<!doctype html>
         ]))
         : '<div class="empty">No prediction intervals have elapsed yet.</div>';
 
-      predictionsMeta.textContent = outcomes.length + " rows";
       if (!outcomes.length) {
+        predictionsMeta.textContent = "0 rows";
         predictionsEl.innerHTML = '<div class="empty">No directional ticker predictions have been recorded yet.</div>';
         return;
       }
       const intervals = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
-      predictionsEl.innerHTML = '<div class="impact-wrap">' + table(
-        ["Prediction", "Ticker", "Dir", "Score", "Conf", "Baseline", ...intervals],
-        outcomes.map((item) => [
-          '<a class="truncate" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || item.article_id || "Prediction") + '</a><div class="note">' + escapeHtml(formatDate(item.prediction_at)) + '</div>',
-          escapeHtml(item.symbol || ""),
-          pill(item.direction || "unknown", directionClass(item.direction), item.rationale || "Predicted direction for this ticker."),
-          pill(formatNumber(item.score), Number(item.score || 0) > 0 ? "green" : "red", "Article prediction score used when the ticker outcome was recorded."),
-          pill(formatNumber(item.confidence), "green", "Prediction confidence from the analyzed impact detail or article-level result."),
-          priceCell(item.baseline_price, item.baseline_at, "Closest available ticker price at the time the prediction was made."),
-          ...intervals.map((interval) => predictionPointPill(item.intervals && item.intervals[interval], item.direction, interval)),
-        ]),
-      ) + '</div>';
+      const headers = ["Date", "Ticker", "Dir", "Score", "Conf", "Baseline", ...intervals];
+      const articleGroups = [];
+      const groupsByArticle = new Map();
+      outcomes.forEach((item) => {
+        const key = item.article_id || item.result_id || [item.title, item.url, item.prediction_at].join("|");
+        let group = groupsByArticle.get(key);
+        if (!group) {
+          group = { title: item.title, url: item.url, article_id: item.article_id, items: [] };
+          groupsByArticle.set(key, group);
+          articleGroups.push(group);
+        }
+        group.items.push(item);
+      });
+      predictionsMeta.textContent = outcomes.length + " predictions across " + articleGroups.length + " articles";
+      const body = articleGroups.map((group) => {
+        const title = group.title || group.article_id || "Prediction";
+        const articleRow = '<tr class="prediction-article-row"><th colspan="' + headers.length + '" scope="rowgroup"><a href="' + escapeAttr(group.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(title) + '</a></th></tr>';
+        const predictionRows = group.items.map((item) => {
+          const cells = [
+            escapeHtml(formatDate(item.prediction_at)),
+            escapeHtml(item.symbol || ""),
+            pill(item.direction || "unknown", directionClass(item.direction), item.rationale || "Predicted direction for this ticker."),
+            pill(formatNumber(item.score), Number(item.score || 0) > 0 ? "green" : "red", "Article prediction score used when the ticker outcome was recorded."),
+            pill(formatNumber(item.confidence), "green", "Prediction confidence from the analyzed impact detail or article-level result."),
+            priceCell(item.baseline_price, item.baseline_at, "Closest available ticker price at the time the prediction was made."),
+            ...intervals.map((interval) => predictionPointPill(item.intervals && item.intervals[interval], item.direction, interval)),
+          ];
+          return '<tr class="prediction-data-row">' + cells.map((cell) => '<td>' + cell + '</td>').join("") + '</tr>';
+        }).join("");
+        return articleRow + predictionRows;
+      }).join("");
+      predictionsEl.innerHTML = '<div class="impact-wrap"><table class="prediction-outcomes-table"><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody>' + body + '</tbody></table></div>';
     }
 
     function predictionSummaryCell(value, samples) {
