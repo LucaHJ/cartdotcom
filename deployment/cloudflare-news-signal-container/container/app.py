@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import traceback
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -63,7 +64,9 @@ def exception_text(exc: BaseException) -> str:
             messages.append(message)
 
     collect(exc)
-    return "; ".join(messages) or str(exc) or type(exc).__name__
+    summary = "; ".join(messages) or str(exc) or type(exc).__name__
+    trace = "".join(traceback.format_exception(exc)).strip()
+    return f"{summary}; traceback: {trace[-3000:]}" if trace else summary
 
 
 def run_login(flag: str, secret: str) -> None:
