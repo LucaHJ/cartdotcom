@@ -83,6 +83,48 @@ def run_login(flag: str, secret: str) -> None:
         raise RuntimeError(f"codex login {flag} failed: {completed.stderr[-800:]}")
 
 
+def run_research_exec(prompt: str, timeout_seconds: int) -> str:
+    output_file = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False)
+    output_path = Path(output_file.name)
+    output_file.close()
+    command = [
+        codex_command(),
+        "exec",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--sandbox",
+        "read-only",
+        "--color",
+        "never",
+        "--output-last-message",
+        str(output_path),
+    ]
+    model = os.getenv("CODEX_RESEARCH_MODEL", "").strip()
+    if model:
+        command.extend(["--model", model])
+    command.append("-")
+
+    try:
+        completed = subprocess.run(
+            command,
+            input=prompt,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=timeout_seconds,
+            cwd="/workspace",
+        )
+        memo = output_path.read_text(encoding="utf-8").strip() if output_path.exists() else ""
+        if completed.returncode != 0 or not memo:
+            detail = (completed.stderr or completed.stdout or "Codex exec returned no output").strip()
+            raise RuntimeError(detail[-4000:])
+        return memo
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
 def ensure_codex_auth() -> str:
     global AUTH_READY
     with AUTH_LOCK:
@@ -166,9 +208,13 @@ async def run_research(prompt: str, timeout_seconds: int = 3600) -> str:
             except Exception as exc:
                 errlog.seek(0)
                 stderr = errlog.read().strip()
+                mcp_error = exception_text(exc)
                 if stderr:
-                    raise RuntimeError(f"{exception_text(exc)}; codex stderr: {stderr[-4000:]}") from exc
-                raise
+                    mcp_error = f"{mcp_error}; codex stderr: {stderr[-4000:]}"
+                try:
+                    return await asyncio.to_thread(run_research_exec, prompt, timeout_seconds)
+                except Exception as exec_exc:
+                    raise RuntimeError(f"MCP failed: {mcp_error}; CLI fallback failed: {exception_text(exec_exc)}") from exec_exc
     finally:
         logging.disable(previous_disable_level)
 
