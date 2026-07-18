@@ -55,10 +55,20 @@ type DashboardEvent = {
 type SourceCheckRow = {
   id: string;
   checked_at: string;
+  completed_at?: string | null;
+  duration_seconds?: number | null;
   acquired_count: number;
   source_count: number;
   failed_source_count: number;
 };
+
+type SourceHourlyMetricRow = {
+  hour_start: string;
+  article_count: number;
+  ticker_count: number;
+};
+
+type SourceActivityMode = "day" | "month" | "year";
 
 type ResearchResultFields = {
   event_title?: string;
@@ -355,6 +365,8 @@ const ARTICLE_FETCH_TIMEOUT_MS = 15_000;
 const ARTICLE_INGESTION_WINDOW_MINUTES = 5;
 const ARTICLE_INGESTION_WINDOW_MS = ARTICLE_INGESTION_WINDOW_MINUTES * 60 * 1000;
 const SOURCE_EXPANSION_CUTOFF = "2026-07-18T08:28:55Z";
+const BRISBANE_OFFSET_MS = 10 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 const RESEARCH_CONTAINER_COUNT = 8;
 const QUEUE_DRAIN_MAX_JOBS = 8;
 const QUEUE_DRAIN_MAX_MS = 4 * 60 * 1000;
@@ -493,7 +505,16 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
       await db.prepare(
         "CREATE TABLE IF NOT EXISTS source_checks (id TEXT PRIMARY KEY, checked_at TEXT NOT NULL, acquired_count INTEGER NOT NULL DEFAULT 0, source_count INTEGER NOT NULL DEFAULT 0, failed_source_count INTEGER NOT NULL DEFAULT 0)",
       ).run();
+      await addColumnIfMissing(db, "source_checks", "completed_at", "TEXT");
+      await addColumnIfMissing(db, "source_checks", "duration_seconds", "INTEGER");
       await db.prepare("CREATE INDEX IF NOT EXISTS idx_source_checks_checked_at ON source_checks(checked_at DESC)").run();
+      await db.prepare(
+        "CREATE TABLE IF NOT EXISTS source_hourly_metrics (hour_start TEXT PRIMARY KEY, article_count INTEGER NOT NULL DEFAULT 0, ticker_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+      ).run();
+      await db.prepare("CREATE INDEX IF NOT EXISTS idx_source_hourly_metrics_hour ON source_hourly_metrics(hour_start)").run();
+      await db.prepare(
+        "CREATE TABLE IF NOT EXISTS source_metric_state (key TEXT PRIMARY KEY, completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+      ).run();
       await db.prepare(
         "UPDATE research_jobs SET synthesis_duration_seconds = MAX(0, unixepoch(finished_at) - unixepoch(started_at)) WHERE synthesis_duration_seconds IS NULL AND started_at IS NOT NULL AND finished_at IS NOT NULL AND status IN ('succeeded', 'failed')",
       ).run();
@@ -507,6 +528,62 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
     });
   }
   await articleStorageSchemaReady;
+}
+
+function floorUtcHourIso(value: number | string | Date): string {
+  const timestamp = value instanceof Date ? value.getTime() : typeof value === "number" ? value : Date.parse(value);
+  return new Date(Math.floor(timestamp / HOUR_MS) * HOUR_MS).toISOString();
+}
+
+async function refreshSourceHourlyMetric(db: D1Database, hourStart: string): Promise<void> {
+  const normalizedHour = floorUtcHourIso(hourStart);
+  await db.prepare(
+    `INSERT OR REPLACE INTO source_hourly_metrics (hour_start, article_count, ticker_count, updated_at)
+     SELECT ?, COUNT(*), COALESCE(SUM(COALESCE((
+       SELECT CASE WHEN json_valid(research_results.symbols) THEN json_array_length(research_results.symbols) ELSE 0 END
+       FROM research_results
+       WHERE research_results.article_id = articles.id
+       ORDER BY datetime(research_results.created_at) DESC
+       LIMIT 1
+     ), 0)), 0), CURRENT_TIMESTAMP
+     FROM articles
+     WHERE datetime(articles.discovered_at) >= datetime(?)
+       AND datetime(articles.discovered_at) < datetime(?, '+1 hour')
+       AND datetime(articles.discovered_at) >= datetime(?)`,
+  )
+    .bind(normalizedHour, normalizedHour, normalizedHour, SOURCE_EXPANSION_CUTOFF)
+    .run();
+}
+
+async function refreshAllSourceHourlyMetrics(db: D1Database): Promise<void> {
+  await db.prepare(
+    `INSERT OR REPLACE INTO source_hourly_metrics (hour_start, article_count, ticker_count, updated_at)
+     SELECT strftime('%Y-%m-%dT%H:00:00.000Z', articles.discovered_at), COUNT(*), COALESCE(SUM(COALESCE((
+       SELECT CASE WHEN json_valid(research_results.symbols) THEN json_array_length(research_results.symbols) ELSE 0 END
+       FROM research_results
+       WHERE research_results.article_id = articles.id
+       ORDER BY datetime(research_results.created_at) DESC
+       LIMIT 1
+     ), 0)), 0), CURRENT_TIMESTAMP
+     FROM articles
+     WHERE articles.discovered_at IS NOT NULL
+       AND datetime(articles.discovered_at) >= datetime(?)
+     GROUP BY strftime('%Y-%m-%dT%H:00:00.000Z', articles.discovered_at)`,
+  )
+    .bind(SOURCE_EXPANSION_CUTOFF)
+    .run();
+}
+
+async function ensureSourceHourlyMetricsBackfilled(db: D1Database): Promise<void> {
+  const state = await db.prepare("SELECT key FROM source_metric_state WHERE key = 'hourly_backfill_v1'").first<{ key: string }>();
+  if (state) return;
+  await refreshAllSourceHourlyMetrics(db);
+  await db.prepare("INSERT OR REPLACE INTO source_metric_state (key, completed_at) VALUES ('hourly_backfill_v1', CURRENT_TIMESTAMP)").run();
+}
+
+async function refreshSourceHourlyMetricForArticle(db: D1Database, articleId: string): Promise<void> {
+  const article = await db.prepare("SELECT discovered_at FROM articles WHERE id = ?").bind(articleId).first<{ discovered_at: string }>();
+  if (article?.discovered_at) await refreshSourceHourlyMetric(db, article.discovered_at);
 }
 
 const DASHBOARD_HTML = `<!doctype html>
@@ -1382,6 +1459,82 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .pill[title] { cursor: help; }
 
+    .source-activity-section {
+      padding: 16px 18px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .source-activity-heading {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+
+    .source-activity-title { font-size: 14px; font-weight: 750; }
+    .source-activity-meta { color: var(--muted); font-size: 12px; }
+
+    .source-activity-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .source-view-control {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .source-view-button {
+      min-height: 34px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      padding: 0 12px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .source-view-button:last-child { border-right: 0; }
+    .source-view-button.active { background: #e8f1ff; color: #123c69; }
+
+    .source-period-control { display: flex; align-items: center; gap: 8px; }
+    .source-period-label { min-width: 150px; text-align: center; font-size: 12px; font-weight: 700; }
+
+    .source-hourly-widget {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px;
+      max-width: 520px;
+      margin-bottom: 14px;
+      padding: 11px 13px;
+      border-left: 3px solid var(--blue);
+      background: var(--panel-soft);
+    }
+
+    .source-hourly-value { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .source-hourly-label { color: var(--muted); font-size: 11px; }
+    .source-hourly-note { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
+
+    .source-activity-chart {
+      width: 100%;
+      height: 330px;
+      border: 1px solid var(--line);
+      overflow-x: auto;
+      background: #fff;
+    }
+
+    .source-activity-chart svg { display: block; width: 100%; min-width: 780px; height: 100%; }
+    .source-stats-table { padding: 14px 18px 18px; }
+
     @media (max-width: 1050px) {
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .layout { grid-template-columns: 1fr; }
@@ -1403,6 +1556,9 @@ const DASHBOARD_HTML = `<!doctype html>
       .prediction-filter-status { width: 100%; margin-left: 0; }
       .prediction-trend-heading { align-items: flex-start; flex-direction: column; }
       .prediction-trend-meta { text-align: left; }
+      .source-activity-heading { align-items: flex-start; flex-direction: column; }
+      .source-hourly-widget { grid-template-columns: 1fr; }
+      .source-hourly-note { grid-column: auto; }
     }
   </style>
 </head>
@@ -1475,6 +1631,28 @@ const DASHBOARD_HTML = `<!doctype html>
           <div class="panel-title">Source Coverage and Prediction Movement</div>
           <div class="panel-meta" id="source-stats-meta">0 sources</div>
         </div>
+        <section class="source-activity-section" aria-labelledby="source-activity-title">
+          <div class="source-activity-heading">
+            <div>
+              <div class="source-activity-title" id="source-activity-title">Article and Ticker Acquisition</div>
+              <div class="source-activity-meta" id="source-activity-meta">Completed Brisbane calendar hours</div>
+            </div>
+          </div>
+          <div class="source-activity-controls">
+            <div class="source-view-control" aria-label="Acquisition chart period">
+              <button class="source-view-button active" type="button" data-source-view="day">Day</button>
+              <button class="source-view-button" type="button" data-source-view="month">Month</button>
+              <button class="source-view-button" type="button" data-source-view="year">Year</button>
+            </div>
+            <div class="source-period-control">
+              <button class="btn" id="source-period-previous" type="button">Previous</button>
+              <div class="source-period-label" id="source-period-label">Current day</div>
+              <button class="btn" id="source-period-next" type="button">Next</button>
+            </div>
+          </div>
+          <div class="source-hourly-widget" id="source-hourly-widget"></div>
+          <div class="source-activity-chart" id="source-activity-chart" aria-live="polite"></div>
+        </section>
         <div id="source-stats"></div>
       </section>
     </section>
@@ -1516,6 +1694,10 @@ const DASHBOARD_HTML = `<!doctype html>
     const jobsEl = document.getElementById("jobs");
     const articlesEl = document.getElementById("articles");
     const sourceStatsEl = document.getElementById("source-stats");
+    const sourceActivityChartEl = document.getElementById("source-activity-chart");
+    const sourceActivityMeta = document.getElementById("source-activity-meta");
+    const sourceHourlyWidgetEl = document.getElementById("source-hourly-widget");
+    const sourcePeriodLabelEl = document.getElementById("source-period-label");
     const resultsMeta = document.getElementById("results-meta");
     const jobsMeta = document.getElementById("jobs-meta");
     const articlesMeta = document.getElementById("articles-meta");
@@ -1575,6 +1757,8 @@ const DASHBOARD_HTML = `<!doctype html>
     let liveStatusRefreshPending = false;
     let liveStatusLoading = false;
     let sourceStatsLoading = false;
+    let sourceActivityMode = "day";
+    let sourceActivityAnchor = brisbaneDateKey();
     const predictionLoadedArticles = new Set();
     const predictionFilters = { direction: "all", confidenceBin: null };
     const PREDICTION_PAGE_SIZE = 50;
@@ -1627,6 +1811,18 @@ const DASHBOARD_HTML = `<!doctype html>
     simulationTab.addEventListener("click", () => setTab("simulation"));
     sourcesTab.addEventListener("click", () => setTab("sources"));
     settingsBtn.addEventListener("click", () => setTab("settings"));
+    sourcesPanel.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const viewButton = target?.closest("[data-source-view]");
+      if (viewButton) {
+        sourceActivityMode = viewButton.getAttribute("data-source-view") || "day";
+        sourceActivityAnchor = brisbaneDateKey();
+        loadSourceStats();
+        return;
+      }
+      if (target?.closest("#source-period-previous")) shiftSourceActivityPeriod(-1);
+      if (target?.closest("#source-period-next")) shiftSourceActivityPeriod(1);
+    });
     metricsEl.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target.closest("[data-open-tab]") : null;
       if (target) setTab(target.getAttribute("data-open-tab") || "simulation");
@@ -1840,15 +2036,48 @@ const DASHBOARD_HTML = `<!doctype html>
       sourceStatsLoading = true;
       sourceStatsMeta.textContent = "Loading sources";
       sourceStatsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+      sourceHourlyWidgetEl.innerHTML = predictionLoadingRows();
+      sourceActivityChartEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
       try {
-        const payload = await api("/api/source-stats");
-        renderSourceStats(payload.sources || []);
+        const [statsPayload, activityPayload] = await Promise.all([
+          api("/api/source-stats"),
+          api("/api/source-activity?mode=" + encodeURIComponent(sourceActivityMode) + "&anchor=" + encodeURIComponent(sourceActivityAnchor)),
+        ]);
+        renderSourceStats(statsPayload.sources || []);
+        renderSourceActivity(activityPayload);
       } catch (error) {
         sourceStatsMeta.textContent = "Update unavailable";
         showError(sourceStatsEl, error);
+        sourceHourlyWidgetEl.innerHTML = "";
+        showError(sourceActivityChartEl, error);
       } finally {
         sourceStatsLoading = false;
       }
+    }
+
+    function brisbaneDateKey(date = new Date()) {
+      const parts = new Intl.DateTimeFormat("en-AU", {
+        timeZone: "Australia/Brisbane",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(date).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+      return parts.year + "-" + parts.month + "-" + parts.day;
+    }
+
+    function shiftSourceActivityPeriod(direction) {
+      const date = new Date(sourceActivityAnchor + "T00:00:00Z");
+      if (sourceActivityMode === "day") date.setUTCDate(date.getUTCDate() + direction);
+      if (sourceActivityMode === "month") {
+        date.setUTCDate(1);
+        date.setUTCMonth(date.getUTCMonth() + direction);
+      }
+      if (sourceActivityMode === "year") {
+        date.setUTCMonth(0, 1);
+        date.setUTCFullYear(date.getUTCFullYear() + direction);
+      }
+      sourceActivityAnchor = date.toISOString().slice(0, 10);
+      loadSourceStats();
     }
 
     function startLiveStatusStream() {
@@ -2067,7 +2296,7 @@ const DASHBOARD_HTML = `<!doctype html>
         sourceStatsEl.innerHTML = '<div class="empty">No configured sources are available.</div>';
         return;
       }
-      sourceStatsEl.innerHTML = '<div class="impact-wrap">' + table(["Source", "Type", "Articles", "Bull avg movement", "Bear avg movement"], sources.map((source) => [
+      sourceStatsEl.innerHTML = '<div class="impact-wrap source-stats-table">' + table(["Source", "Type", "Articles", "Bull avg movement", "Bear avg movement"], sources.map((source) => [
         '<a href="' + escapeAttr(source.url || "#") + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(source.name || source.id || "Unknown") + '</a>',
         escapeHtml([source.source_type, source.category].filter(Boolean).join(" / ")),
         escapeHtml(String(Number(source.acquired_article_count || 0))),
@@ -2075,6 +2304,111 @@ const DASHBOARD_HTML = `<!doctype html>
         sourceMovementCell(source.bearish_average_movement_pct, source.bearish_samples, "bearish"),
       ]));
       sourceStatsEl.innerHTML += '</div>';
+    }
+
+    function renderSourceActivity(payload) {
+      sourceActivityMode = payload.mode || sourceActivityMode;
+      sourceActivityAnchor = payload.anchor || sourceActivityAnchor;
+      document.querySelectorAll("[data-source-view]").forEach((button) => {
+        button.classList.toggle("active", button.getAttribute("data-source-view") === sourceActivityMode);
+      });
+      sourcePeriodLabelEl.textContent = payload.period_label || sourceActivityAnchor;
+      document.getElementById("source-period-next").disabled = payload.can_go_next === false;
+
+      const average = payload.average || {};
+      const completedHours = Number(average.completed_hours || 0);
+      sourceHourlyWidgetEl.innerHTML =
+        '<div><div class="source-hourly-value">' + formatDecimal(average.articles_per_hour) + '</div><div class="source-hourly-label">Articles acquired per completed hour</div></div>' +
+        '<div><div class="source-hourly-value">' + formatDecimal(average.tickers_per_hour) + '</div><div class="source-hourly-label">Ticker calls acquired per completed hour</div></div>' +
+        '<div class="source-hourly-note">Average across ' + completedHours + ' fully observed Brisbane calendar hour' + (completedHours === 1 ? '' : 's') + '. The current partial hour is excluded.</div>';
+      sourceActivityMeta.textContent = "Australia/Brisbane | exact top-of-hour buckets | " + (payload.bucket_note || "completed periods only");
+      renderSourceActivityChart(payload);
+    }
+
+    function formatDecimal(value) {
+      const number = Number(value || 0);
+      return Number.isFinite(number) ? number.toFixed(2) : "0.00";
+    }
+
+    function renderSourceActivityChart(payload) {
+      const buckets = Array.isArray(payload.buckets) ? payload.buckets : [];
+      const populated = buckets.filter((item) => item.articles !== null && item.articles !== undefined);
+      const width = 1040;
+      const height = 320;
+      const pad = { left: 58, right: 62, top: 46, bottom: 50 };
+      const plotWidth = width - pad.left - pad.right;
+      const plotHeight = height - pad.top - pad.bottom;
+      const domainMax = Math.max(1, Number(payload.domain_max || buckets.length || 1));
+      const articleMax = Math.max(1, ...populated.map((item) => Number(item.articles || 0)));
+      const tickerMax = Math.max(1, ...populated.map((item) => Number(item.tickers || 0)));
+      const xFor = (value) => pad.left + (Number(value) / domainMax) * plotWidth;
+      const articleY = (value) => pad.top + ((articleMax - Number(value)) / articleMax) * plotHeight;
+      const tickerY = (value) => pad.top + ((tickerMax - Number(value)) / tickerMax) * plotHeight;
+
+      const grid = Array.from({ length: 5 }, (_, index) => {
+        const ratio = index / 4;
+        const y = pad.top + ratio * plotHeight;
+        const articles = articleMax * (1 - ratio);
+        const tickers = tickerMax * (1 - ratio);
+        return '<line x1="' + pad.left + '" y1="' + y.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y.toFixed(2) + '" stroke="#e4e9f0"></line>' +
+          '<text x="' + (pad.left - 8) + '" y="' + (y + 4).toFixed(2) + '" fill="#1457a8" font-size="10" text-anchor="end">' + formatAxisCount(articles) + '</text>' +
+          '<text x="' + (width - pad.right + 8) + '" y="' + (y + 4).toFixed(2) + '" fill="#087a55" font-size="10">' + formatAxisCount(tickers) + '</text>';
+      }).join("");
+
+      const separators = Array.isArray(payload.separators) ? payload.separators : [];
+      const separatorBands = separators.map((separator, index) => {
+        const start = Math.max(0, Number(separator.position || 0));
+        const end = index + 1 < separators.length ? Number(separators[index + 1].position || domainMax) : domainMax;
+        const x = xFor(start);
+        const nextX = xFor(Math.min(domainMax, end));
+        return (index % 2 === 0 ? '<rect x="' + x.toFixed(2) + '" y="' + pad.top + '" width="' + Math.max(0, nextX - x).toFixed(2) + '" height="' + plotHeight + '" fill="#f7f9fc"></rect>' : '') +
+          '<line x1="' + x.toFixed(2) + '" y1="' + pad.top + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="#c7d0dc" stroke-dasharray="4 4"></line>' +
+          '<text x="' + (x + 5).toFixed(2) + '" y="' + (pad.top + 12) + '" fill="#667085" font-size="9">' + escapeHtml(separator.label || "") + '</text>';
+      }).join("");
+
+      const ticks = (Array.isArray(payload.ticks) ? payload.ticks : []).map((tick) => {
+        const x = xFor(tick.position);
+        return '<line x1="' + x.toFixed(2) + '" y1="' + (height - pad.bottom) + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom + 4) + '" stroke="#98a2b3"></line>' +
+          '<text x="' + x.toFixed(2) + '" y="' + (height - 27) + '" fill="#667085" font-size="10" text-anchor="middle">' + escapeHtml(tick.label || "") + '</text>';
+      }).join("");
+
+      const pathFor = (field, yFor) => {
+        let drawing = false;
+        return buckets.map((item) => {
+          const value = item[field];
+          if (value === null || value === undefined) {
+            drawing = false;
+            return "";
+          }
+          const command = drawing ? "L" : "M";
+          drawing = true;
+          return command + xFor(item.position).toFixed(2) + " " + yFor(value).toFixed(2);
+        }).join(" ");
+      };
+      const articlePath = pathFor("articles", articleY);
+      const tickerPath = pathFor("tickers", tickerY);
+      const points = populated.map((item) => {
+        const tooltip = (item.label || "Period") + ": " + Number(item.articles || 0) + " articles, " + Number(item.tickers || 0) + " ticker calls" + (item.partial ? " (completed hours only)" : "");
+        return '<circle cx="' + xFor(item.position).toFixed(2) + '" cy="' + articleY(item.articles).toFixed(2) + '" r="3" fill="#1457a8"><title>' + escapeHtml(tooltip) + '</title></circle>' +
+          '<circle cx="' + xFor(item.position).toFixed(2) + '" cy="' + tickerY(item.tickers).toFixed(2) + '" r="3" fill="#087a55"><title>' + escapeHtml(tooltip) + '</title></circle>';
+      }).join("");
+
+      sourceActivityChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Articles and ticker calls acquired over time">' +
+        separatorBands + grid + ticks +
+        '<text x="8" y="20" fill="#1457a8" font-size="10">Articles</text>' +
+        '<text x="' + (width - 8) + '" y="20" fill="#087a55" font-size="10" text-anchor="end">Ticker calls</text>' +
+        '<line x1="' + pad.left + '" y1="24" x2="' + (pad.left + 22) + '" y2="24" stroke="#1457a8" stroke-width="3"></line><text x="' + (pad.left + 29) + '" y="28" fill="#344054" font-size="11">Articles retrieved</text>' +
+        '<line x1="' + (pad.left + 150) + '" y1="24" x2="' + (pad.left + 172) + '" y2="24" stroke="#087a55" stroke-width="3"></line><text x="' + (pad.left + 179) + '" y="28" fill="#344054" font-size="11">Ticker calls</text>' +
+        (articlePath ? '<path d="' + articlePath + '" fill="none" stroke="#1457a8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' : '') +
+        (tickerPath ? '<path d="' + tickerPath + '" fill="none" stroke="#087a55" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' : '') + points +
+        '<text x="' + (pad.left + plotWidth / 2) + '" y="310" fill="#667085" font-size="10" text-anchor="middle">' + escapeHtml(payload.axis_label || "Brisbane time") + '</text>' +
+      '</svg>';
+    }
+
+    function formatAxisCount(value) {
+      if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + "k";
+      if (value >= 10) return String(Math.round(value));
+      return Number(value).toFixed(value < 2 ? 1 : 0);
     }
 
     function sourceMovementCell(value, samples, direction) {
@@ -3371,7 +3705,7 @@ async function enqueueArticles(
       group.map((item) =>
         db
           .prepare(
-            "INSERT OR IGNORE INTO articles (id, source_id, title, url, summary, published_at, content_hash, content_plaintext, content_source, content_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+            "INSERT OR IGNORE INTO articles (id, source_id, title, url, summary, published_at, discovered_at, content_hash, content_plaintext, content_source, content_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
           )
           .bind(
             item.articleId,
@@ -3380,6 +3714,7 @@ async function enqueueArticles(
             item.url,
             item.summary,
             item.publishedAt,
+            new Date(checkedAt).toISOString(),
             item.contentHash,
             item.contentPlaintext,
             item.contentPlaintext ? "feed" : null,
@@ -3417,25 +3752,32 @@ async function enqueueArticles(
   return inserted;
 }
 
-async function ingestFeeds(env: Env): Promise<{
+async function ingestFeeds(env: Env, scheduledAt?: number): Promise<{
   fetched: unknown[];
   inserted: number;
   checked_at: string;
+  completed_at: string;
+  duration_seconds: number;
   source_count: number;
   failed_source_count: number;
 }> {
   await ensureArticleStorageSchema(env.NEWS_DB);
   await seedSources(env.NEWS_DB);
-  const checkedAt = Date.now();
+  const startedAt = Date.now();
+  const checkedAt = scheduledAt ?? startedAt;
   const fetched = await mapWithConcurrency(SOURCES, 12, fetchSource);
   const inserted = await enqueueArticles(env.NEWS_DB, env.RESEARCH_QUEUE, fetched.flatMap((result) => result.items), checkedAt);
   const checkedAtIso = new Date(checkedAt).toISOString();
+  const completedAt = Date.now();
+  const completedAtIso = new Date(completedAt).toISOString();
+  const durationSeconds = Math.max(0, Math.round((completedAt - startedAt) / 1000));
   const failedSourceCount = fetched.filter((result) => Boolean(result.error)).length;
   await env.NEWS_DB.prepare(
-    "INSERT INTO source_checks (id, checked_at, acquired_count, source_count, failed_source_count) VALUES (?, ?, ?, ?, ?)",
+    "INSERT INTO source_checks (id, checked_at, completed_at, duration_seconds, acquired_count, source_count, failed_source_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
   )
-    .bind(crypto.randomUUID(), checkedAtIso, inserted, fetched.length, failedSourceCount)
+    .bind(crypto.randomUUID(), checkedAtIso, completedAtIso, durationSeconds, inserted, fetched.length, failedSourceCount)
     .run();
+  await refreshSourceHourlyMetric(env.NEWS_DB, checkedAtIso);
   await publishDashboardEvent(env, {
     type: "source_check_completed",
     at: checkedAtIso,
@@ -3447,6 +3789,8 @@ async function ingestFeeds(env: Env): Promise<{
     fetched: fetched.map(({ items: _items, ...rest }) => rest),
     inserted,
     checked_at: checkedAtIso,
+    completed_at: completedAtIso,
+    duration_seconds: durationSeconds,
     source_count: fetched.length,
     failed_source_count: failedSourceCount,
   };
@@ -3843,6 +4187,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
       env.NEWS_DB.prepare("DELETE FROM prediction_outcome_scans WHERE result_id = (SELECT id FROM research_results WHERE job_id = ?)").bind(jobId),
       env.NEWS_DB.prepare("DELETE FROM prediction_outcomes WHERE result_id = (SELECT id FROM research_results WHERE job_id = ?)").bind(jobId),
     ]);
+    await refreshSourceHourlyMetricForArticle(env.NEWS_DB, article.id);
     await publishDashboardEvent(env, {
       type: "research_completed",
       at: new Date().toISOString(),
@@ -4724,6 +5069,205 @@ async function buildSourceStats(env: Env): Promise<SourceStatsRow[]> {
   return result.results || [];
 }
 
+function brisbaneDateParts(timestamp = Date.now()): { year: number; month: number; day: number } {
+  const shifted = new Date(timestamp + BRISBANE_OFFSET_MS);
+  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate() };
+}
+
+function brisbaneLocalToUtc(year: number, month: number, day: number, hour = 0): number {
+  return Date.UTC(year, month - 1, day, hour) - BRISBANE_OFFSET_MS;
+}
+
+function sourceActivityAnchor(value: string | null): { year: number; month: number; day: number } {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+  if (!match) return brisbaneDateParts();
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const valid = new Date(Date.UTC(year, month - 1, day));
+  if (valid.getUTCFullYear() !== year || valid.getUTCMonth() !== month - 1 || valid.getUTCDate() !== day) return brisbaneDateParts();
+  return { year, month, day };
+}
+
+function localDateLabel(timestamp: number, options: Intl.DateTimeFormatOptions): string {
+  return new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Brisbane", ...options }).format(new Date(timestamp));
+}
+
+async function buildSourceActivity(
+  env: Env,
+  mode: SourceActivityMode,
+  anchorValue: string | null,
+): Promise<Record<string, unknown>> {
+  await ensureSourceHourlyMetricsBackfilled(env.NEWS_DB);
+  const anchor = sourceActivityAnchor(anchorValue);
+  const normalizedAnchor = `${anchor.year}-${String(anchor.month).padStart(2, "0")}-${String(anchor.day).padStart(2, "0")}`;
+  const currentHour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+  let rangeStart = brisbaneLocalToUtc(anchor.year, anchor.month, anchor.day);
+  let rangeEnd = rangeStart + 24 * HOUR_MS;
+  let periodLabel = localDateLabel(rangeStart, { weekday: "short", day: "numeric", month: "long", year: "numeric" });
+  let axisLabel = "Hour of day (Brisbane time)";
+
+  if (mode === "month") {
+    rangeStart = brisbaneLocalToUtc(anchor.year, anchor.month, 1);
+    rangeEnd = brisbaneLocalToUtc(anchor.year, anchor.month + 1, 1);
+    periodLabel = localDateLabel(rangeStart, { month: "long", year: "numeric" });
+    axisLabel = "Day of month (Brisbane time)";
+  } else if (mode === "year") {
+    rangeStart = brisbaneLocalToUtc(anchor.year, 1, 1);
+    rangeEnd = brisbaneLocalToUtc(anchor.year + 1, 1, 1);
+    periodLabel = String(anchor.year);
+    axisLabel = "Week of year (Brisbane time)";
+  }
+
+  const metricRows = await env.NEWS_DB.prepare(
+    "SELECT hour_start, article_count, ticker_count FROM source_hourly_metrics WHERE datetime(hour_start) >= datetime(?) AND datetime(hour_start) < datetime(?) AND datetime(hour_start) < datetime(?) ORDER BY datetime(hour_start)",
+  )
+    .bind(new Date(rangeStart).toISOString(), new Date(rangeEnd).toISOString(), new Date(currentHour).toISOString())
+    .all<SourceHourlyMetricRow>();
+  const hourly = new Map(
+    (metricRows.results || []).map((row) => [Math.floor(Date.parse(row.hour_start) / HOUR_MS) * HOUR_MS, {
+      articles: Number(row.article_count || 0),
+      tickers: Number(row.ticker_count || 0),
+    }]),
+  );
+  const sumRange = (start: number, end: number) => {
+    let articles = 0;
+    let tickers = 0;
+    for (let hour = start; hour < Math.min(end, currentHour); hour += HOUR_MS) {
+      const row = hourly.get(hour);
+      articles += row?.articles || 0;
+      tickers += row?.tickers || 0;
+    }
+    return { articles, tickers };
+  };
+
+  const buckets: Array<Record<string, unknown>> = [];
+  const ticks: Array<Record<string, unknown>> = [];
+  const separators: Array<Record<string, unknown>> = [];
+  let domainMax = 24;
+
+  if (mode === "day") {
+    for (let hour = 0; hour < 24; hour += 1) {
+      const start = rangeStart + hour * HOUR_MS;
+      const complete = start < currentHour;
+      const totals = sumRange(start, start + HOUR_MS);
+      const hourLabel = hour === 0 ? "12am" : hour === 12 ? "12pm" : hour < 12 ? `${hour}am` : `${hour - 12}pm`;
+      buckets.push({
+        position: hour + 0.5,
+        label: `${hourLabel}-${hour === 23 ? "12am" : hour + 1 === 12 ? "12pm" : hour + 1 < 12 ? `${hour + 1}am` : `${hour + 1 - 12}pm`}`,
+        articles: complete ? totals.articles : null,
+        tickers: complete ? totals.tickers : null,
+        partial: false,
+      });
+    }
+    for (let hour = 0; hour <= 24; hour += 4) {
+      ticks.push({ position: hour, label: hour === 0 || hour === 24 ? "12am" : hour === 12 ? "12pm" : hour < 12 ? `${hour}am` : `${hour - 12}pm` });
+    }
+  } else if (mode === "month") {
+    const days = Math.round((rangeEnd - rangeStart) / (24 * HOUR_MS));
+    domainMax = days;
+    let weekNumber = 0;
+    for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
+      const start = rangeStart + dayIndex * 24 * HOUR_MS;
+      const end = start + 24 * HOUR_MS;
+      const started = start < currentHour;
+      const totals = sumRange(start, end);
+      buckets.push({
+        position: dayIndex + 0.5,
+        label: localDateLabel(start, { weekday: "short", day: "numeric", month: "short" }),
+        articles: started ? totals.articles : null,
+        tickers: started ? totals.tickers : null,
+        partial: started && end > currentHour,
+      });
+      const dayOfWeek = new Date(start + BRISBANE_OFFSET_MS).getUTCDay();
+      if (dayIndex === 0 || dayOfWeek === 1) {
+        weekNumber += 1;
+        separators.push({ position: dayIndex, label: `Week ${weekNumber}` });
+      }
+    }
+    const tickStep = days > 28 ? 5 : 4;
+    for (let day = 1; day <= days; day += tickStep) ticks.push({ position: day - 0.5, label: String(day) });
+    if (!ticks.some((tick) => Number(tick.position) === days - 0.5)) ticks.push({ position: days - 0.5, label: String(days) });
+  } else {
+    const yearStart = rangeStart;
+    const yearEnd = rangeEnd;
+    const yearDays = Math.round((yearEnd - yearStart) / (24 * HOUR_MS));
+    domainMax = yearDays / 7;
+    const localJanOne = new Date(yearStart + BRISBANE_OFFSET_MS);
+    const daysSinceMonday = (localJanOne.getUTCDay() + 6) % 7;
+    const firstWeekStart = yearStart - daysSinceMonday * 24 * HOUR_MS;
+    let weekNumber = 1;
+    for (let weekStart = firstWeekStart; weekStart < yearEnd; weekStart += 7 * 24 * HOUR_MS) {
+      const clippedStart = Math.max(weekStart, yearStart);
+      const clippedEnd = Math.min(weekStart + 7 * 24 * HOUR_MS, yearEnd);
+      const started = clippedStart < currentHour;
+      const totals = sumRange(clippedStart, clippedEnd);
+      buckets.push({
+        position: ((clippedStart + clippedEnd) / 2 - yearStart) / (7 * 24 * HOUR_MS),
+        label: `Week ${weekNumber}: ${localDateLabel(clippedStart, { day: "numeric", month: "short" })}-${localDateLabel(clippedEnd - 1, { day: "numeric", month: "short" })}`,
+        articles: started ? totals.articles : null,
+        tickers: started ? totals.tickers : null,
+        partial: started && clippedEnd > currentHour,
+      });
+      if (weekNumber === 1 || weekNumber % 4 === 1) ticks.push({ position: (clippedStart - yearStart) / (7 * 24 * HOUR_MS), label: `W${weekNumber}` });
+      weekNumber += 1;
+    }
+    for (let month = 1; month <= 12; month += 1) {
+      const monthStart = brisbaneLocalToUtc(anchor.year, month, 1);
+      separators.push({
+        position: (monthStart - yearStart) / (7 * 24 * HOUR_MS),
+        label: localDateLabel(monthStart, { month: "short" }),
+      });
+    }
+  }
+
+  const earliestCheck = await env.NEWS_DB.prepare(
+    "SELECT MIN(checked_at) AS checked_at FROM source_checks WHERE datetime(checked_at) >= datetime(?)",
+  )
+    .bind(SOURCE_EXPANSION_CUTOFF)
+    .first<{ checked_at: string | null }>();
+  const firstCheckMs = earliestCheck?.checked_at ? Date.parse(earliestCheck.checked_at) : currentHour;
+  const averageStart = Math.ceil(firstCheckMs / HOUR_MS) * HOUR_MS;
+  const completedHours = Math.max(0, Math.floor((currentHour - averageStart) / HOUR_MS));
+  const averageTotals = completedHours > 0
+    ? await env.NEWS_DB.prepare(
+      "SELECT COALESCE(SUM(article_count), 0) AS articles, COALESCE(SUM(ticker_count), 0) AS tickers FROM source_hourly_metrics WHERE datetime(hour_start) >= datetime(?) AND datetime(hour_start) < datetime(?)",
+    )
+      .bind(new Date(averageStart).toISOString(), new Date(currentHour).toISOString())
+      .first<{ articles: number; tickers: number }>()
+    : null;
+
+  const current = brisbaneDateParts();
+  const currentPeriodStart = mode === "day"
+    ? brisbaneLocalToUtc(current.year, current.month, current.day)
+    : mode === "month"
+      ? brisbaneLocalToUtc(current.year, current.month, 1)
+      : brisbaneLocalToUtc(current.year, 1, 1);
+  return {
+    ok: true,
+    timezone: "Australia/Brisbane",
+    mode,
+    anchor: normalizedAnchor,
+    period_label: periodLabel,
+    axis_label: axisLabel,
+    bucket_note: mode === "day" ? "hourly totals" : mode === "month" ? "daily totals with week boundaries" : "weekly totals with month boundaries",
+    can_go_next: rangeStart < currentPeriodStart,
+    domain_max: domainMax,
+    buckets,
+    ticks,
+    separators,
+    average: {
+      completed_hours: completedHours,
+      articles_per_hour: completedHours ? Number(averageTotals?.articles || 0) / completedHours : 0,
+      tickers_per_hour: completedHours ? Number(averageTotals?.tickers || 0) / completedHours : 0,
+      total_articles: Number(averageTotals?.articles || 0),
+      total_tickers: Number(averageTotals?.tickers || 0),
+      starts_at: completedHours ? new Date(averageStart).toISOString() : null,
+      ends_at: new Date(currentHour).toISOString(),
+    },
+  };
+}
+
 async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>[]> {
   const statements = PREDICTION_INTERVALS.map((interval) => {
     const path = `$."${interval.label}".change_pct`;
@@ -5578,6 +6122,12 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, sources: await buildSourceStats(env) });
   }
 
+  if (url.pathname === "/api/source-activity") {
+    const requestedMode = url.searchParams.get("mode");
+    const mode: SourceActivityMode = requestedMode === "month" || requestedMode === "year" ? requestedMode : "day";
+    return json(await buildSourceActivity(env, mode, url.searchParams.get("anchor")));
+  }
+
   if (url.pathname === "/api/articles/content") {
     const articleId = url.searchParams.get("id");
     if (!articleId) return json({ error: "Missing article id" }, { status: 400 });
@@ -5809,6 +6359,7 @@ export default {
           "/api/events",
           "/api/source-checks",
           "/api/source-stats",
+          "/api/source-activity?mode=day|month|year&anchor=YYYY-MM-DD",
           "/api/ingest",
           "/api/articles",
           "/api/articles/content?id=ARTICLE_ID",
@@ -5849,9 +6400,10 @@ export default {
     return json({ error: "Not found" }, { status: 404 });
   },
 
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const scheduledAt = Math.floor(event.scheduledTime / ARTICLE_INGESTION_WINDOW_MS) * ARTICLE_INGESTION_WINDOW_MS;
     ctx.waitUntil(
-      ingestFeeds(env).then(async () => {
+      ingestFeeds(env, scheduledAt).then(async () => {
         await normalizeResearchJobConcurrency(env);
         await pruneLegacyFirstPassBacklog(env.NEWS_DB);
         await archiveTickerlessArticles(env);
