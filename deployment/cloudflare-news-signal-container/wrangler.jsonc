@@ -49,6 +49,10 @@
       {
         "name": "CODEX_CONTAINER",
         "class_name": "CodexResearchContainer"
+      },
+      {
+        "name": "DASHBOARD_EVENTS",
+        "class_name": "DashboardEventHub"
       }
     ]
   },
@@ -56,6 +60,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["CodexResearchContainer"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["DashboardEventHub"]
     }
   ]
 }

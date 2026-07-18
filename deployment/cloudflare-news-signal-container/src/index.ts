@@ -1,4 +1,5 @@
 import { Container, getContainer } from "@cloudflare/containers";
+import { DurableObject } from "cloudflare:workers";
 
 type Source = {
   id: string;
@@ -39,6 +40,24 @@ type Article = {
 
 type ResearchJobMessage = {
   jobId: string;
+};
+
+type DashboardEvent = {
+  type: "connected" | "source_check_completed" | "research_started" | "research_completed" | "research_failed";
+  at: string;
+  job_id?: string;
+  article_id?: string;
+  acquired_count?: number;
+  source_count?: number;
+  failed_source_count?: number;
+};
+
+type SourceCheckRow = {
+  id: string;
+  checked_at: string;
+  acquired_count: number;
+  source_count: number;
+  failed_source_count: number;
 };
 
 type ResearchResultFields = {
@@ -213,6 +232,7 @@ class ResearchBusyError extends Error {
 
 export interface Env {
   CODEX_CONTAINER: DurableObjectNamespace<CodexResearchContainer>;
+  DASHBOARD_EVENTS: DurableObjectNamespace<DashboardEventHub>;
   NEWS_DB: D1Database;
   RESEARCH_QUEUE: Queue<ResearchJobMessage>;
   CONTAINER_API_TOKEN?: string;
@@ -463,6 +483,10 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
       await db.prepare(
         "CREATE INDEX IF NOT EXISTS idx_research_jobs_prediction_delay_cohort ON research_jobs(prediction_delay_eligible, status, finished_at)",
       ).run();
+      await db.prepare(
+        "CREATE TABLE IF NOT EXISTS source_checks (id TEXT PRIMARY KEY, checked_at TEXT NOT NULL, acquired_count INTEGER NOT NULL DEFAULT 0, source_count INTEGER NOT NULL DEFAULT 0, failed_source_count INTEGER NOT NULL DEFAULT 0)",
+      ).run();
+      await db.prepare("CREATE INDEX IF NOT EXISTS idx_source_checks_checked_at ON source_checks(checked_at DESC)").run();
       await db.prepare(
         "UPDATE research_jobs SET synthesis_duration_seconds = MAX(0, unixepoch(finished_at) - unixepoch(started_at)) WHERE synthesis_duration_seconds IS NULL AND started_at IS NOT NULL AND finished_at IS NOT NULL AND status IN ('succeeded', 'failed')",
       ).run();
@@ -1391,6 +1415,14 @@ const DASHBOARD_HTML = `<!doctype html>
     <section id="settings-panel" class="hidden">
       <section class="panel" style="margin-top:14px">
         <div class="panel-header">
+          <div class="panel-title">Recent Source Checks</div>
+          <div class="panel-meta" id="source-checks-meta">0 checks</div>
+        </div>
+        <div id="source-checks"></div>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
           <div class="panel-title">Recent Jobs</div>
           <div class="panel-meta" id="jobs-meta">0 rows</div>
         </div>
@@ -1445,9 +1477,11 @@ const DASHBOARD_HTML = `<!doctype html>
     const resultsEl = document.getElementById("results");
     const jobsEl = document.getElementById("jobs");
     const articlesEl = document.getElementById("articles");
+    const sourceChecksEl = document.getElementById("source-checks");
     const resultsMeta = document.getElementById("results-meta");
     const jobsMeta = document.getElementById("jobs-meta");
     const articlesMeta = document.getElementById("articles-meta");
+    const sourceChecksMeta = document.getElementById("source-checks-meta");
     const overviewTab = document.getElementById("overview-tab");
     const simulationTab = document.getElementById("simulation-tab");
     const settingsBtn = document.getElementById("settings-btn");
@@ -1495,7 +1529,10 @@ const DASHBOARD_HTML = `<!doctype html>
     let predictionLastArticleKey = null;
     let predictionObserver = null;
     let latestStatus = null;
-    let liveStatusTimer = null;
+    let liveStatusSocket = null;
+    let liveStatusReconnectTimer = null;
+    let liveStatusRefreshTimer = null;
+    let liveStatusRefreshPending = false;
     let liveStatusLoading = false;
     const predictionLoadedArticles = new Set();
     const predictionFilters = { direction: "all", confidenceBin: null };
@@ -1527,7 +1564,8 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionsLoaded = false;
       eodSimulationLoaded = false;
       syncAuthState();
-      startLiveStatusPolling();
+      stopLiveStatusStream();
+      startLiveStatusStream();
       loadAll();
     });
 
@@ -1537,7 +1575,7 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionsLoaded = false;
       eodSimulationLoaded = false;
       syncAuthState();
-      stopLiveStatusPolling();
+      stopLiveStatusStream();
       liveStatusUpdated.textContent = "Live status waiting";
     });
 
@@ -1656,16 +1694,18 @@ const DASHBOARD_HTML = `<!doctype html>
       if (!metricsEl.children.length) showInitialSkeletons();
       setBusy(true);
       try {
-        const [status, results, jobs] = await Promise.all([
+        const [status, results, jobs, sourceChecks] = await Promise.all([
           api("/api/status"),
           api("/api/results?limit=20"),
           api("/api/jobs?limit=12"),
+          api("/api/source-checks?limit=20"),
         ]);
         latestStatus = status;
         renderMetrics(latestStatus);
         renderResults(results.results || []);
         renderJobs(jobs.jobs || []);
         renderArticles(results.results || []);
+        renderSourceChecks(sourceChecks.checks || []);
         lastUpdated.textContent = "Data refreshed " + new Date().toLocaleTimeString();
         liveStatusUpdated.textContent = "Live status " + new Date().toLocaleTimeString();
         if (!simulationPanel.classList.contains("hidden")) {
@@ -1711,11 +1751,15 @@ const DASHBOARD_HTML = `<!doctype html>
       if (!current) return current;
       const jobCounts = new Map((current.jobs || []).map((item) => [item.status, item]));
       for (const item of live.jobs || []) jobCounts.set(item.status, item);
-      return { ...current, jobs: [...jobCounts.values()], timing: live.timing || current.timing, active_jobs: live.active_jobs || [] };
+      return { ...current, jobs: [...jobCounts.values()], timing: live.timing || current.timing, active_jobs: live.active_jobs || [], latest_source_check: live.latest_source_check || current.latest_source_check };
     }
 
     async function refreshLiveStatus() {
-      if (liveStatusLoading || document.hidden || !tokenInput.value.trim()) return;
+      if (liveStatusLoading) {
+        liveStatusRefreshPending = true;
+        return;
+      }
+      if (document.hidden || !tokenInput.value.trim()) return;
       liveStatusLoading = true;
       try {
         const live = await api("/api/status/live");
@@ -1727,22 +1771,99 @@ const DASHBOARD_HTML = `<!doctype html>
         liveStatusUpdated.textContent = "Live status unavailable";
       } finally {
         liveStatusLoading = false;
+        if (liveStatusRefreshPending) {
+          liveStatusRefreshPending = false;
+          scheduleLiveStatusRefresh(0);
+        }
       }
     }
 
-    function startLiveStatusPolling() {
-      if (liveStatusTimer) return;
-      liveStatusTimer = setInterval(refreshLiveStatus, 5000);
+    function scheduleLiveStatusRefresh(delay = 150) {
+      if (liveStatusRefreshTimer) clearTimeout(liveStatusRefreshTimer);
+      liveStatusRefreshTimer = setTimeout(() => {
+        liveStatusRefreshTimer = null;
+        refreshLiveStatus();
+      }, delay);
     }
 
-    function stopLiveStatusPolling() {
-      if (!liveStatusTimer) return;
-      clearInterval(liveStatusTimer);
-      liveStatusTimer = null;
+    async function refreshSourceChecks() {
+      if (settingsPanel.classList.contains("hidden")) return;
+      try {
+        const payload = await api("/api/source-checks?limit=20");
+        renderSourceChecks(payload.checks || []);
+      } catch {
+        sourceChecksMeta.textContent = "Update unavailable";
+      }
+    }
+
+    function startLiveStatusStream() {
+      if (!tokenInput.value.trim() || liveStatusSocket) return;
+      if (liveStatusReconnectTimer) {
+        clearTimeout(liveStatusReconnectTimer);
+        liveStatusReconnectTimer = null;
+      }
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(protocol + "//" + window.location.host + "/api/events");
+      liveStatusSocket = socket;
+      liveStatusUpdated.textContent = "Live updates connecting";
+
+      socket.addEventListener("open", () => {
+        liveStatusUpdated.textContent = "Live updates connected";
+        scheduleLiveStatusRefresh(0);
+      });
+      socket.addEventListener("message", (message) => {
+        let event = null;
+        try { event = JSON.parse(String(message.data || "")); } catch { event = null; }
+        if (event && event.type === "source_check_completed") {
+          if (latestStatus) {
+            latestStatus = {
+              ...latestStatus,
+              latest_source_check: {
+                id: "live",
+                checked_at: event.at,
+                acquired_count: Number(event.acquired_count || 0),
+                source_count: Number(event.source_count || 0),
+                failed_source_count: Number(event.failed_source_count || 0),
+              },
+            };
+            renderMetrics(latestStatus);
+          }
+          refreshSourceChecks();
+        }
+        liveStatusUpdated.textContent = "Live signal " + new Date().toLocaleTimeString();
+        scheduleLiveStatusRefresh();
+      });
+      socket.addEventListener("close", () => {
+        if (liveStatusSocket !== socket) return;
+        liveStatusSocket = null;
+        if (!tokenInput.value.trim()) return;
+        liveStatusUpdated.textContent = "Live updates reconnecting";
+        liveStatusReconnectTimer = setTimeout(() => {
+          liveStatusReconnectTimer = null;
+          startLiveStatusStream();
+        }, 2000);
+      });
+      socket.addEventListener("error", () => {
+        liveStatusUpdated.textContent = "Live updates unavailable";
+      });
+    }
+
+    function stopLiveStatusStream() {
+      if (liveStatusRefreshTimer) clearTimeout(liveStatusRefreshTimer);
+      if (liveStatusReconnectTimer) clearTimeout(liveStatusReconnectTimer);
+      liveStatusRefreshTimer = null;
+      liveStatusReconnectTimer = null;
+      liveStatusRefreshPending = false;
+      const socket = liveStatusSocket;
+      liveStatusSocket = null;
+      if (socket) socket.close(1000, "Live updates stopped");
     }
 
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) refreshLiveStatus();
+      if (!document.hidden) {
+        startLiveStatusStream();
+        scheduleLiveStatusRefresh(0);
+      }
     });
 
     async function reloadPredictionOutcomes() {
@@ -1822,10 +1943,11 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function showInitialSkeletons() {
-      metricsEl.innerHTML = Array.from({ length: 7 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
+      metricsEl.innerHTML = Array.from({ length: 8 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
       resultsEl.innerHTML = Array.from({ length: 5 }, () => '<div class="skeleton-result"><span class="skeleton-block skeleton-line long"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
       jobsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
       articlesEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
+      sourceChecksEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
     }
 
     function showPredictionSkeletons() {
@@ -1855,6 +1977,8 @@ const DASHBOARD_HTML = `<!doctype html>
       const capacity = Number(timing.parallel_capacity || 4);
       const synthesisSamples = Number(timing.synthesis_samples || 0);
       const delaySamples = Number(timing.prediction_delay_samples || 0);
+      const sourceCheck = status.latest_source_check || null;
+      const sourceCheckDate = sourceCheck ? new Date(sourceCheck.checked_at) : null;
       metricsEl.innerHTML = [
         metric("Articles", analyzed + queued, analyzed + " actionable analyzed, " + queued + " queued"),
         metric("Results", results, succeeded + " succeeded"),
@@ -1863,11 +1987,32 @@ const DASHBOARD_HTML = `<!doctype html>
         metric("Failed", failed, "Needs review"),
         metric("Avg synthesis", formatDuration(timing.average_synthesis_seconds), synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s")),
         metric("Avg prediction delay", formatDuration(timing.average_prediction_delay_seconds), delaySamples + " new first-pass prediction sample" + (delaySamples === 1 ? "" : "s")),
+        metric(
+          "Last source check",
+          sourceCheckDate && Number.isFinite(sourceCheckDate.getTime()) ? sourceCheckDate.toLocaleTimeString() : "n/a",
+          sourceCheck
+            ? Number(sourceCheck.acquired_count || 0) + " acquired at " + sourceCheckDate.toLocaleString() + " · " + Number(sourceCheck.failed_source_count || 0) + " source failures"
+            : "No source checks recorded yet",
+        ),
       ].join("");
     }
 
     function metric(label, value, note) {
       return '<div class="metric"><div class="label">' + escapeHtml(label) + '</div><div class="value">' + escapeHtml(String(value)) + '</div><div class="note">' + escapeHtml(note) + '</div></div>';
+    }
+
+    function renderSourceChecks(checks) {
+      sourceChecksMeta.textContent = checks.length + " check" + (checks.length === 1 ? "" : "s");
+      if (!checks.length) {
+        sourceChecksEl.innerHTML = '<div class="empty">No source checks have been recorded yet.</div>';
+        return;
+      }
+      sourceChecksEl.innerHTML = table(["Checked", "Acquired", "Sources", "Failures"], checks.map((check) => [
+        escapeHtml(formatDate(check.checked_at)),
+        escapeHtml(String(Number(check.acquired_count || 0))),
+        escapeHtml(String(Number(check.source_count || 0))),
+        pill(String(Number(check.failed_source_count || 0)), Number(check.failed_source_count || 0) ? "red" : "green", "Number of configured sources that failed during this check."),
+      ]));
     }
 
     function renderResults(results) {
@@ -2848,7 +2993,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     setInterval(updateRunningJobTimers, 1000);
     if (tokenInput.value.trim()) {
-      startLiveStatusPolling();
+      startLiveStatusStream();
       loadAll();
     }
   </script>
@@ -2878,11 +3023,32 @@ function html(payload: string, init: ResponseInit = {}): Response {
 function isAuthorized(request: Request, env: Env): boolean {
   if (!env.CONTAINER_API_TOKEN) return true;
   const header = request.headers.get("authorization") || "";
-  return header === `Bearer ${env.CONTAINER_API_TOKEN}`;
+  if (header === `Bearer ${env.CONTAINER_API_TOKEN}`) return true;
+  const cookie = request.headers.get("cookie") || "";
+  const token = cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith("news_signal_token="));
+  if (!token) return false;
+  try {
+    return decodeURIComponent(token.slice("news_signal_token=".length)) === env.CONTAINER_API_TOKEN;
+  } catch {
+    return false;
+  }
 }
 
 function requireAuthorized(request: Request, env: Env): Response | null {
   return isAuthorized(request, env) ? null : json({ error: "Unauthorized" }, { status: 401 });
+}
+
+async function publishDashboardEvent(env: Env, event: DashboardEvent): Promise<void> {
+  try {
+    const id = env.DASHBOARD_EVENTS.idFromName("news-signal-dashboard");
+    await env.DASHBOARD_EVENTS.get(id).fetch("https://dashboard-events.internal/publish", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(event),
+    });
+  } catch (error) {
+    console.error("Dashboard event publish failed", event.type, error);
+  }
 }
 
 function cloneForContainer(request: Request, path: string): Request {
@@ -3174,15 +3340,38 @@ async function enqueueArticles(
   return inserted;
 }
 
-async function ingestFeeds(env: Env): Promise<{ fetched: unknown[]; inserted: number }> {
+async function ingestFeeds(env: Env): Promise<{
+  fetched: unknown[];
+  inserted: number;
+  checked_at: string;
+  source_count: number;
+  failed_source_count: number;
+}> {
   await ensureArticleStorageSchema(env.NEWS_DB);
   await seedSources(env.NEWS_DB);
   const checkedAt = Date.now();
   const fetched = await mapWithConcurrency(SOURCES, 12, fetchSource);
   const inserted = await enqueueArticles(env.NEWS_DB, env.RESEARCH_QUEUE, fetched.flatMap((result) => result.items), checkedAt);
+  const checkedAtIso = new Date(checkedAt).toISOString();
+  const failedSourceCount = fetched.filter((result) => Boolean(result.error)).length;
+  await env.NEWS_DB.prepare(
+    "INSERT INTO source_checks (id, checked_at, acquired_count, source_count, failed_source_count) VALUES (?, ?, ?, ?, ?)",
+  )
+    .bind(crypto.randomUUID(), checkedAtIso, inserted, fetched.length, failedSourceCount)
+    .run();
+  await publishDashboardEvent(env, {
+    type: "source_check_completed",
+    at: checkedAtIso,
+    acquired_count: inserted,
+    source_count: fetched.length,
+    failed_source_count: failedSourceCount,
+  });
   return {
     fetched: fetched.map(({ items: _items, ...rest }) => rest),
     inserted,
+    checked_at: checkedAtIso,
+    source_count: fetched.length,
+    failed_source_count: failedSourceCount,
   };
 }
 
@@ -3515,8 +3704,16 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     )
       .bind(jobId)
       .run();
+    await publishDashboardEvent(env, { type: "research_failed", at: new Date().toISOString(), job_id: jobId });
     return { ok: false, jobId, skipped: "article_missing" };
   }
+
+  await publishDashboardEvent(env, {
+    type: "research_started",
+    at: new Date().toISOString(),
+    job_id: jobId,
+    article_id: article.id,
+  });
 
   try {
     article = await captureArticleContent(env, article);
@@ -3569,6 +3766,12 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
       env.NEWS_DB.prepare("DELETE FROM prediction_outcome_scans WHERE result_id = (SELECT id FROM research_results WHERE job_id = ?)").bind(jobId),
       env.NEWS_DB.prepare("DELETE FROM prediction_outcomes WHERE result_id = (SELECT id FROM research_results WHERE job_id = ?)").bind(jobId),
     ]);
+    await publishDashboardEvent(env, {
+      type: "research_completed",
+      at: new Date().toISOString(),
+      job_id: jobId,
+      article_id: article.id,
+    });
     return { ok: true, jobId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -3577,6 +3780,12 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     )
       .bind(message.slice(0, 1000), jobId)
       .run();
+    await publishDashboardEvent(env, {
+      type: "research_failed",
+      at: new Date().toISOString(),
+      job_id: jobId,
+      article_id: article.id,
+    });
     throw error;
   }
 }
@@ -5093,19 +5302,34 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
   if (url.pathname === "/api/status") {
     await archiveTickerlessArticles(env);
-    const [articles, jobs, results, content, operations] = await Promise.all([
+    const [articles, jobs, results, content, operations, latestSourceCheck] = await Promise.all([
       env.NEWS_DB.prepare("SELECT status, COUNT(*) AS count FROM articles WHERE status != 'archived' GROUP BY status").all(),
       env.NEWS_DB.prepare("SELECT research_jobs.status, COUNT(*) AS count FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE articles.status != 'archived' AND (research_jobs.status != 'succeeded' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) GROUP BY research_jobs.status").all(),
       env.NEWS_DB.prepare("SELECT COUNT(*) AS count FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE articles.status != 'archived' AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]')").first(),
       env.NEWS_DB.prepare("SELECT content_status AS status, COUNT(*) AS count FROM articles GROUP BY content_status").all(),
       researchOperationsTelemetry(env.NEWS_DB),
+      env.NEWS_DB.prepare("SELECT * FROM source_checks ORDER BY datetime(checked_at) DESC LIMIT 1").first<SourceCheckRow>(),
     ]);
-    return json({ ok: true, articles: articles.results, jobs: jobs.results, results, content: content.results, timing: operations.timing });
+    return json({ ok: true, articles: articles.results, jobs: jobs.results, results, content: content.results, timing: operations.timing, latest_source_check: latestSourceCheck });
   }
 
   if (url.pathname === "/api/status/live") {
-    const operations = await researchOperationsTelemetry(env.NEWS_DB);
-    return json({ ok: true, ...operations });
+    const [operations, latestSourceCheck] = await Promise.all([
+      researchOperationsTelemetry(env.NEWS_DB),
+      env.NEWS_DB.prepare("SELECT * FROM source_checks ORDER BY datetime(checked_at) DESC LIMIT 1").first<SourceCheckRow>(),
+    ]);
+    return json({ ok: true, ...operations, latest_source_check: latestSourceCheck });
+  }
+
+  if (url.pathname === "/api/source-checks") {
+    return json({
+      ok: true,
+      checks: await listRows<SourceCheckRow>(
+        env.NEWS_DB,
+        "SELECT * FROM source_checks ORDER BY datetime(checked_at) DESC LIMIT ?",
+        limit,
+      ),
+    });
   }
 
   if (url.pathname === "/api/sources") {
@@ -5249,6 +5473,48 @@ async function handleContainer(request: Request, env: Env): Promise<Response> {
   return container.fetch(cloneForContainer(request, path));
 }
 
+export class DashboardEventHub extends DurableObject<Env> {
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/publish" && request.method === "POST") {
+      const payload = await request.text();
+      let delivered = 0;
+      for (const socket of this.ctx.getWebSockets()) {
+        try {
+          socket.send(payload);
+          delivered += 1;
+        } catch {
+          socket.close(1011, "Event delivery failed");
+        }
+      }
+      return json({ ok: true, delivered });
+    }
+
+    if (url.pathname !== "/subscribe" || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return json({ error: "WebSocket upgrade required" }, { status: 426 });
+    }
+
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    this.ctx.acceptWebSocket(server);
+    server.send(JSON.stringify({ type: "connected", at: new Date().toISOString() } satisfies DashboardEvent));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+    if (message === "ping") socket.send("pong");
+  }
+
+  webSocketClose(socket: WebSocket, code: number, reason: string, _wasClean: boolean): void {
+    socket.close(code, reason);
+  }
+
+  webSocketError(socket: WebSocket, _error: unknown): void {
+    socket.close(1011, "WebSocket error");
+  }
+}
+
 export class CodexResearchContainer extends Container {
   defaultPort = 8080;
   requiredPorts = [8080];
@@ -5291,6 +5557,8 @@ export default {
           "/health",
           "/api/status",
           "/api/status/live",
+          "/api/events",
+          "/api/source-checks",
           "/api/ingest",
           "/api/articles",
           "/api/articles/content?id=ARTICLE_ID",
@@ -5311,6 +5579,16 @@ export default {
           "/container/research",
         ],
       });
+    }
+
+    if (url.pathname === "/api/events") {
+      const unauthorized = requireAuthorized(request, env);
+      if (unauthorized) return unauthorized;
+      if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+        return json({ error: "WebSocket upgrade required" }, { status: 426 });
+      }
+      const id = env.DASHBOARD_EVENTS.idFromName("news-signal-dashboard");
+      return env.DASHBOARD_EVENTS.get(id).fetch(new Request("https://dashboard-events.internal/subscribe", request));
     }
 
     if (url.pathname.startsWith("/api/")) return handleApi(request, env);
