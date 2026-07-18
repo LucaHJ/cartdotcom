@@ -355,7 +355,7 @@ const ARTICLE_FETCH_TIMEOUT_MS = 15_000;
 const ARTICLE_INGESTION_WINDOW_MINUTES = 5;
 const ARTICLE_INGESTION_WINDOW_MS = ARTICLE_INGESTION_WINDOW_MINUTES * 60 * 1000;
 const SOURCE_EXPANSION_CUTOFF = "2026-07-18T08:28:55Z";
-const RESEARCH_CONTAINER_COUNT = 4;
+const RESEARCH_CONTAINER_COUNT = 8;
 const QUEUE_DRAIN_MAX_JOBS = 8;
 const QUEUE_DRAIN_MAX_MS = 4 * 60 * 1000;
 let articleStorageSchemaReady: Promise<void> | null = null;
@@ -2028,7 +2028,7 @@ const DASHBOARD_HTML = `<!doctype html>
       const failed = count(status.jobs, "failed");
       const results = Number((status.results && status.results.count) || 0);
       const timing = status.timing || {};
-      const capacity = Number(timing.parallel_capacity || 4);
+      const capacity = Number(timing.parallel_capacity || 8);
       const synthesisSamples = Number(timing.synthesis_samples || 0);
       const delaySamples = Number(timing.prediction_delay_samples || 0);
       const sourceCheck = status.latest_source_check || null;
@@ -3750,7 +3750,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   }
 
   const acquired = await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT slot FROM (SELECT 0 AS slot UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = slots.slot) ORDER BY slot LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ? AND (? = 0 OR (NOT EXISTS (SELECT 1 FROM research_jobs AS first_pass_jobs WHERE first_pass_jobs.status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = first_pass_jobs.id)) AND (SELECT COUNT(*) FROM research_jobs AS active_resynthesis WHERE active_resynthesis.status = 'running' AND EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = active_resynthesis.id)) < ?))",
+    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT slot FROM (SELECT 0 AS slot UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7) AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = slots.slot) ORDER BY slot LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ? AND (? = 0 OR (NOT EXISTS (SELECT 1 FROM research_jobs AS first_pass_jobs WHERE first_pass_jobs.status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = first_pass_jobs.id)) AND (SELECT COUNT(*) FROM research_jobs AS active_resynthesis WHERE active_resynthesis.status = 'running' AND EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = active_resynthesis.id)) < ?))",
   )
     .bind(jobId, RESEARCH_CONTAINER_COUNT, existing.has_result ? 1 : 0, RESEARCH_CONTAINER_COUNT - 1)
     .run();
