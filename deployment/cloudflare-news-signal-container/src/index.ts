@@ -789,6 +789,12 @@ const DASHBOARD_HTML = `<!doctype html>
       white-space: nowrap;
     }
 
+    .prediction-outcomes-table .prediction-data-row .pill {
+      width: max-content;
+      max-width: none;
+      white-space: nowrap;
+    }
+
     .prediction-sticky-header {
       position: sticky;
       top: 0;
@@ -863,6 +869,13 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .confidence-heatmap th:first-child,
     .confidence-heatmap td:first-child {
+      width: 132px;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .confidence-heatmap th:nth-child(2),
+    .confidence-heatmap td:nth-child(2) {
       width: 76px;
       text-align: left;
       padding-left: 10px;
@@ -1222,7 +1235,8 @@ const DASHBOARD_HTML = `<!doctype html>
     predictionSummaryEl.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target.closest("[data-heatmap-direction]") : null;
       if (!target) return;
-      setPredictionFilters(target.getAttribute("data-heatmap-direction") || "all", Number(target.getAttribute("data-confidence-bin")));
+      const confidenceBin = target.getAttribute("data-confidence-bin");
+      setPredictionFilters(target.getAttribute("data-heatmap-direction") || "all", confidenceBin === "all" ? null : Number(confidenceBin));
     });
     predictionsEl.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target : null;
@@ -1626,13 +1640,15 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionLoadedArticles.clear();
       const intervals = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
       const headers = ["Date", "Ticker", "Dir", "Score", "Conf", "Baseline", ...intervals];
-      const columns = [200, 90, 100, 80, 80, 110, ...intervals.map(() => 105)];
-      const colgroup = '<colgroup>' + columns.map((width) => '<col style="width:' + width + 'px">').join("") + '</colgroup>';
+      const columns = [200, 90, 100, 80, 80, 110];
+      const intervalColumns = intervals.map((interval) => '<col data-prediction-interval="' + interval + '" style="width:150px">').join("");
+      const colgroup = '<colgroup>' + columns.map((width) => '<col style="width:' + width + 'px">').join("") + intervalColumns + '</colgroup>';
       const header = '<thead><tr>' + headers.map((item) => '<th>' + escapeHtml(item) + '</th>').join("") + '</tr></thead>';
+      const initialTableWidth = columns.reduce((sum, width) => sum + width, 0) + intervals.length * 150;
       predictionsEl.innerHTML = predictionFilterBarHtml() +
         '<div class="empty hidden" id="prediction-list-empty">No predictions match these filters.</div>' +
-        '<div class="prediction-sticky-header hidden" id="prediction-sticky-header"><table class="prediction-outcomes-table" id="prediction-sticky-table">' + colgroup + header + '</table></div>' +
-        '<div class="impact-wrap hidden" id="prediction-table-shell"><table class="prediction-outcomes-table">' + colgroup + '<tbody id="prediction-outcomes-body"></tbody></table></div>' +
+        '<div class="prediction-sticky-header hidden" id="prediction-sticky-header"><table class="prediction-outcomes-table" id="prediction-sticky-table" style="width:' + initialTableWidth + 'px;min-width:' + initialTableWidth + 'px">' + colgroup + header + '</table></div>' +
+        '<div class="impact-wrap hidden" id="prediction-table-shell"><table class="prediction-outcomes-table" id="prediction-outcomes-table" style="width:' + initialTableWidth + 'px;min-width:' + initialTableWidth + 'px">' + colgroup + '<tbody id="prediction-outcomes-body"></tbody></table></div>' +
         '<div class="prediction-page-loader' + (loading ? '' : ' hidden') + '" id="prediction-page-loader" aria-label="Loading prediction outcomes">' + predictionLoadingRows() + '</div>' +
         '<div class="prediction-scroll-sentinel" id="prediction-scroll-sentinel" aria-hidden="true"></div>';
       bindPredictionHeaderScroll();
@@ -1715,6 +1731,33 @@ const DASHBOARD_HTML = `<!doctype html>
         predictionLastArticleKey = articleKey;
       }
       body.insertAdjacentHTML("beforeend", html);
+      resizePredictionOutcomeColumns(intervals);
+    }
+
+    function resizePredictionOutcomeColumns(intervals) {
+      const bodyTable = document.getElementById("prediction-outcomes-table");
+      const stickyTable = document.getElementById("prediction-sticky-table");
+      if (!bodyTable || !stickyTable) return;
+      const fixedWidth = 200 + 90 + 100 + 80 + 80 + 110;
+      let intervalWidthTotal = 0;
+      intervals.forEach((interval, intervalIndex) => {
+        const cellIndex = 6 + intervalIndex;
+        let width = 150;
+        for (const row of bodyTable.querySelectorAll("tr.prediction-data-row")) {
+          const cell = row.children[cellIndex];
+          const content = cell && cell.firstElementChild;
+          if (content) width = Math.max(width, Math.ceil(content.scrollWidth) + 26);
+        }
+        intervalWidthTotal += width;
+        for (const column of predictionsEl.querySelectorAll('col[data-prediction-interval="' + interval + '"]')) {
+          column.style.width = width + "px";
+        }
+      });
+      const tableWidth = fixedWidth + intervalWidthTotal;
+      for (const table of [bodyTable, stickyTable]) {
+        table.style.width = tableWidth + "px";
+        table.style.minWidth = tableWidth + "px";
+      }
     }
 
     function updatePredictionMeta() {
@@ -1741,7 +1784,9 @@ const DASHBOARD_HTML = `<!doctype html>
       const select = document.getElementById("prediction-confidence-filter");
       if (select) select.value = predictionFilters.confidenceBin === null ? "all" : String(predictionFilters.confidenceBin);
       for (const button of predictionSummaryEl.querySelectorAll("[data-heatmap-direction]")) {
-        const active = button.getAttribute("data-heatmap-direction") === predictionFilters.direction && Number(button.getAttribute("data-confidence-bin")) === predictionFilters.confidenceBin;
+        const confidenceBin = button.getAttribute("data-confidence-bin");
+        const normalizedBin = confidenceBin === "all" ? null : Number(confidenceBin);
+        const active = button.getAttribute("data-heatmap-direction") === predictionFilters.direction && normalizedBin === predictionFilters.confidenceBin;
         button.closest("td")?.classList.toggle("active-filter", active);
       }
     }
@@ -1786,17 +1831,31 @@ const DASHBOARD_HTML = `<!doctype html>
     function renderConfidenceHeatmap(summary, direction, confidenceBins) {
       const bands = confidenceBins.map((index) => ({ index, min: index * 10, max: (index + 1) * 10 }));
       const heading = direction === "bullish" ? "Bullish predictions" : "Bearish predictions";
-      const headers = '<th scope="col">Interval</th>' + bands.map((band) => '<th scope="col">' + band.min + '-' + band.max + '</th>').join("");
+      const headers = '<th scope="col">Overall movement</th><th scope="col">Interval</th>' + bands.map((band) => '<th scope="col">' + band.min + '-' + band.max + '</th>').join("");
       const scale = heatmapMovementScale(summary, direction, confidenceBins);
       const rows = summary.map((item) => {
         const cells = Array.isArray(item[direction]) ? item[direction] : [];
-        return '<tr><th scope="row">' + escapeHtml(item.interval || "") + '</th>' + bands.map((band) => renderHeatmapCell(cells[band.index], direction, item.interval, band, scale)).join("") + '</tr>';
+        const overall = aggregateHeatmapCells(cells);
+        return '<tr>' + renderHeatmapCell(overall, direction, item.interval, null, scale) + '<th scope="row">' + escapeHtml(item.interval || "") + '</th>' + bands.map((band) => renderHeatmapCell(cells[band.index], direction, item.interval, band, scale)).join("") + '</tr>';
       }).join("");
-      const minimumWidth = 76 + bands.length * 132;
+      const minimumWidth = 132 + 76 + bands.length * 132;
       return '<section class="heatmap-section" aria-label="' + escapeAttr(heading + " accuracy by confidence and interval") + '">' +
         '<div class="heatmap-heading"><div class="heatmap-title">' + heading + '</div><div class="heatmap-axis-label">Prediction confidence (%)</div></div>' +
         '<div class="heatmap-scroll"><table class="confidence-heatmap" style="--heatmap-min-width:' + minimumWidth + 'px"><thead><tr>' + headers + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '</section>';
+    }
+
+    function aggregateHeatmapCells(cells) {
+      const populated = cells.filter((cell) => Number(cell && cell.samples || 0) > 0);
+      const samples = populated.reduce((sum, cell) => sum + Number(cell.samples || 0), 0);
+      if (!samples) return null;
+      const accurate = populated.reduce((sum, cell) => sum + Number(cell.accuracy_pct || 0) * Number(cell.samples || 0) / 100, 0);
+      const movement = populated.reduce((sum, cell) => sum + Number(cell.average_movement_pct || 0) * Number(cell.samples || 0), 0);
+      return {
+        samples,
+        accuracy_pct: accurate / samples * 100,
+        average_movement_pct: movement / samples,
+      };
     }
 
     function renderHeatmapCell(cell, direction, interval, band, scale) {
@@ -1810,10 +1869,12 @@ const DASHBOARD_HTML = `<!doctype html>
       const movement = signedPct(averageMovement);
       const sampleConfidence = sampleSizeConfidence(samples);
       const outlier = heatmapMovementIsOutlier(averageMovement, direction, scale);
-      const accessibilityLabel = label + ", " + band.min + "-" + band.max + "% confidence, " + interval + ": " + (outlier ? "outlier, " : "") + "average movement " + movement + ", " + accuracy.toFixed(1) + "% accurate, " + samples + " samples, " + sampleConfidence.toFixed(0) + "% sample-size confidence.";
-      const active = predictionFilters.direction === direction && predictionFilters.confidenceBin === band.min / 10;
+      const confidenceLabel = band ? band.min + "-" + band.max + "% confidence" : "all confidence levels";
+      const confidenceBin = band ? String(band.min / 10) : "all";
+      const accessibilityLabel = label + ", " + confidenceLabel + ", " + interval + ": " + (outlier ? "outlier, " : "") + "average movement " + movement + ", " + accuracy.toFixed(1) + "% accurate, " + samples + " samples, " + sampleConfidence.toFixed(0) + "% sample-size confidence.";
+      const active = predictionFilters.direction === direction && predictionFilters.confidenceBin === (band ? band.min / 10 : null);
       return '<td class="heatmap-cell clickable' + (active ? ' active-filter' : '') + '" style="' + heatmapMovementStyle(averageMovement, direction, scale, outlier) + '">' +
-        '<button class="heatmap-filter-button" type="button" data-heatmap-direction="' + direction + '" data-confidence-bin="' + (band.min / 10) + '" aria-label="' + escapeAttr(accessibilityLabel + " Filter outcomes by this direction and confidence band.") + '">' +
+        '<button class="heatmap-filter-button" type="button" data-heatmap-direction="' + direction + '" data-confidence-bin="' + confidenceBin + '" aria-label="' + escapeAttr(accessibilityLabel + (band ? " Filter outcomes by this direction and confidence band." : " Filter outcomes by this direction across all confidence levels.")) + '">' +
           (outlier ? '*' : '') + movement + ' <span class="heatmap-accuracy">(' + accuracy.toFixed(0) + '%)</span><sup class="heatmap-samples" title="' + escapeAttr(sampleSizeConfidenceTooltip(samples, sampleConfidence)) + '">' + samples + ' (' + sampleConfidence.toFixed(0) + '%)</sup>' +
         '</button></td>';
     }
@@ -1877,11 +1938,11 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function sampleSizeConfidence(samples) {
-      return Math.max(0, Math.min(100, (samples / (samples + 25)) * 100));
+      return Math.max(0, Math.min(100, (samples / (samples + 100)) * 100));
     }
 
     function sampleSizeConfidenceTooltip(samples, confidence) {
-      return "Sample-size confidence = n / (n + 25) × 100 = " + samples + " / (" + samples + " + 25) × 100 = " + confidence.toFixed(1) + "%. The 25-sample constant makes 25 samples equal 50% confidence. This measures sample volume only and does not correct for correlated calls.";
+      return "Sample-size confidence = n / (n + 100) × 100 = " + samples + " / (" + samples + " + 100) × 100 = " + confidence.toFixed(1) + "%. The 100-sample constant makes 100 samples equal 50% confidence. This measures sample volume only and does not correct for correlated calls.";
     }
 
     function heatmapLegendItem(cls, label) {
