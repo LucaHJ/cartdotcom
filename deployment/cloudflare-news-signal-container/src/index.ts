@@ -3914,6 +3914,39 @@ async function drainResearchBacklog(env: Env): Promise<number> {
   return processed;
 }
 
+async function drainResearchBacklogConcurrently(env: Env): Promise<number> {
+  const deadline = Date.now() + QUEUE_DRAIN_MAX_MS;
+  let processed = 0;
+  while (Date.now() < deadline) {
+    const running = await env.NEWS_DB.prepare(
+      "SELECT COUNT(*) AS count FROM research_jobs WHERE status = 'running'",
+    ).first<{ count: number }>();
+    const available = Math.max(0, RESEARCH_CONTAINER_COUNT - Number(running?.count || 0));
+    if (!available) break;
+
+    const jobs = await env.NEWS_DB.prepare(
+      "SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) ASC, queued_at ASC LIMIT ?",
+    )
+      .bind(available)
+      .all<{ id: string }>();
+    const selected = jobs.results || [];
+    if (!selected.length) break;
+
+    const settled = await Promise.allSettled(selected.map((job) => processJob(env, job.id)));
+    let completed = 0;
+    for (const result of settled) {
+      if (result.status === "fulfilled") {
+        completed += 1;
+        if (!result.value.skipped) processed += 1;
+      } else if (!(result.reason instanceof ResearchBusyError)) {
+        console.error("Concurrent backlog research processing failed", result.reason);
+      }
+    }
+    if (!completed) break;
+  }
+  return processed;
+}
+
 async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: number }> {
   const clamped = Math.min(Math.max(limit, 1), 100);
   const pending = await env.NEWS_DB.prepare(
@@ -5807,9 +5840,7 @@ export default {
         await archiveTickerlessArticles(env);
         await requeuePendingJobs(env, 25);
         await Promise.all([
-          ...Array.from({ length: RESEARCH_CONTAINER_COUNT }, () =>
-            drainResearchBacklog(env).catch((error) => console.error("Scheduled research backlog drain failed", error)),
-          ),
+          drainResearchBacklogConcurrently(env).catch((error) => console.error("Scheduled research backlog drain failed", error)),
           backfillArticleContents(env, 20).catch((error) => console.error("Scheduled article content backfill failed", error)),
           processPredictionOutcomes(env, 50).catch((error) => console.error("Scheduled prediction outcome processing failed", error)),
         ]);
