@@ -3107,8 +3107,13 @@ function isWithinArticleIngestionWindow(item: FeedItem, now = Date.now()): boole
   return publishedAt >= now - ARTICLE_INGESTION_WINDOW_MS;
 }
 
-async function enqueueArticles(db: D1Database, queue: Queue<ResearchJobMessage>, items: FeedItem[]): Promise<number> {
-  const uniqueItems = [...new Map(items.filter((item) => isWithinArticleIngestionWindow(item)).map((item) => [item.url, item])).values()];
+async function enqueueArticles(
+  db: D1Database,
+  queue: Queue<ResearchJobMessage>,
+  items: FeedItem[],
+  checkedAt = Date.now(),
+): Promise<number> {
+  const uniqueItems = [...new Map(items.filter((item) => isWithinArticleIngestionWindow(item, checkedAt)).map((item) => [item.url, item])).values()];
   const prepared = await Promise.all(
     uniqueItems.map(async (item) => ({
       ...item,
@@ -3172,8 +3177,9 @@ async function enqueueArticles(db: D1Database, queue: Queue<ResearchJobMessage>,
 async function ingestFeeds(env: Env): Promise<{ fetched: unknown[]; inserted: number }> {
   await ensureArticleStorageSchema(env.NEWS_DB);
   await seedSources(env.NEWS_DB);
+  const checkedAt = Date.now();
   const fetched = await mapWithConcurrency(SOURCES, 12, fetchSource);
-  const inserted = await enqueueArticles(env.NEWS_DB, env.RESEARCH_QUEUE, fetched.flatMap((result) => result.items));
+  const inserted = await enqueueArticles(env.NEWS_DB, env.RESEARCH_QUEUE, fetched.flatMap((result) => result.items), checkedAt);
   return {
     fetched: fetched.map(({ items: _items, ...rest }) => rest),
     inserted,
