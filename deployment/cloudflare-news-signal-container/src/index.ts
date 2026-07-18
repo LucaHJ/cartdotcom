@@ -122,6 +122,19 @@ type PredictionOutcome = {
   updated_at: string;
 };
 
+type StoredPredictionOutcomeRow = Omit<PredictionOutcome, "title" | "url" | "intervals"> & {
+  article_title: string | null;
+  article_url: string | null;
+  intervals_json: string;
+};
+
+type PredictionOutcomeFilters = {
+  direction: "bullish" | "bearish" | null;
+  confidenceMin: number | null;
+  confidenceMax: number | null;
+  cursor: string | null;
+};
+
 type SimulationTrade = {
   action: "BUY" | "SELL";
   symbol: string;
@@ -544,6 +557,49 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .error { color: var(--red); }
 
+    @keyframes skeletonPulse {
+      0%, 100% { opacity: 0.48; }
+      50% { opacity: 0.9; }
+    }
+
+    .skeleton-block {
+      display: block;
+      background: #dfe4ea;
+      border-radius: 4px;
+      animation: skeletonPulse 1.15s ease-in-out infinite;
+    }
+
+    .skeleton-metric {
+      min-height: 86px;
+      padding: 14px;
+    }
+
+    .skeleton-line {
+      height: 11px;
+      margin-top: 9px;
+    }
+
+    .skeleton-line.short { width: 34%; }
+    .skeleton-line.medium { width: 58%; }
+    .skeleton-line.long { width: 86%; }
+
+    .skeleton-result {
+      padding: 16px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .prediction-skeleton-grid {
+      display: grid;
+      grid-template-columns: 76px repeat(10, minmax(72px, 1fr));
+      gap: 5px;
+      min-width: 1120px;
+      padding: 12px;
+    }
+
+    .prediction-skeleton-cell {
+      height: 38px;
+    }
+
     .split {
       display: grid;
       gap: 14px;
@@ -792,6 +848,18 @@ const DASHBOARD_HTML = `<!doctype html>
       transition: box-shadow 120ms ease;
     }
 
+    .heatmap-filter-button {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
     .heatmap-movement {
       font-weight: 650;
       opacity: 0.86;
@@ -804,8 +872,13 @@ const DASHBOARD_HTML = `<!doctype html>
       vertical-align: super;
     }
 
-    .heatmap-cell:hover {
+    .heatmap-cell.clickable:hover,
+    .heatmap-cell.active-filter {
       box-shadow: inset 0 0 0 2px #123c69;
+    }
+
+    .heatmap-cell.active-filter {
+      box-shadow: inset 0 0 0 3px #123c69;
     }
 
     .heatmap-empty { background: #f3f4f6; color: #98a2b3; }
@@ -836,6 +909,78 @@ const DASHBOARD_HTML = `<!doctype html>
       border-radius: 3px;
     }
 
+    .prediction-filterbar {
+      display: flex;
+      align-items: end;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .prediction-filter-group {
+      display: grid;
+      gap: 5px;
+    }
+
+    .prediction-filter-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .prediction-direction-control {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .prediction-direction-button {
+      min-height: 34px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      padding: 0 11px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .prediction-direction-button:last-child { border-right: 0; }
+    .prediction-direction-button.active { background: #e8f1ff; color: #123c69; }
+
+    .prediction-confidence-select {
+      min-width: 150px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 9px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .prediction-filter-status {
+      margin-left: auto;
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .prediction-page-loader {
+      display: grid;
+      gap: 8px;
+      padding: 12px 14px 16px;
+    }
+
+    .prediction-page-loader .skeleton-line { margin-top: 0; height: 16px; }
+    .prediction-scroll-sentinel { height: 1px; }
+
     .pill[title] { cursor: help; }
 
     @media (max-width: 1050px) {
@@ -852,6 +997,7 @@ const DASHBOARD_HTML = `<!doctype html>
       th:nth-child(3), td:nth-child(3) { display: none; }
       .confidence-heatmap th:nth-child(3),
       .confidence-heatmap td:nth-child(3) { display: table-cell; }
+      .prediction-filter-status { width: 100%; margin-left: 0; }
     }
   </style>
 </head>
@@ -979,6 +1125,19 @@ const DASHBOARD_HTML = `<!doctype html>
     const eodTradesEl = document.getElementById("eod-trades");
     const eodTradesMeta = document.getElementById("eod-trades-meta");
     let predictionsLoaded = false;
+    let predictionSummaryData = [];
+    let predictionCoverage = {};
+    let predictionNextCursor = null;
+    let predictionHasMore = false;
+    let predictionLoading = false;
+    let predictionRequestVersion = 0;
+    let predictionLoadedCount = 0;
+    let predictionTotal = 0;
+    let predictionLastArticleKey = null;
+    let predictionObserver = null;
+    const predictionLoadedArticles = new Set();
+    const predictionFilters = { direction: "all", confidenceBin: null };
+    const PREDICTION_PAGE_SIZE = 50;
     let simulationLoaded = false;
     let eodSimulationLoaded = false;
     let activeSimulation = null;
@@ -1023,6 +1182,25 @@ const DASHBOARD_HTML = `<!doctype html>
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
     settingsBtn.addEventListener("click", () => setTab("settings"));
+    predictionSummaryEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target.closest("[data-heatmap-direction]") : null;
+      if (!target) return;
+      setPredictionFilters(target.getAttribute("data-heatmap-direction") || "all", Number(target.getAttribute("data-confidence-bin")));
+    });
+    predictionsEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const directionButton = target?.closest("[data-outcome-direction]");
+      if (directionButton) {
+        setPredictionFilters(directionButton.getAttribute("data-outcome-direction") || "all", predictionFilters.confidenceBin);
+        return;
+      }
+      if (target?.closest("[data-reset-prediction-filters]")) setPredictionFilters("all", null);
+    });
+    predictionsEl.addEventListener("change", (event) => {
+      const select = event.target instanceof HTMLSelectElement && event.target.id === "prediction-confidence-filter" ? event.target : null;
+      if (!select) return;
+      setPredictionFilters(predictionFilters.direction, select.value === "all" ? null : Number(select.value));
+    });
 
     function setTab(tab) {
       const simulation = tab === "simulation";
@@ -1109,6 +1287,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     async function loadAll() {
+      if (!metricsEl.children.length) showInitialSkeletons();
       setBusy(true);
       try {
         const [status, results, jobs] = await Promise.all([
@@ -1136,15 +1315,69 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     async function loadPredictions() {
+      if (predictionLoading) return;
+      const requestVersion = ++predictionRequestVersion;
+      predictionLoading = true;
+      showPredictionSkeletons();
       setBusy(true);
       try {
-        const payload = await api("/api/predictions?limit=300");
-        renderPredictions(payload.outcomes || [], payload.summary || [], payload.coverage || {});
+        const payload = await api(predictionRequestPath("/api/predictions"));
+        if (requestVersion !== predictionRequestVersion) return;
+        predictionSummaryData = payload.summary || [];
+        predictionCoverage = payload.coverage || {};
+        renderPredictions(payload);
         predictionsLoaded = true;
       } catch (error) {
+        if (requestVersion !== predictionRequestVersion) return;
         showError(predictionsEl, error);
       } finally {
+        if (requestVersion === predictionRequestVersion) {
+          predictionLoading = false;
+          observePredictionSentinel();
+        }
         setBusy(false);
+      }
+    }
+
+    async function reloadPredictionOutcomes() {
+      const requestVersion = ++predictionRequestVersion;
+      predictionLoading = true;
+      renderPredictionOutcomeShell(true);
+      try {
+        const payload = await api(predictionRequestPath("/api/predictions/outcomes"));
+        if (requestVersion !== predictionRequestVersion) return;
+        applyPredictionPage(payload, true);
+      } catch (error) {
+        if (requestVersion === predictionRequestVersion) showError(predictionsEl, error);
+      } finally {
+        if (requestVersion === predictionRequestVersion) {
+          predictionLoading = false;
+          observePredictionSentinel();
+        }
+      }
+    }
+
+    async function loadMorePredictions() {
+      if (predictionLoading || !predictionHasMore || !predictionNextCursor) return;
+      const requestVersion = predictionRequestVersion;
+      let loadFailed = false;
+      predictionLoading = true;
+      setPredictionPageLoading(true);
+      try {
+        const payload = await api(predictionRequestPath("/api/predictions/outcomes", predictionNextCursor));
+        if (requestVersion !== predictionRequestVersion) return;
+        applyPredictionPage(payload, false);
+      } catch (error) {
+        loadFailed = true;
+        if (requestVersion === predictionRequestVersion) showPredictionPageError(error);
+      } finally {
+        if (requestVersion === predictionRequestVersion) {
+          predictionLoading = false;
+          if (!loadFailed) {
+            setPredictionPageLoading(false);
+            observePredictionSentinel();
+          }
+        }
       }
     }
 
@@ -1176,6 +1409,25 @@ const DASHBOARD_HTML = `<!doctype html>
 
     function setBusy(isBusy) {
       for (const button of document.querySelectorAll("button")) button.disabled = isBusy;
+    }
+
+    function predictionLoadingRows() {
+      return Array.from({ length: 4 }, (_, index) => '<span class="skeleton-block skeleton-line ' + (index % 2 ? 'long' : 'medium') + '"></span>').join("");
+    }
+
+    function showInitialSkeletons() {
+      metricsEl.innerHTML = Array.from({ length: 5 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
+      resultsEl.innerHTML = Array.from({ length: 5 }, () => '<div class="skeleton-result"><span class="skeleton-block skeleton-line long"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
+      jobsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
+      articlesEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
+    }
+
+    function showPredictionSkeletons() {
+      predictionSummaryMeta.textContent = "Loading interval summary";
+      const skeletonCells = Array.from({ length: 66 }, () => '<span class="skeleton-block prediction-skeleton-cell"></span>').join("");
+      predictionSummaryEl.innerHTML = '<div class="heatmap-stack"><div class="heatmap-scroll"><div class="prediction-skeleton-grid">' + skeletonCells + '</div></div></div>';
+      predictionsMeta.textContent = "Loading outcomes";
+      predictionsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
     }
 
     function count(rows, status) {
@@ -1287,10 +1539,19 @@ const DASHBOARD_HTML = `<!doctype html>
       ]));
     }
 
-    function renderPredictions(outcomes, summary, coverage) {
+    function renderPredictions(payload) {
+      predictionSummaryData = payload.summary || [];
+      predictionCoverage = payload.coverage || {};
+      renderPredictionSummary(predictionSummaryData, predictionCoverage);
+      renderPredictionOutcomeShell(false);
+      applyPredictionPage(payload, true);
+    }
+
+    function renderPredictionSummary(summary, coverage) {
       const trackedPredictions = Number(coverage.predictions || 0);
       const trackedArticles = Number(coverage.articles || 0);
-      predictionSummaryMeta.textContent = summary.length + " intervals · " + trackedPredictions + " directional ticker predictions across " + trackedArticles + " articles";
+      const repairPending = Number(coverage.date_repair_pending || 0);
+      predictionSummaryMeta.textContent = summary.length + " intervals · " + trackedPredictions + " corrected ticker predictions across " + trackedArticles + " articles" + (repairPending ? " · " + repairPending + " analyses rebuilding dates" : "");
       predictionSummaryEl.innerHTML = summary.length
         ? '<div class="heatmap-stack">' +
             renderConfidenceHeatmap(summary, "bullish") +
@@ -1305,46 +1566,157 @@ const DASHBOARD_HTML = `<!doctype html>
             '</div>' +
           '</div>'
         : '<div class="empty">No prediction intervals have elapsed yet.</div>';
+    }
 
-      if (!outcomes.length) {
-        predictionsMeta.textContent = "0 rows";
-        predictionsEl.innerHTML = '<div class="empty">No directional ticker predictions have been recorded yet.</div>';
-        return;
-      }
+    function renderPredictionOutcomeShell(loading) {
+      if (predictionObserver) predictionObserver.disconnect();
+      predictionObserver = null;
+      predictionNextCursor = null;
+      predictionHasMore = false;
+      predictionLoadedCount = 0;
+      predictionTotal = 0;
+      predictionLastArticleKey = null;
+      predictionLoadedArticles.clear();
       const intervals = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
       const headers = ["Date", "Ticker", "Dir", "Score", "Conf", "Baseline", ...intervals];
-      const articleGroups = [];
-      const groupsByArticle = new Map();
-      outcomes.forEach((item) => {
-        const key = item.article_id || item.result_id || [item.title, item.url, item.prediction_at].join("|");
-        let group = groupsByArticle.get(key);
-        if (!group) {
-          group = { title: item.title, url: item.url, article_id: item.article_id, items: [] };
-          groupsByArticle.set(key, group);
-          articleGroups.push(group);
-        }
-        group.items.push(item);
-      });
-      predictionsMeta.textContent = outcomes.length + " predictions across " + articleGroups.length + " articles";
-      const body = articleGroups.map((group) => {
-        const title = decodeHtmlEntities(group.title || group.article_id || "Prediction");
-        const articleRow = '<tr class="prediction-article-row"><th colspan="' + headers.length + '" scope="rowgroup"><a href="' + escapeAttr(group.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(title) + '</a></th></tr>';
-        const predictionRows = group.items.map((item) => {
-          const cells = [
-            escapeHtml(formatDate(item.prediction_at)),
-            escapeHtml(item.symbol || ""),
-            pill(item.direction || "unknown", directionClass(item.direction), item.rationale || "Predicted direction for this ticker."),
-            pill(formatNumber(item.score), Number(item.score || 0) > 0 ? "green" : "red", "Article prediction score used when the ticker outcome was recorded."),
-            pill(formatNumber(item.confidence), "green", "Prediction confidence from the analyzed impact detail or article-level result."),
-            priceCell(item.baseline_price, item.baseline_at, "Closest available ticker price at the time the prediction was made."),
-            ...intervals.map((interval) => predictionPointPill(item.intervals && item.intervals[interval], item.direction, interval)),
-          ];
-          return '<tr class="prediction-data-row">' + cells.map((cell) => '<td>' + cell + '</td>').join("") + '</tr>';
-        }).join("");
-        return articleRow + predictionRows;
-      }).join("");
       const columns = [200, 90, 100, 80, 80, 110, ...intervals.map(() => 105)];
-      predictionsEl.innerHTML = '<div class="impact-wrap"><table class="prediction-outcomes-table"><colgroup>' + columns.map((width) => '<col style="width:' + width + 'px">').join("") + '</colgroup><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody>' + body + '</tbody></table></div>';
+      predictionsEl.innerHTML = predictionFilterBarHtml() +
+        '<div class="empty hidden" id="prediction-list-empty">No predictions match these filters.</div>' +
+        '<div class="impact-wrap hidden" id="prediction-table-shell"><table class="prediction-outcomes-table"><colgroup>' + columns.map((width) => '<col style="width:' + width + 'px">').join("") + '</colgroup><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody id="prediction-outcomes-body"></tbody></table></div>' +
+        '<div class="prediction-page-loader' + (loading ? '' : ' hidden') + '" id="prediction-page-loader" aria-label="Loading prediction outcomes">' + predictionLoadingRows() + '</div>' +
+        '<div class="prediction-scroll-sentinel" id="prediction-scroll-sentinel" aria-hidden="true"></div>';
+      updatePredictionFilterUi();
+    }
+
+    function predictionFilterBarHtml() {
+      const confidenceOptions = ['<option value="all">All confidence</option>'].concat(Array.from({ length: 10 }, (_, index) => '<option value="' + index + '">' + (index * 10) + '-' + ((index + 1) * 10) + '%</option>')).join("");
+      return '<div class="prediction-filterbar">' +
+        '<div class="prediction-filter-group"><span class="prediction-filter-label">Direction</span><div class="prediction-direction-control" role="group" aria-label="Prediction direction">' +
+          '<button class="prediction-direction-button" type="button" data-outcome-direction="all">All</button>' +
+          '<button class="prediction-direction-button" type="button" data-outcome-direction="bullish">Bullish</button>' +
+          '<button class="prediction-direction-button" type="button" data-outcome-direction="bearish">Bearish</button>' +
+        '</div></div>' +
+        '<label class="prediction-filter-group"><span class="prediction-filter-label">Confidence</span><select class="prediction-confidence-select" id="prediction-confidence-filter">' + confidenceOptions + '</select></label>' +
+        '<button class="btn" type="button" data-reset-prediction-filters>Reset filters</button>' +
+        '<div class="prediction-filter-status" id="prediction-filter-status">Loading outcomes</div>' +
+      '</div>';
+    }
+
+    function applyPredictionPage(payload, reset) {
+      if (reset) {
+        predictionLoadedCount = 0;
+        predictionLastArticleKey = null;
+        predictionLoadedArticles.clear();
+        const body = document.getElementById("prediction-outcomes-body");
+        if (body) body.innerHTML = "";
+      }
+      const outcomes = payload.outcomes || [];
+      appendPredictionOutcomes(outcomes);
+      predictionNextCursor = payload.next_cursor || null;
+      predictionHasMore = Boolean(payload.has_more && predictionNextCursor);
+      predictionTotal = Number(payload.total || 0);
+      predictionLoadedCount += outcomes.length;
+
+      const tableShell = document.getElementById("prediction-table-shell");
+      const empty = document.getElementById("prediction-list-empty");
+      if (tableShell) tableShell.classList.toggle("hidden", predictionLoadedCount === 0);
+      if (empty) empty.classList.toggle("hidden", predictionLoadedCount !== 0 || predictionLoading);
+      updatePredictionMeta();
+      setPredictionPageLoading(false);
+    }
+
+    function appendPredictionOutcomes(outcomes) {
+      const body = document.getElementById("prediction-outcomes-body");
+      if (!body || !outcomes.length) return;
+      const intervals = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
+      const columnCount = 6 + intervals.length;
+      let html = "";
+      for (const item of outcomes) {
+        const articleKey = item.article_id || item.result_id || [item.title, item.url, item.prediction_at].join("|");
+        predictionLoadedArticles.add(articleKey);
+        if (articleKey !== predictionLastArticleKey) {
+          const title = decodeHtmlEntities(item.title || item.article_id || "Prediction");
+          html += '<tr class="prediction-article-row"><th colspan="' + columnCount + '" scope="rowgroup"><a href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(title) + '</a></th></tr>';
+        }
+        const cells = [
+          escapeHtml(formatDate(item.prediction_at)),
+          escapeHtml(item.symbol || ""),
+          pill(item.direction || "unknown", directionClass(item.direction), item.rationale || "Predicted direction for this ticker."),
+          pill(formatNumber(item.score), Number(item.score || 0) > 0 ? "green" : "red", "Article prediction score used when the ticker outcome was recorded."),
+          pill(formatNumber(item.confidence), "green", "Prediction confidence from the analyzed impact detail or article-level result."),
+          priceCell(item.baseline_price, item.baseline_at, "Closest available ticker price at the article publication time."),
+          ...intervals.map((interval) => predictionPointPill(item.intervals && item.intervals[interval], item.direction, interval)),
+        ];
+        html += '<tr class="prediction-data-row">' + cells.map((cell) => '<td>' + cell + '</td>').join("") + '</tr>';
+        predictionLastArticleKey = articleKey;
+      }
+      body.insertAdjacentHTML("beforeend", html);
+    }
+
+    function updatePredictionMeta() {
+      const filterStatus = document.getElementById("prediction-filter-status");
+      const loadedText = predictionLoadedCount + " of " + predictionTotal + " predictions";
+      if (filterStatus) filterStatus.textContent = loadedText;
+      predictionsMeta.textContent = loadedText + " across " + predictionLoadedArticles.size + " loaded articles";
+    }
+
+    function setPredictionFilters(direction, confidenceBin) {
+      const normalizedDirection = direction === "bullish" || direction === "bearish" ? direction : "all";
+      const normalizedBin = Number.isInteger(confidenceBin) && confidenceBin >= 0 && confidenceBin <= 9 ? confidenceBin : null;
+      if (predictionFilters.direction === normalizedDirection && predictionFilters.confidenceBin === normalizedBin) return;
+      predictionFilters.direction = normalizedDirection;
+      predictionFilters.confidenceBin = normalizedBin;
+      renderPredictionSummary(predictionSummaryData, predictionCoverage);
+      reloadPredictionOutcomes();
+    }
+
+    function updatePredictionFilterUi() {
+      for (const button of predictionsEl.querySelectorAll("[data-outcome-direction]")) {
+        button.classList.toggle("active", button.getAttribute("data-outcome-direction") === predictionFilters.direction);
+      }
+      const select = document.getElementById("prediction-confidence-filter");
+      if (select) select.value = predictionFilters.confidenceBin === null ? "all" : String(predictionFilters.confidenceBin);
+      for (const button of predictionSummaryEl.querySelectorAll("[data-heatmap-direction]")) {
+        const active = button.getAttribute("data-heatmap-direction") === predictionFilters.direction && Number(button.getAttribute("data-confidence-bin")) === predictionFilters.confidenceBin;
+        button.closest("td")?.classList.toggle("active-filter", active);
+      }
+    }
+
+    function predictionRequestPath(endpoint, cursor) {
+      const params = new URLSearchParams({ limit: String(PREDICTION_PAGE_SIZE) });
+      if (predictionFilters.direction !== "all") params.set("direction", predictionFilters.direction);
+      if (predictionFilters.confidenceBin !== null) {
+        params.set("confidence_min", String(predictionFilters.confidenceBin * 10));
+        params.set("confidence_max", String((predictionFilters.confidenceBin + 1) * 10));
+      }
+      if (cursor) params.set("cursor", cursor);
+      return endpoint + "?" + params.toString();
+    }
+
+    function observePredictionSentinel() {
+      if (predictionObserver) predictionObserver.disconnect();
+      predictionObserver = null;
+      if (!predictionHasMore || !("IntersectionObserver" in window)) return;
+      const sentinel = document.getElementById("prediction-scroll-sentinel");
+      if (!sentinel) return;
+      predictionObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMorePredictions();
+      }, { rootMargin: "600px 0px" });
+      predictionObserver.observe(sentinel);
+    }
+
+    function setPredictionPageLoading(loading) {
+      document.getElementById("prediction-page-loader")?.classList.toggle("hidden", !loading);
+      if (!loading) document.getElementById("prediction-list-empty")?.classList.toggle("hidden", predictionLoadedCount !== 0);
+    }
+
+    function showPredictionPageError(error) {
+      predictionHasMore = false;
+      const loader = document.getElementById("prediction-page-loader");
+      if (loader) {
+        loader.classList.remove("hidden");
+        loader.innerHTML = '<div class="error">Additional outcomes could not be loaded: ' + escapeHtml(error.message || String(error)) + '</div>';
+      }
     }
 
     function renderConfidenceHeatmap(summary, direction) {
@@ -1370,9 +1742,11 @@ const DASHBOARD_HTML = `<!doctype html>
       const label = direction === "bullish" ? "Bullish" : "Bearish";
       const movement = signedPct(Number(cell.average_movement_pct || 0));
       const accessibilityLabel = label + ", " + band.min + "-" + band.max + "% confidence, " + interval + ": " + accuracy.toFixed(1) + "% accurate, average movement " + movement + ", " + samples + " samples.";
-      return '<td class="heatmap-cell ' + heatmapAccuracyClass(accuracy) + '" aria-label="' + escapeAttr(accessibilityLabel) + '">' +
-        accuracy.toFixed(0) + '% <span class="heatmap-movement">(' + movement + ')</span><sup class="heatmap-samples">' + samples + '</sup>' +
-      '</td>';
+      const active = predictionFilters.direction === direction && predictionFilters.confidenceBin === band.min / 10;
+      return '<td class="heatmap-cell clickable ' + heatmapAccuracyClass(accuracy) + (active ? ' active-filter' : '') + '">' +
+        '<button class="heatmap-filter-button" type="button" data-heatmap-direction="' + direction + '" data-confidence-bin="' + (band.min / 10) + '" aria-label="' + escapeAttr(accessibilityLabel + " Filter outcomes by this direction and confidence band.") + '">' +
+          accuracy.toFixed(0) + '% <span class="heatmap-movement">(' + movement + ')</span><sup class="heatmap-samples">' + samples + '</sup>' +
+        '</button></td>';
     }
 
     function heatmapAccuracyClass(accuracy) {
@@ -1897,7 +2271,9 @@ function parseFeed(xml: string, source: Source): FeedItem[] {
       const hrefMatch = block.match(/<link[^>]+href=["']([^"']+)["'][^>]*>/i);
       const url = linkTag || (hrefMatch ? decodeXml(hrefMatch[1]) : "");
       const summary = tagValue(block, "description") || tagValue(block, "summary") || tagValue(block, "content:encoded");
-      const publishedAt = normalizeDate(tagValue(block, "pubDate") || tagValue(block, "published") || tagValue(block, "updated"));
+      const publishedAt = normalizeDate(
+        tagValue(block, "pubDate") || tagValue(block, "published") || tagValue(block, "dc:date") || tagValue(block, "updated"),
+      );
       return { source, title, url, summary, publishedAt };
     })
     .filter((item) => item.title && item.url)
@@ -1950,7 +2326,12 @@ async function enqueueArticle(db: D1Database, queue: Queue<ResearchJobMessage>, 
     .bind(articleId, item.source.id, item.title, item.url, item.summary, item.publishedAt, contentHash)
     .run();
 
-  if (!inserted.meta?.changes) return false;
+  if (!inserted.meta?.changes) {
+    if (item.publishedAt) {
+      await db.prepare("UPDATE articles SET published_at = COALESCE(published_at, ?) WHERE id = ?").bind(item.publishedAt, articleId).run();
+    }
+    return false;
+  }
 
   const jobId = crypto.randomUUID();
   await db.prepare("INSERT OR IGNORE INTO research_jobs (id, article_id, status) VALUES (?, ?, 'pending')").bind(jobId, articleId).run();
@@ -2144,6 +2525,11 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
       ),
       env.NEWS_DB.prepare("UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?").bind(jobId),
       env.NEWS_DB.prepare("UPDATE articles SET status = 'analyzed' WHERE id = ?").bind(article.id),
+    ]);
+    await ensurePredictionOutcomeTables(env);
+    await env.NEWS_DB.batch([
+      env.NEWS_DB.prepare("DELETE FROM prediction_outcome_scans WHERE result_id = (SELECT id FROM research_results WHERE job_id = ?)").bind(jobId),
+      env.NEWS_DB.prepare("DELETE FROM prediction_outcomes WHERE result_id = (SELECT id FROM research_results WHERE job_id = ?)").bind(jobId),
     ]);
     await processPredictionOutcomes(env, 25).catch((error) => console.error("Prediction outcome processing failed after research", error));
     return { ok: true, jobId };
@@ -2587,7 +2973,7 @@ async function computePredictionOutcome(row: ResearchResultRow, symbol: string, 
   const direction = predictionDirection(row, detail);
   if (!direction) return null;
 
-  const predictionAt = row.created_at;
+  const predictionAt = normalizeDate(row.published_at) || normalizeDate(row.created_at) || row.created_at;
   const [shortChart, longChart] = await Promise.all([
     fetchYahooChart(symbol, predictionAt, "1h", 45),
     fetchYahooChart(symbol, predictionAt, "1d", 4 * 365 + 14),
@@ -2637,7 +3023,7 @@ async function processPredictionOutcomes(
   await ensurePredictionOutcomeTables(env);
   const clamped = Math.min(Math.max(limit, 1), 500);
   const result = await env.NEWS_DB.prepare(
-    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' ORDER BY CASE WHEN prediction_outcome_scans.result_id IS NULL THEN 0 ELSE 1 END, datetime(prediction_outcome_scans.scanned_at) ASC, datetime(research_results.created_at) ASC LIMIT ?",
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' ORDER BY CASE WHEN prediction_outcome_scans.result_id IS NULL THEN 0 WHEN EXISTS (SELECT 1 FROM prediction_outcomes WHERE prediction_outcomes.result_id = research_results.id AND datetime(prediction_outcomes.prediction_at) != datetime(COALESCE(articles.published_at, research_results.created_at))) THEN 1 ELSE 2 END, datetime(prediction_outcome_scans.scanned_at) ASC, datetime(research_results.created_at) ASC LIMIT ?",
   )
     .bind(clamped)
     .all<ResearchResultRow>();
@@ -2693,10 +3079,20 @@ async function processPredictionOutcomes(
       .run();
   }
 
-  const remaining = await env.NEWS_DB.prepare(
-    "SELECT COUNT(*) AS count FROM research_results LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' AND prediction_outcome_scans.result_id IS NULL",
-  ).first<{ count: number }>();
-  return { processed: rows.length, skipped, outcomes, unscanned_results: Number(remaining?.count || 0) };
+  const [remaining, dateRepair] = await Promise.all([
+    env.NEWS_DB.prepare(
+      "SELECT COUNT(*) AS count FROM research_results LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' AND prediction_outcome_scans.result_id IS NULL",
+    ).first<{ count: number }>(),
+    env.NEWS_DB.prepare(
+      "SELECT COUNT(DISTINCT prediction_outcomes.result_id) AS count FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE datetime(prediction_outcomes.prediction_at) != datetime(COALESCE(articles.published_at, research_results.created_at))",
+    ).first<{ count: number }>(),
+  ]);
+  return {
+    processed: rows.length,
+    skipped,
+    outcomes,
+    unscanned_results: Number(remaining?.count || 0) + Number(dateRepair?.count || 0),
+  };
 }
 
 function parsePredictionIntervals(value: string): Record<string, PredictionPoint> {
@@ -2716,11 +3112,16 @@ type PredictionSummaryRow = {
   average_movement_pct: number | null;
 };
 
+const PREDICTION_DATE_MATCH_SQL =
+  "datetime(prediction_outcomes.prediction_at) = datetime(COALESCE(articles.published_at, research_results.created_at))";
+const PREDICTION_CONFIDENCE_PCT_SQL =
+  "CASE WHEN prediction_outcomes.confidence <= 1 THEN prediction_outcomes.confidence * 100 ELSE prediction_outcomes.confidence END";
+
 async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>[]> {
   const statements = PREDICTION_INTERVALS.map((interval) => {
     const path = `$."${interval.label}".change_pct`;
     return env.NEWS_DB.prepare(
-      "WITH eligible AS (SELECT direction, CASE WHEN confidence <= 1 THEN confidence * 100 ELSE confidence END AS confidence_pct, CAST(json_extract(intervals_json, ?) AS REAL) AS movement_pct FROM prediction_outcomes WHERE direction IN ('bullish', 'bearish') AND confidence IS NOT NULL AND json_type(intervals_json, ?) IN ('integer', 'real')) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, COUNT(*) AS samples, SUM(CASE WHEN (direction = 'bullish' AND movement_pct > 0) OR (direction = 'bearish' AND movement_pct < 0) THEN 1 ELSE 0 END) AS accurate, AVG(movement_pct) AS average_movement_pct FROM eligible WHERE confidence_pct >= 0 AND confidence_pct <= 100 GROUP BY direction, confidence_bin ORDER BY direction, confidence_bin",
+      `WITH eligible AS (SELECT prediction_outcomes.direction, ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct, CAST(json_extract(prediction_outcomes.intervals_json, ?) AS REAL) AS movement_pct FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL} AND json_type(prediction_outcomes.intervals_json, ?) IN ('integer', 'real')) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, COUNT(*) AS samples, SUM(CASE WHEN (direction = 'bullish' AND movement_pct > 0) OR (direction = 'bearish' AND movement_pct < 0) THEN 1 ELSE 0 END) AS accurate, AVG(movement_pct) AS average_movement_pct FROM eligible WHERE confidence_pct >= 0 AND confidence_pct <= 100 GROUP BY direction, confidence_bin ORDER BY direction, confidence_bin`,
     ).bind(path, path);
   });
   const results = await env.NEWS_DB.batch<PredictionSummaryRow>(statements);
@@ -2746,26 +3147,8 @@ async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>
   });
 }
 
-async function buildPredictionOutcomes(
-  env: Env,
-  limit: number,
-): Promise<{ outcomes: PredictionOutcome[]; summary: Record<string, unknown>[]; coverage: Record<string, number> }> {
-  await ensurePredictionOutcomeTables(env);
-  await processPredictionOutcomes(env, Math.min(Math.max(limit, 5), 10)).catch((error) =>
-    console.error("Inline prediction outcome refresh failed", error),
-  );
-  const rows = await listRows<
-    Omit<PredictionOutcome, "title" | "url" | "intervals"> & {
-      article_title: string | null;
-      article_url: string | null;
-      intervals_json: string;
-    }
-  >(
-    env.NEWS_DB,
-    "SELECT * FROM prediction_outcomes ORDER BY datetime(prediction_at) DESC LIMIT ?",
-    limit,
-  );
-  const outcomes = rows.map((row) => ({
+function predictionOutcomeFromStoredRow(row: StoredPredictionOutcomeRow): PredictionOutcome {
+  return {
     id: row.id,
     result_id: row.result_id,
     article_id: row.article_id,
@@ -2782,21 +3165,115 @@ async function buildPredictionOutcomes(
     baseline_at: row.baseline_at,
     intervals: parsePredictionIntervals(row.intervals_json),
     updated_at: row.updated_at,
-  })) as PredictionOutcome[];
+  };
+}
 
-  const [summary, coverage] = await Promise.all([
+function encodePredictionCursor(outcome: PredictionOutcome): string {
+  return btoa(JSON.stringify({ prediction_at: outcome.prediction_at, id: outcome.id }));
+}
+
+function decodePredictionCursor(value: string | null): { prediction_at: string; id: string } | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(atob(value)) as { prediction_at?: unknown; id?: unknown };
+    return typeof parsed.prediction_at === "string" && typeof parsed.id === "string"
+      ? { prediction_at: parsed.prediction_at, id: parsed.id }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildPredictionPage(
+  env: Env,
+  limit: number,
+  filters: PredictionOutcomeFilters,
+): Promise<{ outcomes: PredictionOutcome[]; next_cursor: string | null; has_more: boolean; total: number }> {
+  await ensurePredictionOutcomeTables(env);
+  const pageLimit = Math.min(Math.max(limit, 10), 100);
+  const clauses = [PREDICTION_DATE_MATCH_SQL];
+  const bindings: Array<string | number> = [];
+
+  if (filters.direction) {
+    clauses.push("prediction_outcomes.direction = ?");
+    bindings.push(filters.direction);
+  }
+  if (filters.confidenceMin !== null) {
+    clauses.push(`${PREDICTION_CONFIDENCE_PCT_SQL} >= ?`);
+    bindings.push(filters.confidenceMin);
+  }
+  if (filters.confidenceMax !== null) {
+    clauses.push(`${PREDICTION_CONFIDENCE_PCT_SQL} ${filters.confidenceMax >= 100 ? "<=" : "<"} ?`);
+    bindings.push(filters.confidenceMax);
+  }
+
+  const fromSql =
+    "FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id";
+  const count = await env.NEWS_DB.prepare(`SELECT COUNT(*) AS count ${fromSql} WHERE ${clauses.join(" AND ")}`)
+    .bind(...bindings)
+    .first<{ count: number }>();
+
+  const pageClauses = [...clauses];
+  const pageBindings = [...bindings];
+  const cursor = decodePredictionCursor(filters.cursor);
+  if (cursor) {
+    pageClauses.push(
+      "(datetime(prediction_outcomes.prediction_at) < datetime(?) OR (datetime(prediction_outcomes.prediction_at) = datetime(?) AND prediction_outcomes.id < ?))",
+    );
+    pageBindings.push(cursor.prediction_at, cursor.prediction_at, cursor.id);
+  }
+  pageBindings.push(pageLimit + 1);
+
+  const result = await env.NEWS_DB.prepare(
+    `SELECT prediction_outcomes.* ${fromSql} WHERE ${pageClauses.join(" AND ")} ORDER BY datetime(prediction_outcomes.prediction_at) DESC, prediction_outcomes.id DESC LIMIT ?`,
+  )
+    .bind(...pageBindings)
+    .all<StoredPredictionOutcomeRow>();
+  const rows = result.results || [];
+  const hasMore = rows.length > pageLimit;
+  const outcomes = rows.slice(0, pageLimit).map(predictionOutcomeFromStoredRow);
+  return {
+    outcomes,
+    next_cursor: hasMore && outcomes.length ? encodePredictionCursor(outcomes[outcomes.length - 1]) : null,
+    has_more: hasMore,
+    total: Number(count?.count || 0),
+  };
+}
+
+async function buildPredictionOutcomes(
+  env: Env,
+  limit: number,
+  filters: PredictionOutcomeFilters,
+): Promise<{
+  outcomes: PredictionOutcome[];
+  next_cursor: string | null;
+  has_more: boolean;
+  total: number;
+  summary: Record<string, unknown>[];
+  coverage: Record<string, number>;
+}> {
+  await ensurePredictionOutcomeTables(env);
+  await processPredictionOutcomes(env, Math.min(Math.max(limit, 5), 10)).catch((error) =>
+    console.error("Inline prediction outcome refresh failed", error),
+  );
+  const [page, summary, coverage, dateRepair] = await Promise.all([
+    buildPredictionPage(env, limit, filters),
     buildPredictionSummary(env),
     env.NEWS_DB.prepare(
-      "SELECT COUNT(*) AS predictions, COUNT(DISTINCT article_id) AS articles FROM prediction_outcomes",
+      `SELECT COUNT(*) AS predictions, COUNT(DISTINCT prediction_outcomes.article_id) AS articles FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE ${PREDICTION_DATE_MATCH_SQL}`,
     ).first<{ predictions: number; articles: number }>(),
+    env.NEWS_DB.prepare(
+      "SELECT COUNT(DISTINCT prediction_outcomes.result_id) AS count FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE datetime(prediction_outcomes.prediction_at) != datetime(COALESCE(articles.published_at, research_results.created_at))",
+    ).first<{ count: number }>(),
   ]);
 
   return {
-    outcomes,
+    ...page,
     summary,
     coverage: {
       predictions: Number(coverage?.predictions || 0),
       articles: Number(coverage?.articles || 0),
+      date_repair_pending: Number(dateRepair?.count || 0),
     },
   };
 }
@@ -3318,6 +3795,25 @@ async function listRows<T>(db: D1Database, query: string, limit: number): Promis
   return result.results || [];
 }
 
+function predictionFiltersFromUrl(url: URL): PredictionOutcomeFilters {
+  const directionValue = url.searchParams.get("direction");
+  const direction = directionValue === "bullish" || directionValue === "bearish" ? directionValue : null;
+  const parseConfidence = (name: string) => {
+    const value = url.searchParams.get(name);
+    if (value === null || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : null;
+  };
+  const confidenceMin = parseConfidence("confidence_min");
+  const confidenceMax = parseConfidence("confidence_max");
+  return {
+    direction,
+    confidenceMin,
+    confidenceMax: confidenceMin !== null && confidenceMax !== null && confidenceMax <= confidenceMin ? null : confidenceMax,
+    cursor: url.searchParams.get("cursor"),
+  };
+}
+
 async function handleApi(request: Request, env: Env): Promise<Response> {
   const unauthorized = requireAuthorized(request, env);
   if (unauthorized) return unauthorized;
@@ -3377,7 +3873,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   }
 
   if (url.pathname === "/api/predictions") {
-    return json({ ok: true, ...(await buildPredictionOutcomes(env, limit)) });
+    return json({ ok: true, ...(await buildPredictionOutcomes(env, limit, predictionFiltersFromUrl(url))) });
+  }
+
+  if (url.pathname === "/api/predictions/outcomes") {
+    return json({ ok: true, ...(await buildPredictionPage(env, limit, predictionFiltersFromUrl(url))) });
   }
 
   if (url.pathname === "/api/predictions/process" && request.method === "POST") {
@@ -3488,6 +3988,7 @@ export default {
           "/api/results",
           "/api/ticker-signals",
           "/api/predictions",
+          "/api/predictions/outcomes",
           "/api/predictions/process",
           "/api/reanalyze-recent",
           "/api/reanalyze-legacy",
@@ -3508,7 +4009,7 @@ export default {
     ctx.waitUntil(
       ingestFeeds(env).then(async () => {
         await requeuePendingJobs(env, 25);
-        await processPredictionOutcomes(env, 25).catch((error) => console.error("Scheduled prediction outcome processing failed", error));
+        await processPredictionOutcomes(env, 50).catch((error) => console.error("Scheduled prediction outcome processing failed", error));
       }),
     );
   },
