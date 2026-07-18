@@ -1047,6 +1047,8 @@ const DASHBOARD_HTML = `<!doctype html>
       th:nth-child(3), td:nth-child(3) { display: none; }
       .confidence-heatmap th:nth-child(3),
       .confidence-heatmap td:nth-child(3) { display: table-cell; }
+      .prediction-outcomes-table th:nth-child(3),
+      .prediction-outcomes-table td:nth-child(3) { display: table-cell; }
       .prediction-filter-status { width: 100%; margin-left: 0; }
     }
   </style>
