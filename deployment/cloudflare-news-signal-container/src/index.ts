@@ -1378,7 +1378,7 @@ const DASHBOARD_HTML = `<!doctype html>
         <h1>News Signal Dashboard</h1>
         <div class="subhead">
           <span id="last-updated">Not loaded</span>
-          <span id="live-status-updated">Live status waiting</span>
+          <span id="live-status-updated">Live updates waiting</span>
           <span id="auth-state">Token not set</span>
         </div>
       </div>
@@ -1576,7 +1576,7 @@ const DASHBOARD_HTML = `<!doctype html>
       eodSimulationLoaded = false;
       syncAuthState();
       stopLiveStatusStream();
-      liveStatusUpdated.textContent = "Live status waiting";
+      liveStatusUpdated.textContent = "Live updates waiting";
     });
 
     document.getElementById("refresh-btn").addEventListener("click", loadAll);
@@ -1616,6 +1616,7 @@ const DASHBOARD_HTML = `<!doctype html>
       settingsPanel.classList.toggle("hidden", !settings);
       settingsBtn.classList.toggle("active", settings);
       if (simulation && !predictionsLoaded) loadPredictions();
+      if (settings) refreshSourceChecks();
     }
 
     function setSimulationModel(model) {
@@ -1707,7 +1708,7 @@ const DASHBOARD_HTML = `<!doctype html>
         renderArticles(results.results || []);
         renderSourceChecks(sourceChecks.checks || []);
         lastUpdated.textContent = "Data refreshed " + new Date().toLocaleTimeString();
-        liveStatusUpdated.textContent = "Live status " + new Date().toLocaleTimeString();
+        liveStatusUpdated.textContent = "Live update " + new Date().toLocaleTimeString();
         if (!simulationPanel.classList.contains("hidden")) {
           predictionsLoaded = false;
           await loadPredictions();
@@ -1766,9 +1767,9 @@ const DASHBOARD_HTML = `<!doctype html>
         latestStatus = mergeLiveStatus(latestStatus, live);
         if (latestStatus) renderMetrics(latestStatus);
         syncRunningJobTimers(live.active_jobs || []);
-        liveStatusUpdated.textContent = "Live status " + new Date().toLocaleTimeString();
+        liveStatusUpdated.textContent = "Live update " + new Date().toLocaleTimeString();
       } catch (error) {
-        liveStatusUpdated.textContent = "Live status unavailable";
+        liveStatusUpdated.textContent = "Live updates unavailable";
       } finally {
         liveStatusLoading = false;
         if (liveStatusRefreshPending) {
