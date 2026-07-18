@@ -7,8 +7,10 @@ Routes:
 - `GET /dashboard` - Browser dashboard for status, articles, jobs, and research results.
 - `GET /health` - Worker health.
 - `GET /api/status` - Counts for articles, jobs, and results.
-- `GET /api/sources` - Configured MVP news feeds.
-- `GET /api/articles` - Recently discovered articles.
+- `GET /api/sources` - Configured editorial, regulator, first-party, and press-release feeds.
+- `GET /api/articles` - Recently discovered article metadata and plaintext capture status.
+- `GET /api/articles/content?id=ARTICLE_ID` - Stored source link, publication date, and plaintext content for one article.
+- `POST /api/articles/backfill?limit=25` - Capture plaintext content for existing articles that have not completed backfill.
 - `GET /api/jobs` - Recent research jobs and failures.
 - `GET /api/results` - Stored Codex research memos and structured fields.
 - `GET /api/market-impacts` - Ticker percentage moves from article publication time across 1h, 6h, 12h, 1d, 1w, and 1m.
@@ -79,6 +81,7 @@ Authorization: Bearer <token>
 cd deployment/cloudflare-news-signal-container
 npm install
 npm run typecheck
+npm run verify-feeds
 docker build -t cartdotcom-news-signal-container -f container/Dockerfile .
 docker run --rm -p 8080:8080 -e OPENAI_API_KEY="$OPENAI_API_KEY" cartdotcom-news-signal-container
 curl http://127.0.0.1:8080/health
@@ -112,6 +115,7 @@ Local deploy is still supported, but Docker must be running locally because Wran
 ```bash
 cd deployment/cloudflare-news-signal-container
 npm install
+npx wrangler d1 migrations apply cartdotcom-news-signal --remote
 npx wrangler deploy
 npx wrangler containers list
 ```
@@ -121,7 +125,10 @@ Cloudflare's docs note that the first container deploy can take several minutes 
 ## Notes
 
 - Durable MVP state lives in Cloudflare D1 (`cartdotcom-news-signal`) and research jobs are sent through Cloudflare Queues (`cartdotcom-news-signal-research`).
-- The Worker polls configured RSS feeds every 10 minutes and can also be triggered manually with `POST /api/ingest`.
+- The Worker polls 81 configured RSS/Atom feeds every 5 minutes and can also be triggered manually with `POST /api/ingest`.
+- Public article bodies are extracted to plaintext and stored in D1. Feed text remains stored as an explicit fallback when a paywall or browser check prevents full-page extraction.
+- Existing article content is backfilled automatically in bounded batches on every scheduled run; research jobs also attempt capture before analysis.
+- Cloudflare Queues runs up to four research consumers concurrently across four independently scalable Codex containers.
 - Ticker validation uses cached Yahoo Finance chart data and stores computed article/ticker impacts in D1.
 - The simulation starts with `$100,000`, buys on sufficiently positive sentiment, sells existing holdings on sufficiently negative sentiment, and sizes trades from score magnitude and confidence.
 - Do not store durable job data on the container filesystem.

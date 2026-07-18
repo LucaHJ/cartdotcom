@@ -31,6 +31,8 @@
       {
         "queue": "cartdotcom-news-signal-research",
         "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_concurrency": 4,
         "max_retries": 3
       }
     ]
@@ -39,7 +41,7 @@
     {
       "class_name": "CodexResearchContainer",
       "image": "./container/Dockerfile",
-      "max_instances": 1
+      "max_instances": 4
     }
   ],
   "durable_objects": {

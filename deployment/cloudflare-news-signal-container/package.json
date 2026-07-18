@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "verify-feeds": "node scripts/verify-feeds.mjs",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "mcp-check": "wrangler deploy && wrangler containers list"

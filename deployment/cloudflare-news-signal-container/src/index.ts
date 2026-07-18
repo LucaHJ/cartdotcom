@@ -1,4 +1,4 @@
-import { Container, getContainer } from "@cloudflare/containers";
+import { Container, getContainer, getRandom } from "@cloudflare/containers";
 
 type Source = {
   id: string;
@@ -6,6 +6,7 @@ type Source = {
   url: string;
   category: string;
   weight: number;
+  sourceType: "editorial" | "regulator" | "first_party" | "press_release";
 };
 
 type FeedItem = {
@@ -14,6 +15,7 @@ type FeedItem = {
   url: string;
   summary: string | null;
   publishedAt: string | null;
+  contentPlaintext: string | null;
 };
 
 type Article = {
@@ -24,6 +26,15 @@ type Article = {
   summary: string | null;
   published_at: string | null;
   discovered_at: string;
+  content_plaintext: string | null;
+  content_source: string | null;
+  content_status: string;
+  content_fetched_at: string | null;
+  content_fetch_attempts: number;
+  content_error: string | null;
+  source_name?: string;
+  source_type?: string;
+  source_weight?: number;
 };
 
 type ResearchJobMessage = {
@@ -196,7 +207,7 @@ type EodReportRow = {
 
 class ResearchBusyError extends Error {
   constructor() {
-    super("Another research job is already running");
+    super("This research job is already running");
   }
 }
 
@@ -212,43 +223,142 @@ export interface Env {
   CODEX_RESEARCH_MODEL?: string;
 }
 
+function source(
+  id: string,
+  name: string,
+  url: string,
+  category: string,
+  weight: number,
+  sourceType: Source["sourceType"] = "editorial",
+): Source {
+  return { id, name, url, category, weight, sourceType };
+}
+
 const SOURCES: Source[] = [
-  {
-    id: "cnbc-top",
-    name: "CNBC Top News",
-    url: "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    category: "markets",
-    weight: 1.0,
-  },
-  {
-    id: "cnbc-tech",
-    name: "CNBC Technology",
-    url: "https://www.cnbc.com/id/19854910/device/rss/rss.html",
-    category: "technology",
-    weight: 1.0,
-  },
-  {
-    id: "marketwatch-top",
-    name: "MarketWatch Top Stories",
-    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories",
-    category: "markets",
-    weight: 0.9,
-  },
-  {
-    id: "the-verge",
-    name: "The Verge",
-    url: "https://www.theverge.com/rss/index.xml",
-    category: "technology",
-    weight: 0.75,
-  },
-  {
-    id: "techcrunch-ai",
-    name: "TechCrunch AI",
-    url: "https://techcrunch.com/category/artificial-intelligence/feed/",
-    category: "ai",
-    weight: 0.8,
-  },
+  source("cnbc-top", "CNBC Top News", "https://www.cnbc.com/id/100003114/device/rss/rss.html", "markets", 1),
+  source("cnbc-tech", "CNBC Technology", "https://www.cnbc.com/id/19854910/device/rss/rss.html", "technology", 1),
+  source("marketwatch-top", "MarketWatch Top Stories", "https://feeds.content.dowjones.io/public/rss/mw_topstories", "markets", 0.9),
+  source("the-verge", "The Verge", "https://www.theverge.com/rss/index.xml", "technology", 0.75),
+  source("techcrunch-ai", "TechCrunch AI", "https://techcrunch.com/category/artificial-intelligence/feed/", "ai", 0.8),
+
+  source("bbc-business", "BBC Business", "https://feeds.bbci.co.uk/news/business/rss.xml", "markets", 0.95),
+  source("bbc-technology", "BBC Technology", "https://feeds.bbci.co.uk/news/technology/rss.xml", "technology", 0.9),
+  source("nyt-business", "The New York Times Business", "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml", "markets", 0.95),
+  source("nyt-technology", "The New York Times Technology", "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml", "technology", 0.9),
+  source("nyt-politics", "The New York Times Politics", "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml", "politics", 0.9),
+  source("guardian-business", "The Guardian Business", "https://www.theguardian.com/business/rss", "markets", 0.85),
+  source("guardian-technology", "The Guardian Technology", "https://www.theguardian.com/technology/rss", "technology", 0.8),
+  source("guardian-world", "The Guardian World", "https://www.theguardian.com/world/rss", "world", 0.8),
+  source("financial-times", "Financial Times", "https://www.ft.com/rss/home", "markets", 1),
+  source("wsj-markets", "The Wall Street Journal Markets", "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "markets", 1),
+  source("wsj-business", "The Wall Street Journal Business", "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml", "markets", 1),
+  source("wsj-technology", "The Wall Street Journal Technology", "https://feeds.a.dj.com/rss/RSSWSJD.xml", "technology", 0.95),
+  source("bloomberg-markets", "Bloomberg Markets", "https://feeds.bloomberg.com/markets/news.rss", "markets", 1),
+  source("bloomberg-technology", "Bloomberg Technology", "https://feeds.bloomberg.com/technology/news.rss", "technology", 0.95),
+  source("economist-business", "The Economist Business", "https://www.economist.com/business/rss.xml", "markets", 0.9),
+  source("economist-finance", "The Economist Finance and Economics", "https://www.economist.com/finance-and-economics/rss.xml", "markets", 0.95),
+  source("economist-science", "The Economist Science and Technology", "https://www.economist.com/science-and-technology/rss.xml", "technology", 0.85),
+  source("al-jazeera", "Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml", "world", 0.75),
+  source("politico-politics", "Politico Politics", "https://rss.politico.com/politics-news.xml", "politics", 0.9),
+  source("abc-au-business", "ABC News Australia Business", "https://www.abc.net.au/news/feed/51892/rss.xml", "markets", 0.9),
+  source("abc-au-top", "ABC News Australia", "https://www.abc.net.au/news/feed/51120/rss.xml", "australia", 0.85),
+  source("fortune", "Fortune", "https://fortune.com/feed/", "markets", 0.8),
+  source("forbes-innovation", "Forbes Innovation", "https://www.forbes.com/innovation/feed2", "technology", 0.75),
+  source("business-insider", "Business Insider", "https://feeds.businessinsider.com/custom/all", "markets", 0.75),
+  source("axios", "Axios", "https://api.axios.com/feed/", "world", 0.8),
+  source("nasdaq-markets", "Nasdaq Markets", "https://www.nasdaq.com/feed/rssoutbound?category=Markets", "markets", 0.85),
+  source("benzinga", "Benzinga", "https://www.benzinga.com/feed", "markets", 0.7),
+  source("yahoo-finance", "Yahoo Finance", "https://finance.yahoo.com/news/rssindex", "markets", 0.8),
+  source("le-monde-en", "Le Monde English", "https://www.lemonde.fr/en/rss/une.xml", "world", 0.75),
+
+  source("ars-technica", "Ars Technica", "https://feeds.arstechnica.com/arstechnica/index", "technology", 0.85),
+  source("wired-top", "Wired", "https://www.wired.com/feed/rss", "technology", 0.85),
+  source("wired-business", "Wired Business", "https://www.wired.com/feed/category/business/latest/rss", "technology", 0.85),
+  source("wired-ai", "Wired AI", "https://www.wired.com/feed/tag/ai/latest/rss", "ai", 0.85),
+  source("mit-tech-review", "MIT Technology Review", "https://www.technologyreview.com/feed/", "technology", 0.9),
+  source("venturebeat", "VentureBeat", "https://venturebeat.com/feed", "technology", 0.75),
+  source("engadget", "Engadget", "https://www.engadget.com/rss.xml", "technology", 0.7),
+  source("zdnet", "ZDNET", "https://www.zdnet.com/news/rss.xml", "technology", 0.75),
+  source("ieee-spectrum", "IEEE Spectrum", "https://spectrum.ieee.org/feeds/feed.rss", "technology", 0.85),
+  source("toms-hardware", "Tom's Hardware", "https://www.tomshardware.com/feeds/all", "semiconductors", 0.75),
+  source("semiconductor-engineering", "Semiconductor Engineering", "https://semiengineering.com/feed/", "semiconductors", 0.9),
+  source("ee-times", "EE Times", "https://www.eetimes.com/feed/", "semiconductors", 0.85),
+  source("macrumors", "MacRumors", "https://feeds.macrumors.com/MacRumors-All", "technology", 0.7),
+  source("9to5mac", "9to5Mac", "https://9to5mac.com/feed/", "technology", 0.7),
+
+  source("sec-press", "SEC Press Releases", "https://www.sec.gov/news/pressreleases.rss", "regulation", 1, "regulator"),
+  source("federal-reserve", "Federal Reserve Press Releases", "https://www.federalreserve.gov/feeds/press_all.xml", "monetary_policy", 1, "regulator"),
+  source("eia-energy", "US Energy Information Administration", "https://www.eia.gov/rss/todayinenergy.xml", "energy", 0.95, "regulator"),
+  source("white-house", "White House Announcements", "https://www.whitehouse.gov/news/feed/", "politics", 0.95, "regulator"),
+  source("ftc-press", "FTC Press Releases", "https://www.ftc.gov/feeds/press-release.xml", "regulation", 0.95, "regulator"),
+  source("ecb-press", "European Central Bank Press Releases", "https://www.ecb.europa.eu/rss/press.html", "monetary_policy", 0.95, "regulator"),
+  source("bank-of-england", "Bank of England News", "https://www.bankofengland.co.uk/rss/news", "monetary_policy", 0.9, "regulator"),
+  source("european-commission", "European Commission Announcements", "https://ec.europa.eu/commission/presscorner/api/rss?language=en", "regulation", 0.9, "regulator"),
+  source("uk-gov-business", "UK Government Business Announcements", "https://www.gov.uk/search/news-and-communications.atom?topics%5B%5D=business-and-industry", "regulation", 0.85, "regulator"),
+  source("pr-newswire", "PR Newswire", "https://www.prnewswire.com/rss/news-releases-list.rss", "company_news", 0.75, "press_release"),
+  source("business-wire", "Business Wire", "https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeEFpQWA==", "company_news", 0.8, "press_release"),
+
+  source("openai-news", "OpenAI News", "https://openai.com/news/rss.xml", "ai", 0.95, "first_party"),
+  source("google-blog", "Google Blog", "https://blog.google/rss/", "technology", 0.9, "first_party"),
+  source("google-deepmind", "Google DeepMind", "https://deepmind.google/blog/rss.xml", "ai", 0.95, "first_party"),
+  source("microsoft-source", "Microsoft Source", "https://news.microsoft.com/source/feed/", "technology", 0.9, "first_party"),
+  source("nvidia-blog", "NVIDIA Blog", "https://blogs.nvidia.com/feed/", "semiconductors", 0.95, "first_party"),
+  source("intel-newsroom", "Intel Newsroom", "https://newsroom.intel.com/feed", "semiconductors", 0.9, "first_party"),
+  source("apple-newsroom", "Apple Newsroom", "https://www.apple.com/newsroom/rss-feed.rss", "technology", 0.9, "first_party"),
+  source("meta-newsroom", "Meta Newsroom", "https://about.fb.com/news/feed/", "technology", 0.9, "first_party"),
+  source("samsung-newsroom", "Samsung Global Newsroom", "https://news.samsung.com/global/feed", "technology", 0.85, "first_party"),
+
+  source("coindesk", "CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss", "crypto", 0.85),
+  source("decrypt", "Decrypt", "https://decrypt.co/feed", "crypto", 0.75),
+  source("spacenews", "SpaceNews", "https://spacenews.com/feed/", "space", 0.85),
+  source("defense-news", "Defense News", "https://www.defensenews.com/arc/outboundfeeds/rss/", "defense", 0.85),
+  source("electrek", "Electrek", "https://electrek.co/feed/", "automotive", 0.75),
+  source("stat-news", "STAT", "https://www.statnews.com/feed/", "healthcare", 0.9),
+  source("fierce-biotech", "Fierce Biotech", "https://www.fiercebiotech.com/rss/xml", "healthcare", 0.85),
+  source("retail-dive", "Retail Dive", "https://www.retaildive.com/feeds/news/", "retail", 0.8),
+  source("supply-chain-dive", "Supply Chain Dive", "https://www.supplychaindive.com/feeds/news/", "supply_chain", 0.85),
+  source("healthcare-dive", "Healthcare Dive", "https://www.healthcaredive.com/feeds/news/", "healthcare", 0.8),
+  source("variety", "Variety", "https://variety.com/feed/", "media", 0.8),
+  source("hollywood-reporter", "The Hollywood Reporter", "https://www.hollywoodreporter.com/feed/", "media", 0.8),
+  source("gamesindustry", "GamesIndustry.biz", "https://www.gamesindustry.biz/feed", "gaming", 0.8),
 ];
+
+const ARTICLE_CONTENT_MAX_CHARS = 120_000;
+const ARTICLE_FETCH_TIMEOUT_MS = 15_000;
+const RESEARCH_CONTAINER_COUNT = 4;
+let articleStorageSchemaReady: Promise<void> | null = null;
+
+async function addColumnIfMissing(db: D1Database, table: string, column: string, definition: string): Promise<void> {
+  const info = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+  if ((info.results || []).some((item) => item.name === column)) return;
+  try {
+    await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/duplicate column name/i.test(message)) throw error;
+  }
+}
+
+async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
+  if (!articleStorageSchemaReady) {
+    articleStorageSchemaReady = (async () => {
+      await addColumnIfMissing(db, "sources", "source_type", "TEXT NOT NULL DEFAULT 'editorial'");
+      await addColumnIfMissing(db, "articles", "content_plaintext", "TEXT");
+      await addColumnIfMissing(db, "articles", "content_source", "TEXT");
+      await addColumnIfMissing(db, "articles", "content_status", "TEXT NOT NULL DEFAULT 'pending'");
+      await addColumnIfMissing(db, "articles", "content_fetched_at", "TEXT");
+      await addColumnIfMissing(db, "articles", "content_fetch_attempts", "INTEGER NOT NULL DEFAULT 0");
+      await addColumnIfMissing(db, "articles", "content_error", "TEXT");
+      await db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_articles_content_backfill ON articles(content_status, content_fetch_attempts, discovered_at)",
+      ).run();
+    })().catch((error) => {
+      articleStorageSchemaReady = null;
+      throw error;
+    });
+  }
+  await articleStorageSchemaReady;
+}
 
 const DASHBOARD_HTML = `<!doctype html>
 <html lang="en">
@@ -2635,17 +2745,25 @@ async function startWithSecrets(container: any, env: Env): Promise<void> {
 }
 
 function decodeXml(value: string): string {
+  return decodeHtmlEntities(value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1"))
+    .replace(/<[^>]+>/g, "")
+    .trim();
+}
+
+function decodeHtmlEntities(value: string): string {
   return value
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
     .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&ndash;/g, "-")
+    .replace(/&mdash;/g, "-")
+    .replace(/&hellip;/g, "...")
     .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
-    .replace(/<[^>]+>/g, "")
-    .trim();
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)));
 }
 
 function tagValue(xml: string, tag: string): string | null {
@@ -2667,13 +2785,20 @@ function parseFeed(xml: string, source: Source): FeedItem[] {
       const linkTag = tagValue(block, "link");
       const hrefMatch = block.match(/<link[^>]+href=["']([^"']+)["'][^>]*>/i);
       const url = linkTag || (hrefMatch ? decodeXml(hrefMatch[1]) : "");
-      const summary = tagValue(block, "description") || tagValue(block, "summary") || tagValue(block, "content:encoded");
+      const encodedContent = tagValue(block, "content:encoded") || tagValue(block, "content");
+      const summary = tagValue(block, "description") || tagValue(block, "summary") || encodedContent;
       const publishedAt = normalizeDate(
         tagValue(block, "pubDate") || tagValue(block, "published") || tagValue(block, "dc:date") || tagValue(block, "updated"),
       );
-      return { source, title, url, summary, publishedAt };
+      return { source, title, url, summary, publishedAt, contentPlaintext: encodedContent || summary };
     })
     .filter((item) => item.title && item.url)
+    .sort((left, right) => {
+      if (!left.publishedAt && !right.publishedAt) return 0;
+      if (!left.publishedAt) return 1;
+      if (!right.publishedAt) return -1;
+      return Date.parse(right.publishedAt) - Date.parse(left.publishedAt);
+    })
     .slice(0, 15);
 }
 
@@ -2686,75 +2811,282 @@ async function seedSources(db: D1Database): Promise<void> {
   const statements = SOURCES.map((source) =>
     db
       .prepare(
-        "INSERT INTO sources (id, name, url, category, weight, enabled) VALUES (?, ?, ?, ?, ?, 1) " +
-          "ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, category = excluded.category, weight = excluded.weight, enabled = 1",
+        "INSERT INTO sources (id, name, url, category, weight, source_type, enabled) VALUES (?, ?, ?, ?, ?, ?, 1) " +
+          "ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, category = excluded.category, weight = excluded.weight, source_type = excluded.source_type, enabled = 1",
       )
-      .bind(source.id, source.name, source.url, source.category, source.weight),
+      .bind(source.id, source.name, source.url, source.category, source.weight, source.sourceType),
   );
   if (statements.length) await db.batch(statements);
 }
 
 async function fetchSource(source: Source): Promise<{ source: string; count: number; error?: string; items: FeedItem[] }> {
-  try {
-    const response = await fetch(source.url, {
-      headers: {
-        "user-agent": "cartdotcom-news-signal-mvp/0.1",
-        accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
-      },
-    });
-    if (!response.ok) {
-      return { source: source.id, count: 0, error: `HTTP ${response.status}`, items: [] };
+  let lastError = "Feed fetch failed";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(source.url, {
+        headers: {
+          "user-agent": "cartdotcom-news-signal-mvp/0.1",
+          accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
+        },
+      });
+      if (response.ok) {
+        const xml = await response.text();
+        const items = parseFeed(xml, source);
+        return { source: source.id, count: items.length, items };
+      }
+      lastError = `HTTP ${response.status}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
     }
-    const xml = await response.text();
-    const items = parseFeed(xml, source);
-    return { source: source.id, count: items.length, items };
-  } catch (error) {
-    return { source: source.id, count: 0, error: error instanceof Error ? error.message : String(error), items: [] };
+    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500));
   }
+  return { source: source.id, count: 0, error: lastError, items: [] };
 }
 
-async function enqueueArticle(db: D1Database, queue: Queue<ResearchJobMessage>, item: FeedItem): Promise<boolean> {
-  const articleId = await hashText(item.url);
-  const contentHash = await hashText(`${item.title}\n${item.summary || ""}`);
-  const inserted = await db
-    .prepare(
-      "INSERT OR IGNORE INTO articles (id, source_id, title, url, summary, published_at, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(articleId, item.source.id, item.title, item.url, item.summary, item.publishedAt, contentHash)
-    .run();
-
-  if (!inserted.meta?.changes) {
-    if (item.publishedAt) {
-      await db.prepare("UPDATE articles SET published_at = COALESCE(published_at, ?) WHERE id = ?").bind(item.publishedAt, articleId).run();
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index]);
     }
-    return false;
-  }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
-  const jobId = crypto.randomUUID();
-  await db.prepare("INSERT OR IGNORE INTO research_jobs (id, article_id, status) VALUES (?, ?, 'pending')").bind(jobId, articleId).run();
-  await queue.send({ jobId });
-  return true;
+function chunks<T>(items: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) result.push(items.slice(index, index + size));
+  return result;
+}
+
+async function enqueueArticles(db: D1Database, queue: Queue<ResearchJobMessage>, items: FeedItem[]): Promise<number> {
+  const uniqueItems = [...new Map(items.map((item) => [item.url, item])).values()];
+  const prepared = await Promise.all(
+    uniqueItems.map(async (item) => ({
+      ...item,
+      articleId: await hashText(item.url),
+      contentHash: await hashText(`${item.title}\n${item.summary || ""}`),
+    })),
+  );
+  let inserted = 0;
+
+  for (const group of chunks(prepared, 50)) {
+    const insertResults = await db.batch(
+      group.map((item) =>
+        db
+          .prepare(
+            "INSERT OR IGNORE INTO articles (id, source_id, title, url, summary, published_at, content_hash, content_plaintext, content_source, content_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+          )
+          .bind(
+            item.articleId,
+            item.source.id,
+            item.title,
+            item.url,
+            item.summary,
+            item.publishedAt,
+            item.contentHash,
+            item.contentPlaintext,
+            item.contentPlaintext ? "feed" : null,
+          ),
+      ),
+    );
+    const newItems = group.filter((_item, index) => Boolean(insertResults[index]?.meta?.changes));
+    const existingItems = group.filter((_item, index) => !insertResults[index]?.meta?.changes);
+
+    if (existingItems.length) {
+      await db.batch(
+        existingItems.map((item) =>
+          db
+            .prepare(
+              "UPDATE articles SET published_at = COALESCE(published_at, ?), summary = COALESCE(summary, ?), content_plaintext = COALESCE(content_plaintext, ?), content_source = CASE WHEN content_plaintext IS NULL AND ? IS NOT NULL THEN 'feed' ELSE content_source END WHERE id = ?",
+            )
+            .bind(item.publishedAt, item.summary, item.contentPlaintext, item.contentPlaintext, item.articleId),
+        ),
+      );
+    }
+
+    if (newItems.length) {
+      const jobs = newItems.map((item) => ({ jobId: crypto.randomUUID(), articleId: item.articleId }));
+      await db.batch(
+        jobs.map((job) =>
+          db.prepare("INSERT OR IGNORE INTO research_jobs (id, article_id, status) VALUES (?, ?, 'pending')").bind(job.jobId, job.articleId),
+        ),
+      );
+      for (const jobGroup of chunks(jobs, 100)) {
+        await queue.sendBatch(jobGroup.map((job) => ({ body: { jobId: job.jobId } })));
+      }
+      inserted += newItems.length;
+    }
+  }
+  return inserted;
 }
 
 async function ingestFeeds(env: Env): Promise<{ fetched: unknown[]; inserted: number }> {
+  await ensureArticleStorageSchema(env.NEWS_DB);
   await seedSources(env.NEWS_DB);
-  const fetched = await Promise.all(SOURCES.map(fetchSource));
-  let inserted = 0;
-  for (const result of fetched) {
-    for (const item of result.items) {
-      if (await enqueueArticle(env.NEWS_DB, env.RESEARCH_QUEUE, item)) inserted += 1;
-    }
-  }
+  const fetched = await mapWithConcurrency(SOURCES, 12, fetchSource);
+  const inserted = await enqueueArticles(env.NEWS_DB, env.RESEARCH_QUEUE, fetched.flatMap((result) => result.items));
   return {
     fetched: fetched.map(({ items: _items, ...rest }) => rest),
     inserted,
   };
 }
 
-function researchPrompt(article: Article): string {
-  return `You are building a rapid news analysis database for market perception, not trading advice.
+function normalizePlaintext(value: string): string {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\t\f\v ]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, ARTICLE_CONTENT_MAX_CHARS);
+}
 
-Analyze this news item quickly. Focus on how it could shape investor/public perception of companies, sectors, and supply chains. Use the supplied article fields and your prior knowledge; do not do extended browsing unless the item is impossible to understand without it.
+function stripHtmlToPlaintext(value: string): string {
+  const withoutNonContent = value
+    .replace(/<(script|style|svg|nav|footer|header|aside|form|noscript|iframe)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/(p|div|section|article|main|li|h[1-6]|tr)>/gi, "\n")
+    .replace(/<li\b[^>]*>/gi, "- ")
+    .replace(/<[^>]+>/g, " ");
+  return normalizePlaintext(decodeHtmlEntities(withoutNonContent));
+}
+
+function articleBodyFromStructuredData(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const result = articleBodyFromStructuredData(item);
+      if (result) return result;
+    }
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.articleBody === "string" && record.articleBody.trim().length >= 120) return normalizePlaintext(record.articleBody);
+  for (const child of Object.values(record)) {
+    const result = articleBodyFromStructuredData(child);
+    if (result) return result;
+  }
+  return null;
+}
+
+function extractArticlePlaintext(htmlText: string): string | null {
+  for (const match of htmlText.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const articleBody = articleBodyFromStructuredData(JSON.parse(match[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim()));
+      if (articleBody) return articleBody;
+    } catch {
+      // Invalid JSON-LD is common; continue to semantic HTML extraction.
+    }
+  }
+
+  const cleaned = htmlText.replace(/<!--([\s\S]*?)-->/g, " ");
+  const semanticCandidates = [...cleaned.matchAll(/<(article|main)\b[^>]*>([\s\S]*?)<\/\1>/gi)]
+    .map((match) => stripHtmlToPlaintext(match[2]))
+    .filter((text) => text.length >= 200)
+    .sort((left, right) => right.length - left.length);
+  if (semanticCandidates.length) return semanticCandidates[0];
+
+  const paragraphs = [...cleaned.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+    .map((match) => stripHtmlToPlaintext(match[1]))
+    .filter((text) => text.length >= 30);
+  const paragraphText = normalizePlaintext(paragraphs.join("\n\n"));
+  return paragraphText.length >= 200 ? paragraphText : null;
+}
+
+async function fetchArticlePlaintext(url: string): Promise<string> {
+  const response = await fetch(url, {
+    redirect: "follow",
+    signal: AbortSignal.timeout(ARTICLE_FETCH_TIMEOUT_MS),
+    headers: {
+      "user-agent": "cartdotcom-news-signal/1.0 (+https://cartdotcom.com)",
+      accept: "text/html, text/plain;q=0.9, application/xhtml+xml;q=0.8",
+    },
+  });
+  if (!response.ok) throw new Error(`Article fetch returned HTTP ${response.status}`);
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength > 3_000_000) throw new Error("Article response exceeded the 3 MB extraction limit");
+  const body = await response.text();
+  if (/just a moment|verify you are human|enable javascript and cookies|access denied/i.test(body.slice(0, 8_000))) {
+    throw new Error("Article page returned an access or browser-verification screen");
+  }
+  const contentType = response.headers.get("content-type") || "";
+  const plaintext = contentType.includes("text/plain") ? normalizePlaintext(body) : extractArticlePlaintext(body);
+  if (!plaintext || plaintext.length < 120) throw new Error("No article body could be extracted from the page");
+  if (plaintext.length < 500 && /subscribe|sign in to continue|already a subscriber|register to continue/i.test(plaintext)) {
+    throw new Error("Article page exposed only a subscription prompt");
+  }
+  return plaintext;
+}
+
+async function captureArticleContent(env: Env, article: Article): Promise<Article> {
+  if (article.content_status === "fetched" && article.content_plaintext) return article;
+  try {
+    const fetchedText = await fetchArticlePlaintext(article.url);
+    const existingText = normalizePlaintext(article.content_plaintext || article.summary || "");
+    const useFetchedText = fetchedText.length >= existingText.length;
+    const content = useFetchedText ? fetchedText : existingText;
+    const contentSource = useFetchedText ? "webpage" : article.content_source || "feed";
+    await env.NEWS_DB.prepare(
+      "UPDATE articles SET content_plaintext = ?, content_source = ?, content_status = 'fetched', content_fetched_at = CURRENT_TIMESTAMP, content_fetch_attempts = content_fetch_attempts + 1, content_error = NULL WHERE id = ?",
+    )
+      .bind(content, contentSource, article.id)
+      .run();
+    return {
+      ...article,
+      content_plaintext: content,
+      content_source: contentSource,
+      content_status: "fetched",
+      content_fetched_at: new Date().toISOString(),
+      content_fetch_attempts: Number(article.content_fetch_attempts || 0) + 1,
+      content_error: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const fallback = normalizePlaintext(article.content_plaintext || article.summary || "");
+    const status = fallback ? "feed_only" : "failed";
+    await env.NEWS_DB.prepare(
+      "UPDATE articles SET content_plaintext = CASE WHEN content_plaintext IS NULL THEN summary ELSE content_plaintext END, content_source = CASE WHEN content_plaintext IS NULL AND summary IS NOT NULL THEN 'feed' ELSE content_source END, content_status = ?, content_fetched_at = CURRENT_TIMESTAMP, content_fetch_attempts = content_fetch_attempts + 1, content_error = ? WHERE id = ?",
+    )
+      .bind(status, message.slice(0, 500), article.id)
+      .run();
+    return {
+      ...article,
+      content_plaintext: fallback || null,
+      content_source: article.content_source || (fallback ? "feed" : null),
+      content_status: status,
+      content_fetched_at: new Date().toISOString(),
+      content_fetch_attempts: Number(article.content_fetch_attempts || 0) + 1,
+      content_error: message.slice(0, 500),
+    };
+  }
+}
+
+async function backfillArticleContents(env: Env, limit = 20): Promise<{ attempted: number; fetched: number; feedOnly: number; failed: number }> {
+  const clamped = Math.min(Math.max(limit, 1), 100);
+  const rows = await env.NEWS_DB.prepare(
+    "SELECT articles.id, articles.source_id, articles.title, articles.url, articles.summary, articles.published_at, articles.discovered_at, articles.content_plaintext, articles.content_source, articles.content_status, articles.content_fetched_at, articles.content_fetch_attempts, articles.content_error, sources.name AS source_name, sources.source_type, sources.weight AS source_weight FROM articles LEFT JOIN sources ON sources.id = articles.source_id WHERE articles.content_status != 'fetched' AND articles.content_fetch_attempts < 3 ORDER BY articles.content_fetch_attempts ASC, COALESCE(articles.published_at, articles.discovered_at) DESC LIMIT ?",
+  )
+    .bind(clamped)
+    .all<Article>();
+  const captured = await mapWithConcurrency(rows.results || [], 4, (article) => captureArticleContent(env, article));
+  return {
+    attempted: captured.length,
+    fetched: captured.filter((article) => article.content_status === "fetched").length,
+    feedOnly: captured.filter((article) => article.content_status === "feed_only").length,
+    failed: captured.filter((article) => article.content_status === "failed").length,
+  };
+}
+
+function researchPrompt(article: Article): string {
+  const articleText = (article.content_plaintext || article.summary || "none").slice(0, 60_000);
+  return `You are building a rapid ticker-direction prediction database, not trading advice.
+
+Your primary task is to identify publicly traded tickers concretely affected by this article and predict the direction of each ticker's price response. Spend minimal effort classifying industries. Use the stored article text, source provenance, and your prior knowledge; do not do extended browsing unless the item is impossible to understand without it.
 
 Return a JSON object followed by a concise memo under 350 words. The JSON object must have these fields:
 event_title, event_type, event_blurb, impact_details, companies, industries, symbols, sentiment_score, impact_horizon, confidence, summary.
@@ -2762,29 +3094,37 @@ event_title, event_type, event_blurb, impact_details, companies, industries, sym
 impact_details must be an array of objects with:
 kind, name, symbol, direction, confidence, reason.
 
-Use these logical steps before choosing symbols:
+Use these logical steps for every ticker:
 1. Identify the concrete event, not just the article topic.
-2. Identify direct actors named in the event.
-3. Identify customers, suppliers, competitors, substitutes, and platform owners only when the article creates a specific economic or perception link.
-4. Exclude broad peers or famous related companies unless the article gives a clear causal path.
-5. For each included public ticker, write the causal path in reason.
-6. If the article is about Apple, xAI, OpenAI, or another company, do not include GOOGL/GOOG unless Google/Alphabet is directly named or clearly affected as a competitor, supplier, customer, platform owner, or regulatory target.
+2. Resolve named public companies to their correct exchange ticker.
+3. Add a customer, supplier, competitor, substitute, or platform owner only when the event creates a specific material causal path to that company.
+4. Predict bullish or bearish direction separately for every included ticker; do not force all tickers to share the article-level direction.
+5. Exclude broad peers, indices, and famous related companies unless the article gives a concrete causal path.
+6. For each included ticker, make reason state the event -> business/perception effect -> expected price direction chain.
+7. If the article is about Apple, xAI, OpenAI, or another company, do not include GOOGL/GOOG unless Google/Alphabet is directly named or clearly affected as a competitor, supplier, customer, platform owner, or regulatory target.
 
 Article:
 Title: ${article.title}
 URL: ${article.url}
 Published: ${article.published_at || "unknown"}
-Summary: ${article.summary || "none"}
+Source: ${article.source_name || article.source_id}
+Source type: ${article.source_type || "editorial"}
+Stored content status: ${article.content_status || "unknown"}
+Stored plaintext article content:
+${articleText}
 
 Rules:
-- sentiment_score is from -1 to 1 for perceived market impact.
+- impact_details should overwhelmingly contain public companies with actionable tickers. Do not add industry-only impact rows unless they are essential to understanding the event.
+- industries must be an empty array unless one or two directly affected industries materially clarify the ticker calls.
+- sentiment_score is from -1 to 1 and summarizes the net direction across the direct ticker calls; per-ticker direction and confidence in impact_details are authoritative.
 - impact_horizon is one of immediate, short, medium, long, unknown.
 - confidence is from 0 to 1.
 - direction is one of bullish, bearish, mixed, neutral.
 - symbols must include only public tickers from impact_details where symbol is not null and reason gives a concrete causal path.
-- If a company is private, put symbol null.
-- If symbols are uncertain, omit them or use null and explain uncertainty in the memo.
-- Mention comparable historical events or patterns when useful.`;
+- Do not include private companies in impact_details merely because they are named; mention them as context in the memo instead.
+- If a symbol or causal direction is uncertain, omit that ticker rather than guessing.
+- Distinguish announcement claims from independently reported facts when source type is first_party or press_release.
+- Mention a comparable historical event only when it materially supports a ticker direction.`;
 }
 
 function parseResearchFields(memo: string): ResearchResultFields {
@@ -2839,7 +3179,7 @@ function extractFirstJsonObject(value: string): string | null {
 }
 
 async function runContainerResearch(env: Env, prompt: string): Promise<string> {
-  const container = getContainer(env.CODEX_CONTAINER, "research-worker");
+  const container = await getRandom(env.CODEX_CONTAINER, RESEARCH_CONTAINER_COUNT);
   await startWithSecrets(container, env);
   const response = await container.fetch(
     new Request("https://container.local/research-internal", {
@@ -2857,6 +3197,7 @@ async function runContainerResearch(env: Env, prompt: string): Promise<string> {
 }
 
 async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId: string; skipped?: string }> {
+  await ensureArticleStorageSchema(env.NEWS_DB);
   await env.NEWS_DB.prepare(
     "UPDATE research_jobs SET status = 'pending', last_error = 'Reset stale running job', finished_at = CURRENT_TIMESTAMP WHERE status = 'running' AND datetime(started_at) < datetime('now', '-20 minutes')",
   ).run();
@@ -2865,16 +3206,17 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   if (!existing) return { ok: false, jobId, skipped: "missing" };
   if (existing.status === "succeeded") return { ok: true, jobId, skipped: existing.status };
   if (existing.status === "running") throw new ResearchBusyError();
+  if (existing.status !== "pending") return { ok: false, jobId, skipped: existing.status };
 
   const acquired = await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL WHERE id = ? AND status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_jobs WHERE status = 'running')",
+    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL WHERE id = ? AND status = 'pending'",
   )
     .bind(jobId)
     .run();
   if (!acquired.meta?.changes) throw new ResearchBusyError();
 
-  const article = await env.NEWS_DB.prepare(
-    "SELECT id, source_id, title, url, summary, published_at, discovered_at FROM articles WHERE id = (SELECT article_id FROM research_jobs WHERE id = ?)",
+  let article = await env.NEWS_DB.prepare(
+    "SELECT articles.id, articles.source_id, articles.title, articles.url, articles.summary, articles.published_at, articles.discovered_at, articles.content_plaintext, articles.content_source, articles.content_status, articles.content_fetched_at, articles.content_fetch_attempts, articles.content_error, sources.name AS source_name, sources.source_type, sources.weight AS source_weight FROM articles LEFT JOIN sources ON sources.id = articles.source_id WHERE articles.id = (SELECT article_id FROM research_jobs WHERE id = ?)",
   )
     .bind(jobId)
     .first<Article>();
@@ -2889,6 +3231,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   }
 
   try {
+    article = await captureArticleContent(env, article);
     const memo = await runContainerResearch(env, researchPrompt(article));
     const fields = parseResearchFields(memo);
     const validationError = validateResearchFields(fields);
@@ -4366,23 +4709,40 @@ function predictionFiltersFromUrl(url: URL): PredictionOutcomeFilters {
 async function handleApi(request: Request, env: Env): Promise<Response> {
   const unauthorized = requireAuthorized(request, env);
   if (unauthorized) return unauthorized;
+  await ensureArticleStorageSchema(env.NEWS_DB);
 
   const url = new URL(request.url);
   const limit = Number(url.searchParams.get("limit") || 25);
 
   if (url.pathname === "/api/status") {
     await archiveTickerlessArticles(env);
-    const [articles, jobs, results] = await Promise.all([
+    const [articles, jobs, results, content] = await Promise.all([
       env.NEWS_DB.prepare("SELECT status, COUNT(*) AS count FROM articles WHERE status != 'archived' GROUP BY status").all(),
       env.NEWS_DB.prepare("SELECT research_jobs.status, COUNT(*) AS count FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE articles.status != 'archived' AND (research_jobs.status != 'succeeded' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) GROUP BY research_jobs.status").all(),
       env.NEWS_DB.prepare("SELECT COUNT(*) AS count FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE articles.status != 'archived' AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]')").first(),
+      env.NEWS_DB.prepare("SELECT content_status AS status, COUNT(*) AS count FROM articles GROUP BY content_status").all(),
     ]);
-    return json({ ok: true, articles: articles.results, jobs: jobs.results, results });
+    return json({ ok: true, articles: articles.results, jobs: jobs.results, results, content: content.results });
   }
 
   if (url.pathname === "/api/sources") {
     await seedSources(env.NEWS_DB);
-    return json({ ok: true, sources: await listRows(env.NEWS_DB, "SELECT * FROM sources ORDER BY weight DESC, name ASC LIMIT ?", limit) });
+    return json({ ok: true, sources: await listRows(env.NEWS_DB, "SELECT * FROM sources ORDER BY weight DESC, name ASC LIMIT ?", Math.max(limit, SOURCES.length)) });
+  }
+
+  if (url.pathname === "/api/articles/content") {
+    const articleId = url.searchParams.get("id");
+    if (!articleId) return json({ error: "Missing article id" }, { status: 400 });
+    const article = await env.NEWS_DB.prepare(
+      "SELECT articles.id, articles.title, articles.url, articles.published_at, articles.discovered_at, articles.content_plaintext, articles.content_source, articles.content_status, articles.content_fetched_at, articles.content_fetch_attempts, articles.content_error, sources.name AS source_name, sources.source_type FROM articles LEFT JOIN sources ON sources.id = articles.source_id WHERE articles.id = ?",
+    )
+      .bind(articleId)
+      .first();
+    return article ? json({ ok: true, article }) : json({ error: "Article not found" }, { status: 404 });
+  }
+
+  if (url.pathname === "/api/articles/backfill" && request.method === "POST") {
+    return json({ ok: true, ...(await backfillArticleContents(env, limit)) });
   }
 
   if (url.pathname === "/api/articles") {
@@ -4390,7 +4750,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       ok: true,
       articles: await listRows(
         env.NEWS_DB,
-        "SELECT articles.*, sources.name AS source_name FROM articles LEFT JOIN sources ON sources.id = articles.source_id WHERE articles.status != 'archived' AND (articles.status != 'analyzed' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.article_id = articles.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) ORDER BY discovered_at DESC LIMIT ?",
+        "SELECT articles.id, articles.source_id, articles.title, articles.url, articles.summary, articles.published_at, articles.discovered_at, articles.status, articles.content_status, articles.content_source, articles.content_fetched_at, articles.content_fetch_attempts, articles.content_error, length(articles.content_plaintext) AS content_length, sources.name AS source_name, sources.source_type FROM articles LEFT JOIN sources ON sources.id = articles.source_id WHERE articles.status != 'archived' AND (articles.status != 'analyzed' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.article_id = articles.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) ORDER BY discovered_at DESC LIMIT ?",
         limit,
       ),
     });
@@ -4470,7 +4830,7 @@ async function handleContainer(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/container/, "") || "/health";
   if (path === "/research-internal") return json({ error: "Not found" }, { status: 404 });
-  const container = getContainer(env.CODEX_CONTAINER, "research-worker");
+  const container = getContainer(env.CODEX_CONTAINER, "instance-0");
 
   if (path === "/restart" && request.method === "POST") {
     if (!env.CONTAINER_API_TOKEN) {
@@ -4534,6 +4894,8 @@ export default {
           "/api/status",
           "/api/ingest",
           "/api/articles",
+          "/api/articles/content?id=ARTICLE_ID",
+          "/api/articles/backfill",
           "/api/jobs",
           "/api/results",
           "/api/ticker-signals",
@@ -4560,7 +4922,10 @@ export default {
       ingestFeeds(env).then(async () => {
         await archiveTickerlessArticles(env);
         await requeuePendingJobs(env, 25);
-        await processPredictionOutcomes(env, 50).catch((error) => console.error("Scheduled prediction outcome processing failed", error));
+        await Promise.all([
+          backfillArticleContents(env, 20).catch((error) => console.error("Scheduled article content backfill failed", error)),
+          processPredictionOutcomes(env, 50).catch((error) => console.error("Scheduled prediction outcome processing failed", error)),
+        ]);
       }),
     );
   },
@@ -4571,10 +4936,9 @@ export default {
         await processJob(env, message.body.jobId);
         await processPredictionOutcomes(env, 5).catch((error) => console.error("Queue prediction outcome processing failed", error));
         message.ack();
-        await requeuePendingJobs(env, 1);
       } catch (error) {
         if (error instanceof ResearchBusyError) {
-          message.retry({ delaySeconds: 120 });
+          message.retry({ delaySeconds: 30 });
           continue;
         }
         throw error;

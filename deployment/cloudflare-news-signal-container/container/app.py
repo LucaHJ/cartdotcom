@@ -23,6 +23,7 @@ PORT = int(os.getenv("PORT", "8080"))
 CODEX_HOME = Path(os.getenv("CODEX_HOME", "/home/codex/.codex"))
 AUTH_LOCK = threading.Lock()
 AUTH_READY = False
+RESEARCH_SEMAPHORE = threading.Semaphore(1)
 
 
 def codex_command() -> str:
@@ -275,7 +276,8 @@ class Handler(BaseHTTPRequestHandler):
                 timeout_seconds = int(payload.get("timeout_seconds") or 3600)
                 include_auth = request_path == "/research-internal"
                 try:
-                    memo = asyncio.run(run_research(prompt, timeout_seconds=timeout_seconds))
+                    with RESEARCH_SEMAPHORE:
+                        memo = asyncio.run(run_research(prompt, timeout_seconds=timeout_seconds))
                     response = {"ok": True, "memo": memo}
                     if include_auth:
                         response["auth_json"] = current_auth_json()
