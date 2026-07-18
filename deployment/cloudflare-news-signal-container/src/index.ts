@@ -729,6 +729,12 @@ const DASHBOARD_HTML = `<!doctype html>
       display: grid;
       gap: 18px;
       padding: 14px;
+      min-width: 0;
+    }
+
+    .heatmap-section {
+      width: 100%;
+      min-width: 0;
     }
 
     .heatmap-heading {
@@ -750,6 +756,9 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .heatmap-scroll {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
       overflow-x: auto;
       border: 1px solid var(--line);
       border-radius: 6px;
