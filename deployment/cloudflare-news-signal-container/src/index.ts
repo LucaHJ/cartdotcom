@@ -1607,7 +1607,7 @@ const DASHBOARD_HTML = `<!doctype html>
       if (!current) return current;
       const jobCounts = new Map((current.jobs || []).map((item) => [item.status, item]));
       for (const item of live.jobs || []) jobCounts.set(item.status, item);
-      return { ...current, jobs: [...jobCounts.values()], timing: live.timing || current.timing };
+      return { ...current, jobs: [...jobCounts.values()], timing: live.timing || current.timing, active_jobs: live.active_jobs || [] };
     }
 
     async function refreshLiveStatus() {
@@ -1617,6 +1617,7 @@ const DASHBOARD_HTML = `<!doctype html>
         const live = await api("/api/status/live");
         latestStatus = mergeLiveStatus(latestStatus, live);
         if (latestStatus) renderMetrics(latestStatus);
+        syncRunningJobTimers(live.active_jobs || []);
         liveStatusUpdated.textContent = "Live status " + new Date().toLocaleTimeString();
       } catch (error) {
         liveStatusUpdated.textContent = "Live status unavailable";
@@ -1833,7 +1834,7 @@ const DASHBOARD_HTML = `<!doctype html>
           : Number(job.elapsed_synthesis_seconds);
         const durationText = formatDuration(duration);
         const durationHtml = job.status === "running" && Number.isFinite(duration)
-          ? '<span class="job-timing" data-running-job-timer data-base-seconds="' + escapeAttr(duration) + '" data-rendered-at="' + renderedAt + '">' + escapeHtml(durationText) + '</span>'
+          ? '<span class="job-timing" data-job-timer data-job-id="' + escapeAttr(job.id) + '" data-running-job-timer data-base-seconds="' + escapeAttr(duration) + '" data-rendered-at="' + renderedAt + '">' + escapeHtml(durationText) + '</span>'
           : '<span class="job-timing">' + escapeHtml(durationText) + '</span>';
         return [
         pill(job.status || "unknown", statusClass(job.status), "Current durable research job state in D1 and Cloudflare Queues."),
@@ -1853,6 +1854,25 @@ const DASHBOARD_HTML = `<!doctype html>
         const renderedAt = Number(timer.getAttribute("data-rendered-at"));
         if (!Number.isFinite(base) || !Number.isFinite(renderedAt)) continue;
         timer.textContent = formatDuration(base + Math.max(0, Math.floor((now - renderedAt) / 1000)));
+      }
+    }
+
+    function syncRunningJobTimers(activeJobs) {
+      const activeById = new Map((activeJobs || []).map((job) => [String(job.id), job]));
+      const now = Date.now();
+      for (const timer of document.querySelectorAll("[data-job-timer]")) {
+        const active = activeById.get(timer.getAttribute("data-job-id") || "");
+        if (!active) {
+          timer.removeAttribute("data-running-job-timer");
+          timer.textContent = "complete; refresh";
+          continue;
+        }
+        const elapsed = Number(active.elapsed_synthesis_seconds);
+        if (!Number.isFinite(elapsed)) continue;
+        timer.setAttribute("data-running-job-timer", "");
+        timer.setAttribute("data-base-seconds", String(elapsed));
+        timer.setAttribute("data-rendered-at", String(now));
+        timer.textContent = formatDuration(elapsed);
       }
     }
 
@@ -4853,6 +4873,7 @@ async function archiveTickerlessArticles(env: Env): Promise<number> {
 
 async function researchOperationsTelemetry(db: D1Database): Promise<{
   jobs: Array<{ status: string; count: number }>;
+  active_jobs: Array<{ id: string; research_slot: number | null; elapsed_synthesis_seconds: number }>;
   timing: {
     average_synthesis_seconds: number | null;
     synthesis_samples: number;
@@ -4862,7 +4883,7 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
     parallel_capacity: number;
   };
 }> {
-  const row = await db.prepare(
+  const [row, activeJobs] = await Promise.all([db.prepare(
     "SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, AVG(CASE WHEN status = 'succeeded' THEN synthesis_duration_seconds END) AS average_synthesis_seconds, SUM(CASE WHEN status = 'succeeded' AND synthesis_duration_seconds IS NOT NULL THEN 1 ELSE 0 END) AS synthesis_samples, AVG(CASE WHEN status = 'succeeded' THEN prediction_delay_seconds END) AS average_prediction_delay_seconds, SUM(CASE WHEN status = 'succeeded' AND prediction_delay_seconds IS NOT NULL THEN 1 ELSE 0 END) AS prediction_delay_samples FROM research_jobs",
   ).first<{
     pending: number | null;
@@ -4872,7 +4893,9 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
     synthesis_samples: number | null;
     average_prediction_delay_seconds: number | null;
     prediction_delay_samples: number | null;
-  }>();
+  }>(), db.prepare(
+    "SELECT id, research_slot, MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)) AS elapsed_synthesis_seconds FROM research_jobs WHERE status = 'running' ORDER BY research_slot ASC",
+  ).all<{ id: string; research_slot: number | null; elapsed_synthesis_seconds: number }>()]);
   const pending = Number(row?.pending || 0);
   const running = Number(row?.running || 0);
   const failed = Number(row?.failed || 0);
@@ -4885,6 +4908,7 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
       { status: "running", count: running },
       { status: "failed", count: failed },
     ],
+    active_jobs: activeJobs.results || [],
     timing: {
       average_synthesis_seconds: averageSynthesisSeconds,
       synthesis_samples: Number(row?.synthesis_samples || 0),
