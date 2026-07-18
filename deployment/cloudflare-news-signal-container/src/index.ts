@@ -5213,6 +5213,9 @@ export default {
         await archiveTickerlessArticles(env);
         await requeuePendingJobs(env, 25);
         await Promise.all([
+          ...Array.from({ length: RESEARCH_CONTAINER_COUNT }, () =>
+            drainResearchBacklog(env).catch((error) => console.error("Scheduled research backlog drain failed", error)),
+          ),
           backfillArticleContents(env, 20).catch((error) => console.error("Scheduled article content backfill failed", error)),
           processPredictionOutcomes(env, 50).catch((error) => console.error("Scheduled prediction outcome processing failed", error)),
         ]);
