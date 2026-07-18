@@ -1994,8 +1994,7 @@ const DASHBOARD_HTML = `<!doctype html>
       const plotWidth = width - pad.left - pad.right;
       const plotHeight = height - pad.top - pad.bottom;
       const observedMaxDay = Math.max(0, ...populated.flatMap((item) => item.points.map((point) => point.day)));
-      const oldestAgeDays = Math.max(observedMaxDay, Number(predictionDailyCoverage.oldest_age_days || 0));
-      const xMax = Math.max(1, oldestAgeDays);
+      const xMax = observedMaxDay;
       const movements = populated.flatMap((item) => item.points.map((point) => Number(point.movement)));
       let movementMin = Math.min(0, ...movements);
       let movementMax = Math.max(0, ...movements);
@@ -2009,7 +2008,7 @@ const DASHBOARD_HTML = `<!doctype html>
       }
       const movementSpan = movementMax - movementMin || 1;
       const sampleMax = Math.max(1, ...(sampleSeries || []).map((point) => Number(point.samples || 0)));
-      const xFor = (day) => pad.left + (Number(day) / xMax) * plotWidth;
+      const xFor = (day) => pad.left + (xMax > 0 ? (Number(day) / xMax) * plotWidth : 0);
       const movementY = (movement) => pad.top + ((movementMax - Number(movement)) / movementSpan) * plotHeight;
       const sampleY = (samples) => pad.top + ((sampleMax - Number(samples)) / sampleMax) * plotHeight;
       const colors = { bullish: "#087a55", bearish: "#b42318" };
@@ -2022,7 +2021,9 @@ const DASHBOARD_HTML = `<!doctype html>
           '<text x="' + (pad.left - 9) + '" y="' + (y + 4).toFixed(2) + '" fill="#667085" font-size="10" text-anchor="end">' + escapeHtml(signedPct(value)) + '</text>';
       }).join("");
 
-      const tickDays = Array.from(new Set(Array.from({ length: 6 }, (_, index) => Math.round((index / 5) * xMax))));
+      const tickDays = xMax > 0
+        ? Array.from(new Set(Array.from({ length: 6 }, (_, index) => Math.round((index / 5) * xMax))))
+        : [0];
       const xTicks = tickDays.map((day) => {
         const x = xFor(day);
         return '<line x1="' + x.toFixed(2) + '" y1="' + pad.top + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="#eef1f5"></line>' +
@@ -3351,9 +3352,9 @@ async function ensurePredictionOutcomeTables(env: Env): Promise<void> {
     ),
     env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcome_scans_scanned_at ON prediction_outcome_scans(scanned_at ASC)"),
     env.NEWS_DB.prepare(
-      "CREATE TABLE IF NOT EXISTS prediction_daily_points (outcome_id TEXT NOT NULL, prediction_at TEXT NOT NULL, day_index INTEGER NOT NULL, sampled_at TEXT NOT NULL, price REAL NOT NULL, change_pct REAL NOT NULL, PRIMARY KEY(outcome_id, day_index))",
+      "CREATE TABLE IF NOT EXISTS prediction_daily_points_v2 (outcome_id TEXT NOT NULL, prediction_at TEXT NOT NULL, day_index INTEGER NOT NULL, sampled_at TEXT NOT NULL, price REAL NOT NULL, change_pct REAL NOT NULL, PRIMARY KEY(outcome_id, day_index))",
     ),
-    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_daily_points_day ON prediction_daily_points(day_index)"),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_daily_points_v2_day ON prediction_daily_points_v2(day_index)"),
   ]);
 }
 
@@ -3377,38 +3378,51 @@ function predictionDailyPoints(
   if (!baseline || !Number.isFinite(baseline.price) || baseline.price === 0) return [];
   const predictionEpoch = unixSeconds(predictionAt);
   const now = Math.floor(Date.now() / 1000);
-  const byDay = new Map<number, PredictionDailyPoint>();
-  byDay.set(0, {
+  const maxTrackedDay = Math.max(0, Math.floor((now - predictionEpoch) / (24 * 60 * 60)));
+  const marketPoints = chart.timestamps
+    .map((at, index) => ({ at, price: chart.closes[index] }))
+    .filter((point): point is { at: number; price: number } =>
+      point.at > predictionEpoch &&
+      point.at <= now &&
+      typeof point.price === "number" &&
+      Number.isFinite(point.price),
+    )
+    .sort((a, b) => a.at - b.at);
+  const points: PredictionDailyPoint[] = [{
     day_index: 0,
-    at: isoFromUnix(baseline.at),
+    at: isoFromUnix(predictionEpoch),
     price: baseline.price,
     change_pct: 0,
-  });
-  chart.timestamps.forEach((at, index) => {
-    const price = chart.closes[index];
-    if (at <= predictionEpoch || at > now || typeof price !== "number" || !Number.isFinite(price)) return;
-    const dayIndex = Math.max(1, Math.ceil((at - predictionEpoch) / (24 * 60 * 60)));
-    byDay.set(dayIndex, {
+  }];
+  let marketIndex = 0;
+  let latestPrice = baseline.price;
+  for (let dayIndex = 1; dayIndex <= maxTrackedDay; dayIndex += 1) {
+    const target = predictionEpoch + dayIndex * 24 * 60 * 60;
+    while (marketIndex < marketPoints.length && marketPoints[marketIndex].at <= target) {
+      latestPrice = marketPoints[marketIndex].price;
+      marketIndex += 1;
+    }
+    points.push({
       day_index: dayIndex,
-      at: isoFromUnix(at),
-      price,
-      change_pct: ((price - baseline.price) / baseline.price) * 100,
+      at: isoFromUnix(target),
+      price: latestPrice,
+      change_pct: ((latestPrice - baseline.price) / baseline.price) * 100,
     });
-  });
-  return Array.from(byDay.values()).sort((a, b) => a.day_index - b.day_index);
+  }
+  return points;
 }
 
 async function persistPredictionDailyPoints(env: Env, outcome: PredictionOutcome): Promise<void> {
   const points = outcome.daily_points || [];
   if (!points.length) return;
   const existing = await env.NEWS_DB.prepare(
-    "SELECT prediction_at, MAX(day_index) AS max_day FROM prediction_daily_points WHERE outcome_id = ?",
+    "SELECT prediction_at, MAX(day_index) AS max_day FROM prediction_daily_points_v2 WHERE outcome_id = ?",
   )
     .bind(outcome.id)
     .first<{ prediction_at: string | null; max_day: number | null }>();
   const samePredictionTime = existing?.prediction_at && unixSeconds(existing.prediction_at) === unixSeconds(outcome.prediction_at);
   if (existing?.prediction_at && !samePredictionTime) {
-    await env.NEWS_DB.prepare("DELETE FROM prediction_daily_points WHERE outcome_id = ?").bind(outcome.id).run();
+    await env.NEWS_DB.prepare("DELETE FROM prediction_daily_points_v2 WHERE outcome_id = ?").bind(outcome.id).run();
   }
   const maxStoredDay = samePredictionTime ? Number(existing?.max_day ?? -1) : -1;
   const pending = points.filter((point) => point.day_index >= Math.max(0, maxStoredDay - 1));
@@ -3424,7 +3438,7 @@ async function persistPredictionDailyPoints(env: Env, outcome: PredictionOutcome
       point.change_pct,
     ]);
     await env.NEWS_DB.prepare(
-      `INSERT INTO prediction_daily_points (outcome_id, prediction_at, day_index, sampled_at, price, change_pct) VALUES ${placeholders} ON CONFLICT(outcome_id, day_index) DO UPDATE SET prediction_at = excluded.prediction_at, sampled_at = excluded.sampled_at, price = excluded.price, change_pct = excluded.change_pct`,
+      `INSERT INTO prediction_daily_points_v2 (outcome_id, prediction_at, day_index, sampled_at, price, change_pct) VALUES ${placeholders} ON CONFLICT(outcome_id, day_index) DO UPDATE SET prediction_at = excluded.prediction_at, sampled_at = excluded.sampled_at, price = excluded.price, change_pct = excluded.change_pct`,
     )
       .bind(...bindings)
       .run();
@@ -3486,7 +3500,7 @@ async function processPredictionOutcomes(
   await ensurePredictionOutcomeTables(env);
   const clamped = Math.min(Math.max(limit, 1), 500);
   const result = await env.NEWS_DB.prepare(
-    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' ORDER BY CASE WHEN prediction_outcome_scans.result_id IS NULL THEN 0 WHEN EXISTS (SELECT 1 FROM prediction_outcomes WHERE prediction_outcomes.result_id = research_results.id AND NOT EXISTS (SELECT 1 FROM prediction_daily_points WHERE prediction_daily_points.outcome_id = prediction_outcomes.id)) THEN 1 WHEN EXISTS (SELECT 1 FROM prediction_outcomes WHERE prediction_outcomes.result_id = research_results.id AND datetime(prediction_outcomes.prediction_at) != datetime(COALESCE(articles.published_at, research_results.created_at))) THEN 2 ELSE 3 END, datetime(prediction_outcome_scans.scanned_at) ASC, datetime(research_results.created_at) ASC LIMIT ?",
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' ORDER BY CASE WHEN prediction_outcome_scans.result_id IS NULL THEN 0 WHEN EXISTS (SELECT 1 FROM prediction_outcomes WHERE prediction_outcomes.result_id = research_results.id AND NOT EXISTS (SELECT 1 FROM prediction_daily_points_v2 WHERE prediction_daily_points_v2.outcome_id = prediction_outcomes.id)) THEN 1 WHEN EXISTS (SELECT 1 FROM prediction_outcomes WHERE prediction_outcomes.result_id = research_results.id AND datetime(prediction_outcomes.prediction_at) != datetime(COALESCE(articles.published_at, research_results.created_at))) THEN 2 ELSE 3 END, datetime(prediction_outcome_scans.scanned_at) ASC, datetime(research_results.created_at) ASC LIMIT ?",
   )
     .bind(clamped)
     .all<ResearchResultRow>();
@@ -3629,10 +3643,10 @@ async function buildPredictionDailySummary(env: Env): Promise<{
   coverage: Record<string, number>;
 }> {
   const daily = await env.NEWS_DB.prepare(
-    `WITH eligible AS (SELECT prediction_outcomes.direction, ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct, prediction_daily_points.day_index, prediction_daily_points.sampled_at, prediction_daily_points.change_pct FROM prediction_daily_points INNER JOIN prediction_outcomes ON prediction_outcomes.id = prediction_daily_points.outcome_id INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL} AND NOT EXISTS (SELECT 1 FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND unixepoch(opposite_outcomes.prediction_at) <= unixepoch(prediction_daily_points.sampled_at) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, day_index, COUNT(*) AS samples, AVG(change_pct) AS average_movement_pct FROM eligible WHERE confidence_pct >= 0 AND confidence_pct <= 100 GROUP BY direction, confidence_bin, day_index ORDER BY day_index, direction, confidence_bin`,
+    `WITH eligible AS (SELECT prediction_outcomes.direction, ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct, prediction_daily_points_v2.day_index, prediction_daily_points_v2.sampled_at, prediction_daily_points_v2.change_pct FROM prediction_daily_points_v2 INNER JOIN prediction_outcomes ON prediction_outcomes.id = prediction_daily_points_v2.outcome_id INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL} AND NOT EXISTS (SELECT 1 FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND unixepoch(opposite_outcomes.prediction_at) <= unixepoch(prediction_daily_points_v2.sampled_at) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, day_index, COUNT(*) AS samples, AVG(change_pct) AS average_movement_pct FROM eligible WHERE confidence_pct >= 0 AND confidence_pct <= 100 GROUP BY direction, confidence_bin, day_index ORDER BY day_index, direction, confidence_bin`,
   ).all<PredictionDailySummaryRow>();
   const coverage = await env.NEWS_DB.prepare(
-    `SELECT MAX(MAX(0, CAST((unixepoch('now') - unixepoch(prediction_outcomes.prediction_at)) / 86400 AS INTEGER))) AS oldest_age_days, COUNT(DISTINCT prediction_outcomes.id) AS eligible_predictions, COUNT(DISTINCT prediction_daily_points.outcome_id) AS daily_predictions FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_daily_points ON prediction_daily_points.outcome_id = prediction_outcomes.id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL}`,
+    `SELECT MAX(MAX(0, CAST((unixepoch('now') - unixepoch(prediction_outcomes.prediction_at)) / 86400 AS INTEGER))) AS oldest_age_days, COUNT(DISTINCT prediction_outcomes.id) AS eligible_predictions, COUNT(DISTINCT prediction_daily_points_v2.outcome_id) AS daily_predictions FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_daily_points_v2 ON prediction_daily_points_v2.outcome_id = prediction_outcomes.id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL}`,
   ).first<{ oldest_age_days: number | null; eligible_predictions: number; daily_predictions: number }>();
   return {
     series: (daily.results || []).map((row) => ({
