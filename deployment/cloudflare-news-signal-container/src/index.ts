@@ -375,7 +375,7 @@ async function purgeStaleHistoricalBackfill(env: Env): Promise<Record<string, nu
   const bindCutoff = (sql: string) => db.prepare(sql).bind(SOURCE_EXPANSION_CUTOFF);
 
   const [articles, results, outcomes, dailyPoints] = await Promise.all([
-    bindCutoff(`SELECT COUNT(*) AS count FROM articles WHERE id IN (${STALE_BACKFILL_ARTICLE_SQL})`).first<{ count: number }>(),
+    bindCutoff(`SELECT COUNT(*) AS count FROM articles WHERE status != 'archived' AND id IN (${STALE_BACKFILL_ARTICLE_SQL})`).first<{ count: number }>(),
     bindCutoff(`SELECT COUNT(*) AS count FROM research_results WHERE ${articleFilter}`).first<{ count: number }>(),
     bindCutoff(`SELECT COUNT(*) AS count FROM prediction_outcomes WHERE ${articleFilter}`).first<{ count: number }>(),
     bindCutoff(`SELECT COUNT(*) AS count FROM prediction_daily_points_v2 WHERE ${outcomeFilter}`).first<{ count: number }>(),
