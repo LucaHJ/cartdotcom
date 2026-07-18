@@ -725,6 +725,96 @@ const DASHBOARD_HTML = `<!doctype html>
       white-space: nowrap;
     }
 
+    .heatmap-stack {
+      display: grid;
+      gap: 18px;
+      padding: 14px;
+    }
+
+    .heatmap-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .heatmap-title {
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .heatmap-axis-label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .heatmap-scroll {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .confidence-heatmap {
+      min-width: 860px;
+      table-layout: fixed;
+    }
+
+    .confidence-heatmap th,
+    .confidence-heatmap td {
+      padding: 7px 5px;
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    .confidence-heatmap th:first-child,
+    .confidence-heatmap td:first-child {
+      width: 76px;
+      text-align: left;
+      padding-left: 10px;
+      font-weight: 700;
+    }
+
+    .heatmap-cell {
+      height: 42px;
+      font-size: 12px;
+      font-weight: 750;
+      cursor: help;
+      transition: box-shadow 120ms ease;
+    }
+
+    .heatmap-cell:hover {
+      box-shadow: inset 0 0 0 2px #123c69;
+    }
+
+    .heatmap-empty { background: #f3f4f6; color: #98a2b3; }
+    .heatmap-very-low { background: #f7c9c9; color: #8f1d1d; }
+    .heatmap-low { background: #fde8df; color: #9f3a22; }
+    .heatmap-mid { background: #fff0c2; color: #7a4e00; }
+    .heatmap-high { background: #d8efe3; color: #17633d; }
+    .heatmap-very-high { background: #a9dec2; color: #0f5132; }
+
+    .heatmap-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .heatmap-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .heatmap-swatch {
+      width: 13px;
+      height: 13px;
+      border: 1px solid rgba(16, 24, 40, 0.08);
+      border-radius: 3px;
+    }
+
     .pill[title] { cursor: help; }
 
     @media (max-width: 1050px) {
@@ -739,6 +829,8 @@ const DASHBOARD_HTML = `<!doctype html>
       .tokenbar { grid-template-columns: 1fr; }
       .metrics { grid-template-columns: 1fr; }
       th:nth-child(3), td:nth-child(3) { display: none; }
+      .confidence-heatmap th:nth-child(3),
+      .confidence-heatmap td:nth-child(3) { display: table-cell; }
     }
   </style>
 </head>
@@ -807,7 +899,7 @@ const DASHBOARD_HTML = `<!doctype html>
       <section class="panel">
         <div class="model-blurb">Prediction Accuracy measures every bullish or bearish ticker prediction against real market movement. Each row stores the ticker price at prediction time, then records movement at 12h, 24h, 48h, 1w, 2w, 1m, 3m, 6m, 1y, 2y, 3y, and 4y once those windows have elapsed.</div>
         <div class="panel-header">
-          <div class="panel-title">Interval Summary</div>
+          <div class="panel-title">Accuracy by Interval and Confidence</div>
           <div class="panel-meta" id="prediction-summary-meta">0 intervals</div>
         </div>
         <div id="prediction-summary"></div>
@@ -1179,15 +1271,18 @@ const DASHBOARD_HTML = `<!doctype html>
       const trackedArticles = Number(coverage.articles || 0);
       predictionSummaryMeta.textContent = summary.length + " intervals · " + trackedPredictions + " directional ticker predictions across " + trackedArticles + " articles";
       predictionSummaryEl.innerHTML = summary.length
-        ? table(["Interval", "Samples", "Bull Accuracy", "Avg Bull Move", "Bear Accuracy", "Avg Bear Move", "Overall"], summary.map((item) => [
-          escapeHtml(item.interval || ""),
-          escapeHtml(String(item.samples || 0)),
-          predictionSummaryCell(item.bullish_accuracy_pct, item.bullish_samples),
-          movementCell(item.average_bullish_movement_pct),
-          predictionSummaryCell(item.bearish_accuracy_pct, item.bearish_samples),
-          movementCell(item.average_bearish_movement_pct),
-          predictionSummaryCell(item.overall_accuracy_pct, item.samples),
-        ]))
+        ? '<div class="heatmap-stack">' +
+            renderConfidenceHeatmap(summary, "bullish") +
+            renderConfidenceHeatmap(summary, "bearish") +
+            '<div class="heatmap-legend" aria-label="Accuracy colour legend">' +
+              heatmapLegendItem("heatmap-very-low", "Below 30%") +
+              heatmapLegendItem("heatmap-low", "30-44.9%") +
+              heatmapLegendItem("heatmap-mid", "45-54.9%") +
+              heatmapLegendItem("heatmap-high", "55-69.9%") +
+              heatmapLegendItem("heatmap-very-high", "70% or higher") +
+              heatmapLegendItem("heatmap-empty", "No samples") +
+            '</div>' +
+          '</div>'
         : '<div class="empty">No prediction intervals have elapsed yet.</div>';
 
       if (!outcomes.length) {
@@ -1231,17 +1326,46 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionsEl.innerHTML = '<div class="impact-wrap"><table class="prediction-outcomes-table"><colgroup>' + columns.map((width) => '<col style="width:' + width + 'px">').join("") + '</colgroup><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody>' + body + '</tbody></table></div>';
     }
 
-    function predictionSummaryCell(value, samples) {
-      if (!samples) return pill("n/a", "", "No elapsed samples for this interval yet.");
-      const number = Number(value);
-      const cls = number >= 60 ? "green" : number < 45 ? "red" : "amber";
-      return pill(number.toFixed(1) + "%", cls, "Percent of bullish or bearish predictions that moved in the predicted direction.");
+    function renderConfidenceHeatmap(summary, direction) {
+      const bands = Array.from({ length: 10 }, (_, index) => ({ min: index * 10, max: (index + 1) * 10 }));
+      const heading = direction === "bullish" ? "Bullish predictions" : "Bearish predictions";
+      const headers = '<th scope="col">Interval</th>' + bands.map((band) => '<th scope="col">' + band.min + '-' + band.max + '</th>').join("");
+      const rows = summary.map((item) => {
+        const cells = Array.isArray(item[direction]) ? item[direction] : [];
+        return '<tr><th scope="row">' + escapeHtml(item.interval || "") + '</th>' + bands.map((band, index) => renderHeatmapCell(cells[index], direction, item.interval, band)).join("") + '</tr>';
+      }).join("");
+      return '<section class="heatmap-section" aria-label="' + escapeAttr(heading + " accuracy by confidence and interval") + '">' +
+        '<div class="heatmap-heading"><div class="heatmap-title">' + heading + '</div><div class="heatmap-axis-label">Prediction confidence (%)</div></div>' +
+        '<div class="heatmap-scroll"><table class="confidence-heatmap"><thead><tr>' + headers + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '</section>';
     }
 
-    function movementCell(value) {
-      if (value === null || value === undefined) return pill("n/a", "", "No elapsed samples for this interval yet.");
-      const number = Number(value);
-      return pill(signedPct(number), number > 0 ? "green" : number < 0 ? "red" : "amber", "Average raw market movement for predictions in this direction.");
+    function renderHeatmapCell(cell, direction, interval, band) {
+      const samples = Number(cell && cell.samples || 0);
+      if (!samples) {
+        return '<td class="heatmap-cell heatmap-empty" title="' + escapeAttr(heatmapTooltip(direction, interval, band, null)) + '">n/a</td>';
+      }
+      const accuracy = Number(cell.accuracy_pct || 0);
+      return '<td class="heatmap-cell ' + heatmapAccuracyClass(accuracy) + '" title="' + escapeAttr(heatmapTooltip(direction, interval, band, cell)) + '">' + accuracy.toFixed(0) + '%</td>';
+    }
+
+    function heatmapTooltip(direction, interval, band, cell) {
+      const label = direction === "bullish" ? "Bullish" : "Bearish";
+      const context = label + " · " + band.min + "-" + band.max + "% confidence · " + interval + ". ";
+      if (!cell || !Number(cell.samples || 0)) return context + "0 samples.";
+      return context + Number(cell.samples) + " samples. " + Number(cell.accuracy_pct || 0).toFixed(1) + "% moved in the predicted direction. Average ticker movement " + signedPct(Number(cell.average_movement_pct || 0)) + ".";
+    }
+
+    function heatmapAccuracyClass(accuracy) {
+      if (accuracy >= 70) return "heatmap-very-high";
+      if (accuracy >= 55) return "heatmap-high";
+      if (accuracy >= 45) return "heatmap-mid";
+      if (accuracy >= 30) return "heatmap-low";
+      return "heatmap-very-low";
+    }
+
+    function heatmapLegendItem(cls, label) {
+      return '<span class="heatmap-legend-item"><span class="heatmap-swatch ' + cls + '"></span>' + escapeHtml(label) + '</span>';
     }
 
     function predictionPointPill(point, direction, label) {
@@ -2566,39 +2690,39 @@ function parsePredictionIntervals(value: string): Record<string, PredictionPoint
 }
 
 type PredictionSummaryRow = {
+  direction: "bullish" | "bearish";
+  confidence_bin: number;
   samples: number;
-  bullish_samples: number;
-  bullish_accurate: number;
-  average_bullish_movement_pct: number | null;
-  bearish_samples: number;
-  bearish_accurate: number;
-  average_bearish_movement_pct: number | null;
-  overall_accurate: number;
+  accurate: number;
+  average_movement_pct: number | null;
 };
 
 async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>[]> {
   const statements = PREDICTION_INTERVALS.map((interval) => {
     const path = `$."${interval.label}".change_pct`;
     return env.NEWS_DB.prepare(
-      "SELECT COUNT(*) AS samples, SUM(CASE WHEN direction = 'bullish' THEN 1 ELSE 0 END) AS bullish_samples, SUM(CASE WHEN direction = 'bullish' AND CAST(json_extract(intervals_json, ?) AS REAL) > 0 THEN 1 ELSE 0 END) AS bullish_accurate, AVG(CASE WHEN direction = 'bullish' THEN CAST(json_extract(intervals_json, ?) AS REAL) END) AS average_bullish_movement_pct, SUM(CASE WHEN direction = 'bearish' THEN 1 ELSE 0 END) AS bearish_samples, SUM(CASE WHEN direction = 'bearish' AND CAST(json_extract(intervals_json, ?) AS REAL) < 0 THEN 1 ELSE 0 END) AS bearish_accurate, AVG(CASE WHEN direction = 'bearish' THEN CAST(json_extract(intervals_json, ?) AS REAL) END) AS average_bearish_movement_pct, SUM(CASE WHEN (direction = 'bullish' AND CAST(json_extract(intervals_json, ?) AS REAL) > 0) OR (direction = 'bearish' AND CAST(json_extract(intervals_json, ?) AS REAL) < 0) THEN 1 ELSE 0 END) AS overall_accurate FROM prediction_outcomes WHERE json_type(intervals_json, ?) IN ('integer', 'real')",
-    ).bind(path, path, path, path, path, path, path);
+      "WITH eligible AS (SELECT direction, CASE WHEN confidence <= 1 THEN confidence * 100 ELSE confidence END AS confidence_pct, CAST(json_extract(intervals_json, ?) AS REAL) AS movement_pct FROM prediction_outcomes WHERE direction IN ('bullish', 'bearish') AND confidence IS NOT NULL AND json_type(intervals_json, ?) IN ('integer', 'real')) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, COUNT(*) AS samples, SUM(CASE WHEN (direction = 'bullish' AND movement_pct > 0) OR (direction = 'bearish' AND movement_pct < 0) THEN 1 ELSE 0 END) AS accurate, AVG(movement_pct) AS average_movement_pct FROM eligible WHERE confidence_pct >= 0 AND confidence_pct <= 100 GROUP BY direction, confidence_bin ORDER BY direction, confidence_bin",
+    ).bind(path, path);
   });
   const results = await env.NEWS_DB.batch<PredictionSummaryRow>(statements);
   return PREDICTION_INTERVALS.map((interval, index) => {
-    const row = results[index]?.results?.[0];
-    const samples = Number(row?.samples || 0);
-    const bullishSamples = Number(row?.bullish_samples || 0);
-    const bearishSamples = Number(row?.bearish_samples || 0);
+    const rows = results[index]?.results || [];
+    const cellsFor = (direction: "bullish" | "bearish") =>
+      Array.from({ length: 10 }, (_, confidenceBin) => {
+        const row = rows.find((item) => item.direction === direction && Number(item.confidence_bin) === confidenceBin);
+        const samples = Number(row?.samples || 0);
+        return {
+          confidence_min: confidenceBin * 10,
+          confidence_max: (confidenceBin + 1) * 10,
+          samples,
+          accuracy_pct: samples ? (Number(row?.accurate || 0) / samples) * 100 : null,
+          average_movement_pct: row?.average_movement_pct ?? null,
+        };
+      });
     return {
       interval: interval.label,
-      samples,
-      bullish_samples: bullishSamples,
-      bullish_accuracy_pct: bullishSamples ? (Number(row?.bullish_accurate || 0) / bullishSamples) * 100 : null,
-      average_bullish_movement_pct: row?.average_bullish_movement_pct ?? null,
-      bearish_samples: bearishSamples,
-      bearish_accuracy_pct: bearishSamples ? (Number(row?.bearish_accurate || 0) / bearishSamples) * 100 : null,
-      average_bearish_movement_pct: row?.average_bearish_movement_pct ?? null,
-      overall_accuracy_pct: samples ? (Number(row?.overall_accurate || 0) / samples) * 100 : null,
+      bullish: cellsFor("bullish"),
+      bearish: cellsFor("bearish"),
     };
   });
 }
