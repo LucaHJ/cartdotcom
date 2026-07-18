@@ -3196,9 +3196,11 @@ async function runContainerResearch(env: Env, prompt: string): Promise<string> {
   return payload.memo;
 }
 
-async function normalizeResearchJobConcurrency(env: Env): Promise<{ stale: number; excess: number }> {
+async function normalizeResearchJobConcurrency(env: Env, force = false): Promise<{ stale: number; excess: number }> {
   const stale = await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'pending', last_error = 'Reset stale running job', finished_at = CURRENT_TIMESTAMP WHERE status = 'running' AND datetime(started_at) < datetime('now', '-20 minutes')",
+    force
+      ? "UPDATE research_jobs SET status = 'pending', last_error = 'Force-released interrupted research job', started_at = NULL, finished_at = CURRENT_TIMESTAMP WHERE status = 'running'"
+      : "UPDATE research_jobs SET status = 'pending', last_error = 'Reset stale running job', started_at = NULL, finished_at = CURRENT_TIMESTAMP WHERE status = 'running' AND datetime(started_at) < datetime('now', '-8 minutes')",
   ).run();
   const excess = await env.NEWS_DB.prepare(
     "UPDATE research_jobs SET status = 'pending', last_error = 'Released excess concurrent research job', started_at = NULL, finished_at = CURRENT_TIMESTAMP WHERE id IN (SELECT id FROM research_jobs WHERE status = 'running' ORDER BY datetime(started_at) ASC LIMIT -1 OFFSET ?)",
@@ -4823,7 +4825,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   }
 
   if (url.pathname === "/api/research/recover" && request.method === "POST") {
-    const normalized = await normalizeResearchJobConcurrency(env);
+    const normalized = await normalizeResearchJobConcurrency(env, url.searchParams.get("force") === "1");
     const requeued = await requeuePendingJobs(env, limit);
     return json({ ok: true, ...normalized, ...requeued });
   }
