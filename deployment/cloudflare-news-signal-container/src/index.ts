@@ -43,7 +43,7 @@ type ResearchJobMessage = {
 };
 
 type DashboardEvent = {
-  type: "connected" | "source_check_completed" | "research_started" | "research_completed" | "research_failed";
+  type: "connected" | "source_check_completed" | "research_started" | "research_completed" | "research_deferred" | "research_failed";
   at: string;
   job_id?: string;
   article_id?: string;
@@ -225,9 +225,16 @@ type EodReportRow = {
 };
 
 class ResearchBusyError extends Error {
-  constructor() {
-    super("This research job is already running");
+  constructor(message = "This research job is already running") {
+    super(message);
   }
+}
+
+function isTransientContainerCapacityError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /maximum number of running container instances exceeded|there is no container instance that can be provided|no container instance.*provided/i.test(
+    message,
+  );
 }
 
 export interface Env {
@@ -3845,6 +3852,20 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     return { ok: true, jobId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (isTransientContainerCapacityError(error)) {
+      await env.NEWS_DB.prepare(
+        "UPDATE research_jobs SET status = 'pending', attempts = MAX(0, attempts - 1), last_error = ?, started_at = NULL, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
+      )
+        .bind(`Deferred after transient container-capacity error: ${message}`.slice(0, 1000), jobId)
+        .run();
+      await publishDashboardEvent(env, {
+        type: "research_deferred",
+        at: new Date().toISOString(),
+        job_id: jobId,
+        article_id: article.id,
+      });
+      throw new ResearchBusyError(message);
+    }
     await env.NEWS_DB.prepare(
       "UPDATE research_jobs SET status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END, last_error = ?, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = CASE WHEN attempts >= 3 THEN MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)) ELSE NULL END, prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
     )
@@ -3906,6 +3927,46 @@ async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: num
   }
 
   return { requeued: pending.results?.length || 0 };
+}
+
+async function remediateFailedResearchJobs(env: Env): Promise<{
+  inspected: number;
+  resynthesis_requeued: number;
+  first_pass_archived: number;
+}> {
+  const failed = await env.NEWS_DB.prepare(
+    "SELECT research_jobs.id, research_jobs.article_id, EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) AS has_result FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE research_jobs.status = 'failed' AND articles.status != 'archived'",
+  ).all<{ id: string; article_id: string; has_result: number }>();
+
+  let resynthesisRequeued = 0;
+  let firstPassArchived = 0;
+  for (const job of failed.results || []) {
+    if (job.has_result) {
+      await env.NEWS_DB.batch([
+        env.NEWS_DB.prepare(
+          "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, prediction_delay_eligible = 0, research_slot = NULL WHERE id = ? AND status = 'failed'",
+        ).bind(job.id),
+        env.NEWS_DB.prepare("UPDATE articles SET status = 'queued' WHERE id = ? AND status != 'archived'").bind(job.article_id),
+      ]);
+      await env.RESEARCH_QUEUE.send({ jobId: job.id });
+      resynthesisRequeued += 1;
+      continue;
+    }
+
+    await env.NEWS_DB.batch([
+      env.NEWS_DB.prepare(
+        "UPDATE research_jobs SET status = 'cancelled', last_error = 'Discarded failed first-pass article', finished_at = CURRENT_TIMESTAMP, prediction_delay_seconds = NULL, prediction_delay_eligible = 0, research_slot = NULL WHERE id = ? AND status = 'failed'",
+      ).bind(job.id),
+      env.NEWS_DB.prepare("UPDATE articles SET status = 'archived' WHERE id = ?").bind(job.article_id),
+    ]);
+    firstPassArchived += 1;
+  }
+
+  return {
+    inspected: failed.results?.length || 0,
+    resynthesis_requeued: resynthesisRequeued,
+    first_pass_archived: firstPassArchived,
+  };
 }
 
 async function reanalyzeRecentJobs(env: Env, limit = 20): Promise<{ requeued: number }> {
@@ -5569,6 +5630,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...(await resetPendingFirstPassQueue(env.NEWS_DB)) });
   }
 
+  if (url.pathname === "/api/research/remediate-failed" && request.method === "POST") {
+    return json({ ok: true, ...(await remediateFailedResearchJobs(env)) });
+  }
+
   if (url.pathname === "/api/reanalyze-recent" && request.method === "POST") {
     return json({ ok: true, ...(await reanalyzeRecentJobs(env, limit)) });
   }
@@ -5707,6 +5772,7 @@ export default {
           "/api/predictions/outcomes",
           "/api/predictions/process",
           "/api/research/recover",
+          "/api/research/remediate-failed",
           "/api/research/reset-first-pass-queue",
           "/api/reanalyze-recent",
           "/api/reanalyze-legacy",
