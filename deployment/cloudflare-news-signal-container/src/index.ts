@@ -3914,9 +3914,17 @@ async function drainResearchBacklog(env: Env): Promise<number> {
   return processed;
 }
 
-async function drainResearchBacklogConcurrently(env: Env): Promise<number> {
+async function drainResearchBacklogConcurrently(env: Env): Promise<{
+  processed: number;
+  selected: number;
+  busy: number;
+  errors: string[];
+}> {
   const deadline = Date.now() + QUEUE_DRAIN_MAX_MS;
   let processed = 0;
+  let selectedCount = 0;
+  let busy = 0;
+  const errors: string[] = [];
   while (Date.now() < deadline) {
     const running = await env.NEWS_DB.prepare(
       "SELECT COUNT(*) AS count FROM research_jobs WHERE status = 'running'",
@@ -3931,6 +3939,7 @@ async function drainResearchBacklogConcurrently(env: Env): Promise<number> {
       .all<{ id: string }>();
     const selected = jobs.results || [];
     if (!selected.length) break;
+    selectedCount += selected.length;
 
     const settled = await Promise.allSettled(selected.map((job) => processJob(env, job.id)));
     let completed = 0;
@@ -3938,13 +3947,16 @@ async function drainResearchBacklogConcurrently(env: Env): Promise<number> {
       if (result.status === "fulfilled") {
         completed += 1;
         if (!result.value.skipped) processed += 1;
-      } else if (!(result.reason instanceof ResearchBusyError)) {
+      } else if (result.reason instanceof ResearchBusyError) {
+        busy += 1;
+      } else {
+        errors.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
         console.error("Concurrent backlog research processing failed", result.reason);
       }
     }
     if (!completed) break;
   }
-  return processed;
+  return { processed, selected: selectedCount, busy, errors: errors.slice(0, 20) };
 }
 
 async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: number }> {
@@ -5648,6 +5660,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json(await processNextJob(env));
   }
 
+  if (url.pathname === "/api/process-batch" && request.method === "POST") {
+    return json({ ok: true, ...(await drainResearchBacklogConcurrently(env)) });
+  }
+
   if (url.pathname === "/api/requeue-pending" && request.method === "POST") {
     return json({ ok: true, ...(await requeuePendingJobs(env, limit)) });
   }
@@ -5804,6 +5820,7 @@ export default {
           "/api/predictions",
           "/api/predictions/outcomes",
           "/api/predictions/process",
+          "/api/process-batch",
           "/api/research/recover",
           "/api/research/remediate-failed",
           "/api/research/reset-first-pass-queue",
