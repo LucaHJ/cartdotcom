@@ -326,6 +326,7 @@ const SOURCES: Source[] = [
 const ARTICLE_CONTENT_MAX_CHARS = 120_000;
 const ARTICLE_FETCH_TIMEOUT_MS = 15_000;
 const ARTICLE_INGESTION_MAX_AGE_DAYS = 2;
+const SOURCE_EXPANSION_CUTOFF = "2026-07-18T08:28:55Z";
 const RESEARCH_CONTAINER_COUNT = 4;
 const QUEUE_DRAIN_MAX_JOBS = 8;
 const QUEUE_DRAIN_MAX_MS = 4 * 60 * 1000;
@@ -350,6 +351,58 @@ async function pruneLegacyFirstPassBacklog(db: D1Database): Promise<{ cancelled:
     "UPDATE articles SET status = 'archived' WHERE status != 'archived' AND EXISTS (SELECT 1 FROM research_jobs WHERE research_jobs.article_id = articles.id AND research_jobs.status = 'cancelled' AND research_jobs.last_error = 'Cancelled pre-cohort first-pass backlog')",
   ).run();
   return { cancelled: Number(cancelled.meta?.changes || 0), archived: Number(archived.meta?.changes || 0) };
+}
+
+const STALE_BACKFILL_ARTICLE_SQL = `
+  SELECT articles.id
+  FROM articles
+  WHERE articles.published_at IS NOT NULL
+    AND datetime(articles.published_at) < datetime(articles.discovered_at, '-${ARTICLE_INGESTION_MAX_AGE_DAYS} days')
+    AND NOT EXISTS (
+      SELECT 1
+      FROM research_results AS preserved_results
+      WHERE preserved_results.article_id = articles.id
+        AND datetime(preserved_results.created_at) < datetime(?)
+    )
+`;
+
+async function purgeStaleHistoricalBackfill(env: Env): Promise<Record<string, number | string>> {
+  await ensurePredictionOutcomeTables(env);
+  const db = env.NEWS_DB;
+  const articleFilter = `article_id IN (${STALE_BACKFILL_ARTICLE_SQL})`;
+  const resultFilter = `result_id IN (SELECT id FROM research_results WHERE ${articleFilter})`;
+  const outcomeFilter = `outcome_id IN (SELECT id FROM prediction_outcomes WHERE ${articleFilter})`;
+  const bindCutoff = (sql: string) => db.prepare(sql).bind(SOURCE_EXPANSION_CUTOFF);
+
+  const [articles, results, outcomes, dailyPoints] = await Promise.all([
+    bindCutoff(`SELECT COUNT(*) AS count FROM articles WHERE id IN (${STALE_BACKFILL_ARTICLE_SQL})`).first<{ count: number }>(),
+    bindCutoff(`SELECT COUNT(*) AS count FROM research_results WHERE ${articleFilter}`).first<{ count: number }>(),
+    bindCutoff(`SELECT COUNT(*) AS count FROM prediction_outcomes WHERE ${articleFilter}`).first<{ count: number }>(),
+    bindCutoff(`SELECT COUNT(*) AS count FROM prediction_daily_points_v2 WHERE ${outcomeFilter}`).first<{ count: number }>(),
+  ]);
+
+  await db.batch([
+    bindCutoff(`DELETE FROM prediction_daily_points_v2 WHERE ${outcomeFilter}`),
+    bindCutoff(`DELETE FROM prediction_outcome_scans WHERE ${resultFilter}`),
+    bindCutoff(`DELETE FROM simulation_trades WHERE ${resultFilter}`),
+    bindCutoff(`DELETE FROM simulation_processed_results WHERE ${resultFilter}`),
+    bindCutoff(`DELETE FROM prediction_outcomes WHERE ${articleFilter}`),
+    bindCutoff(`DELETE FROM price_impacts WHERE ${articleFilter}`),
+    bindCutoff(
+      `UPDATE research_jobs SET status = 'cancelled', last_error = 'Purged stale historical backfill', finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, prediction_delay_eligible = 0, research_slot = NULL WHERE ${articleFilter}`,
+    ),
+    bindCutoff(`DELETE FROM research_results WHERE ${articleFilter}`),
+    bindCutoff(`UPDATE articles SET status = 'archived' WHERE id IN (${STALE_BACKFILL_ARTICLE_SQL})`),
+  ]);
+
+  return {
+    archived_articles: Number(articles?.count || 0),
+    deleted_results: Number(results?.count || 0),
+    deleted_outcomes: Number(outcomes?.count || 0),
+    deleted_daily_points: Number(dailyPoints?.count || 0),
+    preserved_before: SOURCE_EXPANSION_CUTOFF,
+    acquisition_window_days: ARTICLE_INGESTION_MAX_AGE_DAYS,
+  };
 }
 
 async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
@@ -3427,6 +3480,14 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   try {
     article = await captureArticleContent(env, article);
     const memo = await runContainerResearch(env, researchPrompt(article), researchSlot);
+    const activeLease = await env.NEWS_DB.prepare(
+      "SELECT research_jobs.status AS job_status, articles.status AS article_status FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE research_jobs.id = ?",
+    )
+      .bind(jobId)
+      .first<{ job_status: string; article_status: string }>();
+    if (activeLease?.job_status !== "running" || activeLease.article_status === "archived") {
+      return { ok: true, jobId, skipped: "archived_during_research" };
+    }
     const fields = parseResearchFields(memo);
     const validationError = validateResearchFields(fields);
     if (validationError) throw new Error(`Codex returned an invalid structured analysis: ${validationError}`);
@@ -5024,6 +5085,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...(await backfillArticleContents(env, limit)) });
   }
 
+  if (url.pathname === "/api/articles/purge-stale-backfill" && request.method === "POST") {
+    return json({ ok: true, ...(await purgeStaleHistoricalBackfill(env)) });
+  }
+
   if (url.pathname === "/api/articles") {
     return json({
       ok: true,
@@ -5183,6 +5248,7 @@ export default {
           "/api/articles",
           "/api/articles/content?id=ARTICLE_ID",
           "/api/articles/backfill",
+          "/api/articles/purge-stale-backfill",
           "/api/jobs",
           "/api/results",
           "/api/ticker-signals",
