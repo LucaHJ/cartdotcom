@@ -3196,11 +3196,21 @@ async function runContainerResearch(env: Env, prompt: string): Promise<string> {
   return payload.memo;
 }
 
-async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId: string; skipped?: string }> {
-  await ensureArticleStorageSchema(env.NEWS_DB);
-  await env.NEWS_DB.prepare(
+async function normalizeResearchJobConcurrency(env: Env): Promise<{ stale: number; excess: number }> {
+  const stale = await env.NEWS_DB.prepare(
     "UPDATE research_jobs SET status = 'pending', last_error = 'Reset stale running job', finished_at = CURRENT_TIMESTAMP WHERE status = 'running' AND datetime(started_at) < datetime('now', '-20 minutes')",
   ).run();
+  const excess = await env.NEWS_DB.prepare(
+    "UPDATE research_jobs SET status = 'pending', last_error = 'Released excess concurrent research job', started_at = NULL, finished_at = CURRENT_TIMESTAMP WHERE id IN (SELECT id FROM research_jobs WHERE status = 'running' ORDER BY datetime(started_at) ASC LIMIT -1 OFFSET ?)",
+  )
+    .bind(RESEARCH_CONTAINER_COUNT)
+    .run();
+  return { stale: Number(stale.meta?.changes || 0), excess: Number(excess.meta?.changes || 0) };
+}
+
+async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId: string; skipped?: string }> {
+  await ensureArticleStorageSchema(env.NEWS_DB);
+  await normalizeResearchJobConcurrency(env);
 
   const existing = await env.NEWS_DB.prepare("SELECT status FROM research_jobs WHERE id = ?").bind(jobId).first<{ status: string }>();
   if (!existing) return { ok: false, jobId, skipped: "missing" };
@@ -3209,9 +3219,9 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   if (existing.status !== "pending") return { ok: false, jobId, skipped: existing.status };
 
   const acquired = await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL WHERE id = ? AND status = 'pending'",
+    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ?",
   )
-    .bind(jobId)
+    .bind(jobId, RESEARCH_CONTAINER_COUNT)
     .run();
   if (!acquired.meta?.changes) throw new ResearchBusyError();
 
@@ -4812,6 +4822,12 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...(await requeuePendingJobs(env, limit)) });
   }
 
+  if (url.pathname === "/api/research/recover" && request.method === "POST") {
+    const normalized = await normalizeResearchJobConcurrency(env);
+    const requeued = await requeuePendingJobs(env, limit);
+    return json({ ok: true, ...normalized, ...requeued });
+  }
+
   if (url.pathname === "/api/reanalyze-recent" && request.method === "POST") {
     return json({ ok: true, ...(await reanalyzeRecentJobs(env, limit)) });
   }
@@ -4902,6 +4918,7 @@ export default {
           "/api/predictions",
           "/api/predictions/outcomes",
           "/api/predictions/process",
+          "/api/research/recover",
           "/api/reanalyze-recent",
           "/api/reanalyze-legacy",
           "/container/health",
@@ -4920,6 +4937,7 @@ export default {
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       ingestFeeds(env).then(async () => {
+        await normalizeResearchJobConcurrency(env);
         await archiveTickerlessArticles(env);
         await requeuePendingJobs(env, 25);
         await Promise.all([
