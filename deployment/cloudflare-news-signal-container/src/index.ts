@@ -326,6 +326,8 @@ const SOURCES: Source[] = [
 const ARTICLE_CONTENT_MAX_CHARS = 120_000;
 const ARTICLE_FETCH_TIMEOUT_MS = 15_000;
 const RESEARCH_CONTAINER_COUNT = 4;
+const QUEUE_DRAIN_MAX_JOBS = 8;
+const QUEUE_DRAIN_MAX_MS = 4 * 60 * 1000;
 let articleStorageSchemaReady: Promise<void> | null = null;
 
 async function addColumnIfMissing(db: D1Database, table: string, column: string, definition: string): Promise<void> {
@@ -3430,6 +3432,32 @@ async function processNextJob(env: Env): Promise<{ ok: boolean; jobId?: string; 
   return processJob(env, job.id);
 }
 
+async function drainResearchBacklog(env: Env): Promise<number> {
+  const deadline = Date.now() + QUEUE_DRAIN_MAX_MS;
+  let processed = 0;
+  let consecutiveBusy = 0;
+  while (processed < QUEUE_DRAIN_MAX_JOBS && Date.now() < deadline) {
+    try {
+      const result = await processNextJob(env);
+      if (result.skipped === "no_pending_jobs") break;
+      if (!result.skipped) {
+        processed += 1;
+        consecutiveBusy = 0;
+        await processPredictionOutcomes(env, 5).catch((error) => console.error("Backlog prediction outcome processing failed", error));
+      }
+    } catch (error) {
+      if (!(error instanceof ResearchBusyError)) {
+        console.error("Backlog research processing failed", error);
+        break;
+      }
+      consecutiveBusy += 1;
+      if (consecutiveBusy >= RESEARCH_CONTAINER_COUNT) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  return processed;
+}
+
 async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: number }> {
   const clamped = Math.min(Math.max(limit, 1), 100);
   const pending = await env.NEWS_DB.prepare("SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY queued_at ASC LIMIT ?")
@@ -5138,6 +5166,7 @@ export default {
         await processJob(env, message.body.jobId);
         await processPredictionOutcomes(env, 5).catch((error) => console.error("Queue prediction outcome processing failed", error));
         message.ack();
+        await drainResearchBacklog(env);
       } catch (error) {
         if (error instanceof ResearchBusyError) {
           message.retry({ delaySeconds: 5 });
