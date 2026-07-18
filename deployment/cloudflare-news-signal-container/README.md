@@ -7,6 +7,7 @@ Routes:
 - `GET /dashboard` - Browser dashboard for status, articles, jobs, and research results.
 - `GET /health` - Worker health.
 - `GET /api/status` - Counts for articles, jobs, and results.
+- `GET /api/status/live` - Lightweight live job counts, timing averages, and queue ETA.
 - `GET /api/sources` - Configured editorial, regulator, first-party, and press-release feeds.
 - `GET /api/articles` - Recently discovered article metadata and plaintext capture status.
 - `GET /api/articles/content?id=ARTICLE_ID` - Stored source link, publication date, and plaintext content for one article.

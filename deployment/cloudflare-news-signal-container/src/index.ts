@@ -1,4 +1,4 @@
-import { Container, getContainer, getRandom } from "@cloudflare/containers";
+import { Container, getContainer } from "@cloudflare/containers";
 
 type Source = {
   id: string;
@@ -349,8 +349,20 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
       await addColumnIfMissing(db, "articles", "content_fetched_at", "TEXT");
       await addColumnIfMissing(db, "articles", "content_fetch_attempts", "INTEGER NOT NULL DEFAULT 0");
       await addColumnIfMissing(db, "articles", "content_error", "TEXT");
+      await addColumnIfMissing(db, "research_jobs", "synthesis_duration_seconds", "INTEGER");
+      await addColumnIfMissing(db, "research_jobs", "prediction_delay_seconds", "INTEGER");
+      await addColumnIfMissing(db, "research_jobs", "research_slot", "INTEGER");
       await db.prepare(
         "CREATE INDEX IF NOT EXISTS idx_articles_content_backfill ON articles(content_status, content_fetch_attempts, discovered_at)",
+      ).run();
+      await db.prepare(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_research_jobs_running_slot ON research_jobs(research_slot) WHERE status = 'running' AND research_slot IS NOT NULL",
+      ).run();
+      await db.prepare(
+        "UPDATE research_jobs SET synthesis_duration_seconds = MAX(0, unixepoch(finished_at) - unixepoch(started_at)) WHERE synthesis_duration_seconds IS NULL AND started_at IS NOT NULL AND finished_at IS NOT NULL AND status IN ('succeeded', 'failed')",
+      ).run();
+      await db.prepare(
+        "UPDATE research_jobs SET prediction_delay_seconds = (SELECT MAX(0, unixepoch(research_results.created_at) - unixepoch(articles.published_at)) FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE research_results.job_id = research_jobs.id AND articles.published_at IS NOT NULL AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]')) WHERE prediction_delay_seconds IS NULL AND status = 'succeeded'",
       ).run();
     })().catch((error) => {
       articleStorageSchemaReady = null;
@@ -476,7 +488,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .metrics {
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 
     .metric, .panel, .result {
@@ -1191,6 +1203,11 @@ const DASHBOARD_HTML = `<!doctype html>
       font-size: 12px;
     }
 
+    .job-timing {
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
     .prediction-page-loader {
       display: grid;
       gap: 8px;
@@ -1231,6 +1248,7 @@ const DASHBOARD_HTML = `<!doctype html>
         <h1>News Signal Dashboard</h1>
         <div class="subhead">
           <span id="last-updated">Not loaded</span>
+          <span id="live-status-updated">Live status waiting</span>
           <span id="auth-state">Token not set</span>
         </div>
       </div>
@@ -1250,11 +1268,11 @@ const DASHBOARD_HTML = `<!doctype html>
     <section class="grid metrics" id="metrics"></section>
 
     <nav class="tabs" aria-label="Dashboard sections">
-      <button class="tab active" id="overview-tab" type="button">Overview</button>
-      <button class="tab" id="simulation-tab" type="button">Prediction Accuracy</button>
+      <button class="tab active" id="simulation-tab" type="button">Prediction Accuracy</button>
+      <button class="tab" id="overview-tab" type="button">Overview</button>
     </nav>
 
-    <section id="overview-panel">
+    <section id="overview-panel" class="hidden">
       <section class="panel">
         <div class="panel-header">
           <div class="panel-title">Event Summaries</div>
@@ -1285,7 +1303,7 @@ const DASHBOARD_HTML = `<!doctype html>
       </section>
     </section>
 
-    <section id="simulation-panel" class="hidden">
+    <section id="simulation-panel">
       <section class="panel">
         <div class="model-blurb">Prediction Accuracy tracks every bullish or bearish ticker prediction against real market movement. Price collection continues for every call at 12h, 24h, 48h, 1w, 2w, 1m, 3m, 6m, 1y, 2y, 3y, and 4y. A call contributes to the accuracy charts only until a later opposite call is made for the same ticker; same-direction calls continue in parallel.</div>
         <div class="panel-header">
@@ -1316,6 +1334,7 @@ const DASHBOARD_HTML = `<!doctype html>
     const tokenInput = document.getElementById("token-input");
     const authState = document.getElementById("auth-state");
     const lastUpdated = document.getElementById("last-updated");
+    const liveStatusUpdated = document.getElementById("live-status-updated");
     const metricsEl = document.getElementById("metrics");
     const resultsEl = document.getElementById("results");
     const jobsEl = document.getElementById("jobs");
@@ -1369,6 +1388,9 @@ const DASHBOARD_HTML = `<!doctype html>
     let predictionTotal = 0;
     let predictionLastArticleKey = null;
     let predictionObserver = null;
+    let latestStatus = null;
+    let liveStatusTimer = null;
+    let liveStatusLoading = false;
     const predictionLoadedArticles = new Set();
     const predictionFilters = { direction: "all", confidenceBin: null };
     const PREDICTION_PAGE_SIZE = 50;
@@ -1399,6 +1421,7 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionsLoaded = false;
       eodSimulationLoaded = false;
       syncAuthState();
+      startLiveStatusPolling();
       loadAll();
     });
 
@@ -1408,6 +1431,8 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionsLoaded = false;
       eodSimulationLoaded = false;
       syncAuthState();
+      stopLiveStatusPolling();
+      liveStatusUpdated.textContent = "Live status waiting";
     });
 
     document.getElementById("refresh-btn").addEventListener("click", loadAll);
@@ -1530,11 +1555,13 @@ const DASHBOARD_HTML = `<!doctype html>
           api("/api/results?limit=20"),
           api("/api/jobs?limit=12"),
         ]);
-        renderMetrics(status);
+        latestStatus = status;
+        renderMetrics(latestStatus);
         renderResults(results.results || []);
         renderJobs(jobs.jobs || []);
         renderArticles(results.results || []);
-        lastUpdated.textContent = "Updated " + new Date().toLocaleTimeString();
+        lastUpdated.textContent = "Data refreshed " + new Date().toLocaleTimeString();
+        liveStatusUpdated.textContent = "Live status " + new Date().toLocaleTimeString();
         if (!simulationPanel.classList.contains("hidden")) {
           predictionsLoaded = false;
           await loadPredictions();
@@ -1573,6 +1600,43 @@ const DASHBOARD_HTML = `<!doctype html>
         setBusy(false);
       }
     }
+
+    function mergeLiveStatus(current, live) {
+      if (!current) return current;
+      const jobCounts = new Map((current.jobs || []).map((item) => [item.status, item]));
+      for (const item of live.jobs || []) jobCounts.set(item.status, item);
+      return { ...current, jobs: [...jobCounts.values()], timing: live.timing || current.timing };
+    }
+
+    async function refreshLiveStatus() {
+      if (liveStatusLoading || document.hidden || !tokenInput.value.trim()) return;
+      liveStatusLoading = true;
+      try {
+        const live = await api("/api/status/live");
+        latestStatus = mergeLiveStatus(latestStatus, live);
+        if (latestStatus) renderMetrics(latestStatus);
+        liveStatusUpdated.textContent = "Live status " + new Date().toLocaleTimeString();
+      } catch (error) {
+        liveStatusUpdated.textContent = "Live status unavailable";
+      } finally {
+        liveStatusLoading = false;
+      }
+    }
+
+    function startLiveStatusPolling() {
+      if (liveStatusTimer) return;
+      liveStatusTimer = setInterval(refreshLiveStatus, 5000);
+    }
+
+    function stopLiveStatusPolling() {
+      if (!liveStatusTimer) return;
+      clearInterval(liveStatusTimer);
+      liveStatusTimer = null;
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) refreshLiveStatus();
+    });
 
     async function reloadPredictionOutcomes() {
       const requestVersion = ++predictionRequestVersion;
@@ -1651,7 +1715,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function showInitialSkeletons() {
-      metricsEl.innerHTML = Array.from({ length: 5 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
+      metricsEl.innerHTML = Array.from({ length: 7 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
       resultsEl.innerHTML = Array.from({ length: 5 }, () => '<div class="skeleton-result"><span class="skeleton-block skeleton-line long"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
       jobsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
       articlesEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
@@ -1680,12 +1744,18 @@ const DASHBOARD_HTML = `<!doctype html>
       const succeeded = count(status.jobs, "succeeded");
       const failed = count(status.jobs, "failed");
       const results = Number((status.results && status.results.count) || 0);
+      const timing = status.timing || {};
+      const capacity = Number(timing.parallel_capacity || 4);
+      const synthesisSamples = Number(timing.synthesis_samples || 0);
+      const delaySamples = Number(timing.prediction_delay_samples || 0);
       metricsEl.innerHTML = [
         metric("Articles", analyzed + queued, analyzed + " actionable analyzed, " + queued + " queued"),
         metric("Results", results, succeeded + " succeeded"),
-        metric("Running", running, "Parallel Codex jobs (maximum 4)"),
-        metric("Pending", pending, "Queued for research"),
+        metric("Running", running, running + " of " + capacity + " parallel Codex workers active"),
+        metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers"),
         metric("Failed", failed, "Needs review"),
+        metric("Avg synthesis", formatDuration(timing.average_synthesis_seconds), synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s")),
+        metric("Avg prediction delay", formatDuration(timing.average_prediction_delay_seconds), delaySamples + " publication-to-ticker prediction sample" + (delaySamples === 1 ? "" : "s")),
       ].join("");
     }
 
@@ -1754,11 +1824,34 @@ const DASHBOARD_HTML = `<!doctype html>
         jobsEl.innerHTML = '<div class="empty">No jobs.</div>';
         return;
       }
-      jobsEl.innerHTML = table(["Status", "Attempts", "Article"], jobs.map((job) => [
+      const renderedAt = Date.now();
+      jobsEl.innerHTML = table(["Status", "Worker", "Duration", "Post to prediction", "Attempts", "Article"], jobs.map((job) => {
+        const duration = job.elapsed_synthesis_seconds === null || job.elapsed_synthesis_seconds === undefined
+          ? Number.NaN
+          : Number(job.elapsed_synthesis_seconds);
+        const durationText = formatDuration(duration);
+        const durationHtml = job.status === "running" && Number.isFinite(duration)
+          ? '<span class="job-timing" data-running-job-timer data-base-seconds="' + escapeAttr(duration) + '" data-rendered-at="' + renderedAt + '">' + escapeHtml(durationText) + '</span>'
+          : '<span class="job-timing">' + escapeHtml(durationText) + '</span>';
+        return [
         pill(job.status || "unknown", statusClass(job.status), "Current durable research job state in D1 and Cloudflare Queues."),
+        escapeHtml(job.status === "running" && Number.isInteger(Number(job.research_slot)) ? "#" + (Number(job.research_slot) + 1) : "n/a"),
+        durationHtml,
+        '<span class="job-timing" title="Elapsed time from the article publication timestamp to entry of its actionable ticker prediction.">' + escapeHtml(formatDuration(job.prediction_delay_seconds)) + '</span>',
         escapeHtml(String(job.attempts || 0)),
         '<a class="truncate" href="' + escapeAttr(job.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(job.title || job.article_id || "Article") + '</a>',
-      ]));
+        ];
+      }));
+    }
+
+    function updateRunningJobTimers() {
+      const now = Date.now();
+      for (const timer of document.querySelectorAll("[data-running-job-timer]")) {
+        const base = Number(timer.getAttribute("data-base-seconds"));
+        const renderedAt = Number(timer.getAttribute("data-rendered-at"));
+        if (!Number.isFinite(base) || !Number.isFinite(renderedAt)) continue;
+        timer.textContent = formatDuration(base + Math.max(0, Math.floor((now - renderedAt) / 1000)));
+      }
     }
 
     function renderArticles(results) {
@@ -2570,6 +2663,20 @@ const DASHBOARD_HTML = `<!doctype html>
       return Number.isFinite(date.getTime()) ? date.toLocaleString() : String(value);
     }
 
+    function formatDuration(value) {
+      if (value === null || value === undefined || value === "") return "n/a";
+      const totalSeconds = Math.max(0, Math.round(Number(value)));
+      if (!Number.isFinite(totalSeconds)) return "n/a";
+      const days = Math.floor(totalSeconds / 86400);
+      const hours = Math.floor((totalSeconds % 86400) / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      if (days) return days + "d " + hours + "h";
+      if (hours) return hours + "h " + minutes + "m";
+      if (minutes) return minutes + "m " + seconds + "s";
+      return seconds + "s";
+    }
+
     function formatShortDate(value) {
       if (!value) return "";
       const date = new Date(value);
@@ -2613,7 +2720,11 @@ const DASHBOARD_HTML = `<!doctype html>
       return escapeHtml(value).replace(/\\n/g, " ");
     }
 
-    if (tokenInput.value.trim()) loadAll();
+    setInterval(updateRunningJobTimers, 1000);
+    if (tokenInput.value.trim()) {
+      startLiveStatusPolling();
+      loadAll();
+    }
   </script>
 </body>
 </html>`;
@@ -3178,8 +3289,8 @@ function extractFirstJsonObject(value: string): string | null {
   return null;
 }
 
-async function runContainerResearch(env: Env, prompt: string): Promise<string> {
-  const container = await getRandom(env.CODEX_CONTAINER, RESEARCH_CONTAINER_COUNT);
+async function runContainerResearch(env: Env, prompt: string, researchSlot: number): Promise<string> {
+  const container = getContainer(env.CODEX_CONTAINER, `instance-${researchSlot}`);
   await startWithSecrets(container, env);
   const response = await container.fetch(
     new Request("https://container.local/research-internal", {
@@ -3199,11 +3310,11 @@ async function runContainerResearch(env: Env, prompt: string): Promise<string> {
 async function normalizeResearchJobConcurrency(env: Env, force = false): Promise<{ stale: number; excess: number }> {
   const stale = await env.NEWS_DB.prepare(
     force
-      ? "UPDATE research_jobs SET status = 'pending', last_error = 'Force-released interrupted research job', started_at = NULL, finished_at = CURRENT_TIMESTAMP WHERE status = 'running'"
-      : "UPDATE research_jobs SET status = 'pending', last_error = 'Reset stale running job', started_at = NULL, finished_at = CURRENT_TIMESTAMP WHERE status = 'running' AND datetime(started_at) < datetime('now', '-8 minutes')",
+      ? "UPDATE research_jobs SET status = 'pending', last_error = 'Force-released interrupted research job', started_at = NULL, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE status = 'running'"
+      : "UPDATE research_jobs SET status = 'pending', last_error = 'Reset stale running job', started_at = NULL, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE status = 'running' AND datetime(started_at) < datetime('now', '-8 minutes')",
   ).run();
   const excess = await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'pending', last_error = 'Released excess concurrent research job', started_at = NULL, finished_at = CURRENT_TIMESTAMP WHERE id IN (SELECT id FROM research_jobs WHERE status = 'running' ORDER BY datetime(started_at) ASC LIMIT -1 OFFSET ?)",
+    "UPDATE research_jobs SET status = 'pending', last_error = 'Released excess concurrent research job', started_at = NULL, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE id IN (SELECT id FROM research_jobs WHERE status = 'running' ORDER BY datetime(started_at) ASC LIMIT -1 OFFSET ?)",
   )
     .bind(RESEARCH_CONTAINER_COUNT)
     .run();
@@ -3221,11 +3332,24 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   if (existing.status !== "pending") return { ok: false, jobId, skipped: existing.status };
 
   const acquired = await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ?",
+    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT slot FROM (SELECT 0 AS slot UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = slots.slot) ORDER BY slot LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ?",
   )
     .bind(jobId, RESEARCH_CONTAINER_COUNT)
     .run();
   if (!acquired.meta?.changes) throw new ResearchBusyError();
+
+  const lease = await env.NEWS_DB.prepare("SELECT research_slot FROM research_jobs WHERE id = ?")
+    .bind(jobId)
+    .first<{ research_slot: number | null }>();
+  if (!lease || !Number.isInteger(lease.research_slot)) {
+    await env.NEWS_DB.prepare(
+      "UPDATE research_jobs SET status = 'pending', last_error = 'No research container slot was available', started_at = NULL, finished_at = CURRENT_TIMESTAMP, research_slot = NULL WHERE id = ?",
+    )
+      .bind(jobId)
+      .run();
+    throw new ResearchBusyError();
+  }
+  const researchSlot = Number(lease.research_slot);
 
   let article = await env.NEWS_DB.prepare(
     "SELECT articles.id, articles.source_id, articles.title, articles.url, articles.summary, articles.published_at, articles.discovered_at, articles.content_plaintext, articles.content_source, articles.content_status, articles.content_fetched_at, articles.content_fetch_attempts, articles.content_error, sources.name AS source_name, sources.source_type, sources.weight AS source_weight FROM articles LEFT JOIN sources ON sources.id = articles.source_id WHERE articles.id = (SELECT article_id FROM research_jobs WHERE id = ?)",
@@ -3235,7 +3359,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
 
   if (!article) {
     await env.NEWS_DB.prepare(
-      "UPDATE research_jobs SET status = 'failed', last_error = 'Article not found', finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+      "UPDATE research_jobs SET status = 'failed', last_error = 'Article not found', finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)), prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
     )
       .bind(jobId)
       .run();
@@ -3244,7 +3368,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
 
   try {
     article = await captureArticleContent(env, article);
-    const memo = await runContainerResearch(env, researchPrompt(article));
+    const memo = await runContainerResearch(env, researchPrompt(article), researchSlot);
     const fields = parseResearchFields(memo);
     const validationError = validateResearchFields(fields);
     if (validationError) throw new Error(`Codex returned an invalid structured analysis: ${validationError}`);
@@ -3275,7 +3399,9 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
         fields.event_blurb || fields.summary || null,
         memo,
       ),
-      env.NEWS_DB.prepare("UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?").bind(jobId),
+      env.NEWS_DB.prepare(
+        "UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)), prediction_delay_seconds = CASE WHEN ? > 0 THEN (SELECT CASE WHEN published_at IS NULL THEN NULL ELSE MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(published_at)) END FROM articles WHERE id = research_jobs.article_id) ELSE NULL END, research_slot = NULL WHERE id = ?",
+      ).bind(symbols.length, jobId),
       env.NEWS_DB.prepare("UPDATE articles SET status = ? WHERE id = ?").bind(symbols.length ? "analyzed" : "archived", article.id),
     ]);
     await ensurePredictionOutcomeTables(env);
@@ -3288,7 +3414,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await env.NEWS_DB.prepare(
-      "UPDATE research_jobs SET status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END, last_error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+      "UPDATE research_jobs SET status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END, last_error = ?, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = CASE WHEN attempts >= 3 THEN MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)) ELSE NULL END, prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
     )
       .bind(message.slice(0, 1000), jobId)
       .run();
@@ -3328,7 +3454,7 @@ async function reanalyzeRecentJobs(env: Env, limit = 20): Promise<{ requeued: nu
   for (const job of jobs.results || []) {
     await env.NEWS_DB.batch([
       env.NEWS_DB.prepare(
-        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL WHERE id = ?",
+        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
       ).bind(job.id),
       env.NEWS_DB.prepare("UPDATE articles SET status = 'queued' WHERE id = ?").bind(job.article_id),
       env.NEWS_DB.prepare("DELETE FROM price_impacts WHERE article_id = ?").bind(job.article_id),
@@ -3351,7 +3477,7 @@ async function reanalyzeLegacyJobs(env: Env, limit = 100): Promise<{ requeued: n
   for (const job of jobs.results || []) {
     await env.NEWS_DB.batch([
       env.NEWS_DB.prepare(
-        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL WHERE id = ?",
+        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
       ).bind(job.id),
       env.NEWS_DB.prepare("UPDATE articles SET status = 'queued' WHERE id = ?").bind(job.article_id),
       env.NEWS_DB.prepare("DELETE FROM price_impacts WHERE article_id = ?").bind(job.article_id),
@@ -4699,6 +4825,55 @@ async function archiveTickerlessArticles(env: Env): Promise<number> {
   return Number(result.meta?.changes || 0);
 }
 
+async function researchOperationsTelemetry(db: D1Database): Promise<{
+  jobs: Array<{ status: string; count: number }>;
+  timing: {
+    average_synthesis_seconds: number | null;
+    synthesis_samples: number;
+    average_prediction_delay_seconds: number | null;
+    prediction_delay_samples: number;
+    estimated_queue_seconds: number | null;
+    parallel_capacity: number;
+  };
+}> {
+  const row = await db.prepare(
+    "SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, AVG(CASE WHEN status = 'succeeded' THEN synthesis_duration_seconds END) AS average_synthesis_seconds, SUM(CASE WHEN status = 'succeeded' AND synthesis_duration_seconds IS NOT NULL THEN 1 ELSE 0 END) AS synthesis_samples, AVG(CASE WHEN status = 'succeeded' THEN prediction_delay_seconds END) AS average_prediction_delay_seconds, SUM(CASE WHEN status = 'succeeded' AND prediction_delay_seconds IS NOT NULL THEN 1 ELSE 0 END) AS prediction_delay_samples FROM research_jobs",
+  ).first<{
+    pending: number | null;
+    running: number | null;
+    failed: number | null;
+    average_synthesis_seconds: number | null;
+    synthesis_samples: number | null;
+    average_prediction_delay_seconds: number | null;
+    prediction_delay_samples: number | null;
+  }>();
+  const pending = Number(row?.pending || 0);
+  const running = Number(row?.running || 0);
+  const failed = Number(row?.failed || 0);
+  const averageSynthesisSeconds = row?.average_synthesis_seconds === null || row?.average_synthesis_seconds === undefined
+    ? null
+    : Number(row.average_synthesis_seconds);
+  return {
+    jobs: [
+      { status: "pending", count: pending },
+      { status: "running", count: running },
+      { status: "failed", count: failed },
+    ],
+    timing: {
+      average_synthesis_seconds: averageSynthesisSeconds,
+      synthesis_samples: Number(row?.synthesis_samples || 0),
+      average_prediction_delay_seconds: row?.average_prediction_delay_seconds === null || row?.average_prediction_delay_seconds === undefined
+        ? null
+        : Number(row.average_prediction_delay_seconds),
+      prediction_delay_samples: Number(row?.prediction_delay_samples || 0),
+      estimated_queue_seconds: averageSynthesisSeconds === null
+        ? null
+        : Math.ceil(((pending + running) * averageSynthesisSeconds) / RESEARCH_CONTAINER_COUNT),
+      parallel_capacity: RESEARCH_CONTAINER_COUNT,
+    },
+  };
+}
+
 function predictionFiltersFromUrl(url: URL): PredictionOutcomeFilters {
   const directionValue = url.searchParams.get("direction");
   const direction = directionValue === "bullish" || directionValue === "bearish" ? directionValue : null;
@@ -4728,13 +4903,19 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
   if (url.pathname === "/api/status") {
     await archiveTickerlessArticles(env);
-    const [articles, jobs, results, content] = await Promise.all([
+    const [articles, jobs, results, content, operations] = await Promise.all([
       env.NEWS_DB.prepare("SELECT status, COUNT(*) AS count FROM articles WHERE status != 'archived' GROUP BY status").all(),
       env.NEWS_DB.prepare("SELECT research_jobs.status, COUNT(*) AS count FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE articles.status != 'archived' AND (research_jobs.status != 'succeeded' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) GROUP BY research_jobs.status").all(),
       env.NEWS_DB.prepare("SELECT COUNT(*) AS count FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE articles.status != 'archived' AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]')").first(),
       env.NEWS_DB.prepare("SELECT content_status AS status, COUNT(*) AS count FROM articles GROUP BY content_status").all(),
+      researchOperationsTelemetry(env.NEWS_DB),
     ]);
-    return json({ ok: true, articles: articles.results, jobs: jobs.results, results, content: content.results });
+    return json({ ok: true, articles: articles.results, jobs: jobs.results, results, content: content.results, timing: operations.timing });
+  }
+
+  if (url.pathname === "/api/status/live") {
+    const operations = await researchOperationsTelemetry(env.NEWS_DB);
+    return json({ ok: true, ...operations });
   }
 
   if (url.pathname === "/api/sources") {
@@ -4773,7 +4954,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       ok: true,
       jobs: await listRows(
         env.NEWS_DB,
-        "SELECT research_jobs.*, articles.title, articles.url FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE articles.status != 'archived' AND (research_jobs.status != 'succeeded' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) ORDER BY queued_at DESC LIMIT ?",
+        "SELECT research_jobs.*, articles.title, articles.url, articles.published_at, CASE WHEN research_jobs.status = 'running' AND research_jobs.started_at IS NOT NULL THEN MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(research_jobs.started_at)) ELSE research_jobs.synthesis_duration_seconds END AS elapsed_synthesis_seconds FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE articles.status != 'archived' AND (research_jobs.status != 'succeeded' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) ORDER BY CASE WHEN research_jobs.status = 'running' THEN 0 ELSE 1 END, queued_at DESC LIMIT ?",
         limit,
       ),
     });
@@ -4910,6 +5091,7 @@ export default {
           "/dashboard",
           "/health",
           "/api/status",
+          "/api/status/live",
           "/api/ingest",
           "/api/articles",
           "/api/articles/content?id=ARTICLE_ID",
@@ -4958,7 +5140,7 @@ export default {
         message.ack();
       } catch (error) {
         if (error instanceof ResearchBusyError) {
-          message.retry({ delaySeconds: 30 });
+          message.retry({ delaySeconds: 5 });
           continue;
         }
         throw error;
