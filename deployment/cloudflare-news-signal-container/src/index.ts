@@ -79,6 +79,13 @@ type PredictionPoint = PricePoint & {
   counts_toward_accuracy?: boolean;
 };
 
+type PredictionDailyPoint = {
+  day_index: number;
+  at: string;
+  price: number;
+  change_pct: number;
+};
+
 type PriceImpact = {
   article_id: string;
   title: string;
@@ -120,6 +127,7 @@ type PredictionOutcome = {
   baseline_price: number | null;
   baseline_at: string | null;
   intervals: Record<string, PredictionPoint>;
+  daily_points?: PredictionDailyPoint[];
   updated_at: string;
 };
 
@@ -959,6 +967,55 @@ const DASHBOARD_HTML = `<!doctype html>
       gap: 2px;
     }
 
+    .prediction-trend-section {
+      border-top: 1px solid var(--line);
+      padding: 14px;
+    }
+
+    .prediction-trend-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .prediction-trend-title {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .prediction-trend-meta {
+      color: var(--muted);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .prediction-trend-chart {
+      width: 100%;
+      height: 320px;
+      min-height: 320px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfe;
+    }
+
+    .prediction-trend-chart svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .prediction-trend-chart .empty {
+      min-height: 318px;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      text-align: center;
+    }
+
     .prediction-filterbar {
       display: flex;
       align-items: end;
@@ -1050,6 +1107,8 @@ const DASHBOARD_HTML = `<!doctype html>
       .prediction-outcomes-table th:nth-child(3),
       .prediction-outcomes-table td:nth-child(3) { display: table-cell; }
       .prediction-filter-status { width: 100%; margin-left: 0; }
+      .prediction-trend-heading { align-items: flex-start; flex-direction: column; }
+      .prediction-trend-meta { text-align: left; }
     }
   </style>
 </head>
@@ -1122,6 +1181,13 @@ const DASHBOARD_HTML = `<!doctype html>
           <div class="panel-meta" id="prediction-summary-meta">0 intervals</div>
         </div>
         <div id="prediction-summary"></div>
+        <div class="prediction-trend-section">
+          <div class="prediction-trend-heading">
+            <div class="prediction-trend-title">Average Call Movement Over Time</div>
+            <div class="prediction-trend-meta" id="prediction-trend-meta">Daily history is loading</div>
+          </div>
+          <div class="prediction-trend-chart" id="prediction-trend-chart" aria-live="polite"></div>
+        </div>
       </section>
 
       <section class="panel" style="margin-top:14px">
@@ -1153,6 +1219,8 @@ const DASHBOARD_HTML = `<!doctype html>
     const settingsPanel = document.getElementById("settings-panel");
     const predictionSummaryEl = document.getElementById("prediction-summary");
     const predictionSummaryMeta = document.getElementById("prediction-summary-meta");
+    const predictionTrendChartEl = document.getElementById("prediction-trend-chart");
+    const predictionTrendMeta = document.getElementById("prediction-trend-meta");
     const predictionsEl = document.getElementById("predictions");
     const predictionsMeta = document.getElementById("predictions-meta");
     const liveModelTab = null;
@@ -1179,6 +1247,8 @@ const DASHBOARD_HTML = `<!doctype html>
     let predictionsLoaded = false;
     let predictionSummaryData = [];
     let predictionCoverage = {};
+    let predictionDailySeries = [];
+    let predictionDailyCoverage = {};
     let predictionNextCursor = null;
     let predictionHasMore = false;
     let predictionLoading = false;
@@ -1479,6 +1549,8 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionSummaryMeta.textContent = "Loading interval summary";
       const skeletonCells = Array.from({ length: 66 }, () => '<span class="skeleton-block prediction-skeleton-cell"></span>').join("");
       predictionSummaryEl.innerHTML = '<div class="heatmap-stack"><div class="heatmap-scroll"><div class="prediction-skeleton-grid">' + skeletonCells + '</div></div></div>';
+      predictionTrendMeta.textContent = "Loading daily movement history";
+      predictionTrendChartEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
       predictionsMeta.textContent = "Loading outcomes";
       predictionsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
     }
@@ -1595,7 +1667,10 @@ const DASHBOARD_HTML = `<!doctype html>
     function renderPredictions(payload) {
       predictionSummaryData = payload.summary || [];
       predictionCoverage = payload.coverage || {};
+      predictionDailySeries = payload.daily_series || [];
+      predictionDailyCoverage = payload.daily_coverage || {};
       renderPredictionSummary(predictionSummaryData, predictionCoverage);
+      renderPredictionDailyChart();
       renderPredictionOutcomeShell(false);
       applyPredictionPage(payload, true);
     }
@@ -1776,6 +1851,7 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionFilters.direction = normalizedDirection;
       predictionFilters.confidenceBin = normalizedBin;
       renderPredictionSummary(predictionSummaryData, predictionCoverage);
+      renderPredictionDailyChart();
       reloadPredictionOutcomes();
     }
 
@@ -1858,6 +1934,125 @@ const DASHBOARD_HTML = `<!doctype html>
         accuracy_pct: accurate / samples * 100,
         average_movement_pct: movement / samples,
       };
+    }
+
+    function predictionDailyGroup(direction, confidenceBin) {
+      const grouped = new Map();
+      for (const row of predictionDailySeries) {
+        if (row.direction !== direction) continue;
+        if (confidenceBin !== null && Number(row.confidence_bin) !== confidenceBin) continue;
+        const day = Number(row.day_index);
+        const samples = Number(row.samples || 0);
+        const movement = Number(row.average_movement_pct);
+        if (!Number.isFinite(day) || !samples || !Number.isFinite(movement)) continue;
+        const current = grouped.get(day) || { day, samples: 0, weightedMovement: 0 };
+        current.samples += samples;
+        current.weightedMovement += movement * samples;
+        grouped.set(day, current);
+      }
+      return Array.from(grouped.values())
+        .map((item) => ({ day: item.day, samples: item.samples, movement: item.weightedMovement / item.samples }))
+        .sort((a, b) => a.day - b.day);
+    }
+
+    function renderPredictionDailyChart() {
+      const dailyPredictions = Number(predictionDailyCoverage.daily_predictions || 0);
+      const eligiblePredictions = Number(predictionDailyCoverage.eligible_predictions || 0);
+      const coverageText = dailyPredictions + " of " + eligiblePredictions + " predictions with daily prices" + (dailyPredictions < eligiblePredictions ? " (backfilling)" : "");
+      const confidenceBin = predictionFilters.confidenceBin;
+      const selectedDirection = predictionFilters.direction === "bullish" || predictionFilters.direction === "bearish" ? predictionFilters.direction : null;
+      const confidenceLabel = confidenceBin === null ? "all confidence" : (confidenceBin * 10) + "-" + ((confidenceBin + 1) * 10) + "% confidence";
+      const series = [];
+      let sampleSeries = null;
+
+      if (selectedDirection) {
+        const points = predictionDailyGroup(selectedDirection, confidenceBin);
+        series.push({
+          label: (selectedDirection === "bullish" ? "Bullish" : "Bearish") + " " + confidenceLabel,
+          direction: selectedDirection,
+          points,
+        });
+        sampleSeries = points;
+        predictionTrendMeta.textContent = series[0].label + " - " + coverageText;
+      } else {
+        series.push({ label: "Bullish " + confidenceLabel, direction: "bullish", points: predictionDailyGroup("bullish", confidenceBin) });
+        series.push({ label: "Bearish " + confidenceLabel, direction: "bearish", points: predictionDailyGroup("bearish", confidenceBin) });
+        predictionTrendMeta.textContent = "Bullish and bearish " + confidenceLabel + " - " + coverageText;
+      }
+
+      const populated = series.filter((item) => item.points.length);
+      if (!populated.length) {
+        predictionTrendChartEl.innerHTML = '<div class="empty">Daily price history is being collected. New and existing calls are backfilled automatically in the background.</div>';
+        return;
+      }
+
+      const width = 1000;
+      const height = 300;
+      const pad = { left: 64, right: sampleSeries ? 72 : 28, top: 42, bottom: 46 };
+      const plotWidth = width - pad.left - pad.right;
+      const plotHeight = height - pad.top - pad.bottom;
+      const observedMaxDay = Math.max(0, ...populated.flatMap((item) => item.points.map((point) => point.day)));
+      const oldestAgeDays = Math.max(observedMaxDay, Number(predictionDailyCoverage.oldest_age_days || 0));
+      const xMax = Math.max(1, oldestAgeDays);
+      const movements = populated.flatMap((item) => item.points.map((point) => Number(point.movement)));
+      let movementMin = Math.min(0, ...movements);
+      let movementMax = Math.max(0, ...movements);
+      if (movementMin === movementMax) {
+        movementMin -= 1;
+        movementMax += 1;
+      } else {
+        const movementPad = (movementMax - movementMin) * 0.1;
+        movementMin -= movementPad;
+        movementMax += movementPad;
+      }
+      const movementSpan = movementMax - movementMin || 1;
+      const sampleMax = Math.max(1, ...(sampleSeries || []).map((point) => Number(point.samples || 0)));
+      const xFor = (day) => pad.left + (Number(day) / xMax) * plotWidth;
+      const movementY = (movement) => pad.top + ((movementMax - Number(movement)) / movementSpan) * plotHeight;
+      const sampleY = (samples) => pad.top + ((sampleMax - Number(samples)) / sampleMax) * plotHeight;
+      const colors = { bullish: "#087a55", bearish: "#b42318" };
+
+      const movementGrid = Array.from({ length: 5 }, (_, index) => {
+        const ratio = index / 4;
+        const value = movementMax - ratio * movementSpan;
+        const y = pad.top + ratio * plotHeight;
+        return '<line x1="' + pad.left + '" y1="' + y.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y.toFixed(2) + '" stroke="#e4e9f0"></line>' +
+          '<text x="' + (pad.left - 9) + '" y="' + (y + 4).toFixed(2) + '" fill="#667085" font-size="10" text-anchor="end">' + escapeHtml(signedPct(value)) + '</text>';
+      }).join("");
+
+      const tickDays = Array.from(new Set(Array.from({ length: 6 }, (_, index) => Math.round((index / 5) * xMax))));
+      const xTicks = tickDays.map((day) => {
+        const x = xFor(day);
+        return '<line x1="' + x.toFixed(2) + '" y1="' + pad.top + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="#eef1f5"></line>' +
+          '<text x="' + x.toFixed(2) + '" y="' + (height - 22) + '" fill="#667085" font-size="10" text-anchor="middle">Day ' + day + '</text>';
+      }).join("");
+
+      const movementLines = populated.map((item) => {
+        const path = item.points.map((point, index) => (index ? "L" : "M") + xFor(point.day).toFixed(2) + " " + movementY(point.movement).toFixed(2)).join(" ");
+        const points = item.points.map((point) => '<circle cx="' + xFor(point.day).toFixed(2) + '" cy="' + movementY(point.movement).toFixed(2) + '" r="3" fill="' + colors[item.direction] + '"><title>' + escapeHtml(item.label + ", day " + point.day + ": " + signedPct(point.movement) + " average movement from " + point.samples + " samples") + '</title></circle>').join("");
+        return '<path d="' + path + '" fill="none" stroke="' + colors[item.direction] + '" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' + points;
+      }).join("");
+
+      const sampleMarkup = sampleSeries ? (() => {
+        const samplePath = sampleSeries.map((point, index) => (index ? "L" : "M") + xFor(point.day).toFixed(2) + " " + sampleY(point.samples).toFixed(2)).join(" ");
+        const sampleTicks = [sampleMax, sampleMax / 2, 0].map((value) => {
+          const y = sampleY(value);
+          return '<text x="' + (width - pad.right + 9) + '" y="' + (y + 4).toFixed(2) + '" fill="#7893a8" font-size="10">' + Math.round(value) + '</text>';
+        }).join("");
+        const samplePoints = sampleSeries.map((point) => '<circle cx="' + xFor(point.day).toFixed(2) + '" cy="' + sampleY(point.samples).toFixed(2) + '" r="3" fill="#8aaec7"><title>' + escapeHtml("Day " + point.day + ": " + point.samples + " samples") + '</title></circle>').join("");
+        return '<path d="' + samplePath + '" fill="none" stroke="#8aaec7" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' + samplePoints + sampleTicks +
+          '<text x="' + (width - pad.right + 9) + '" y="20" fill="#7893a8" font-size="10">Samples</text>';
+      })() : "";
+
+      const legend = populated.map((item, index) => {
+        const x = pad.left + index * 170;
+        return '<line x1="' + x + '" y1="20" x2="' + (x + 22) + '" y2="20" stroke="' + colors[item.direction] + '" stroke-width="3"></line><text x="' + (x + 29) + '" y="24" fill="#344054" font-size="11">' + escapeHtml(item.label) + '</text>';
+      }).join("") + (sampleSeries ? '<line x1="' + (pad.left + 340) + '" y1="20" x2="' + (pad.left + 362) + '" y2="20" stroke="#8aaec7" stroke-width="2" stroke-dasharray="6 5"></line><text x="' + (pad.left + 369) + '" y="24" fill="#667085" font-size="11">Daily samples</text>' : "");
+
+      predictionTrendChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Average prediction movement by days since baseline">' +
+        '<text x="8" y="20" fill="#667085" font-size="10">Average movement</text>' + legend + movementGrid + xTicks + movementLines + sampleMarkup +
+        '<text x="' + (pad.left + plotWidth / 2) + '" y="294" fill="#667085" font-size="10" text-anchor="middle">Days since prediction baseline</text>' +
+      '</svg>';
     }
 
     function renderHeatmapCell(cell, direction, interval, band, scale) {
@@ -3153,6 +3348,10 @@ async function ensurePredictionOutcomeTables(env: Env): Promise<void> {
       "CREATE TABLE IF NOT EXISTS prediction_outcome_scans (result_id TEXT PRIMARY KEY, scanned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, outcome_count INTEGER NOT NULL DEFAULT 0, skipped_count INTEGER NOT NULL DEFAULT 0)",
     ),
     env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcome_scans_scanned_at ON prediction_outcome_scans(scanned_at ASC)"),
+    env.NEWS_DB.prepare(
+      "CREATE TABLE IF NOT EXISTS prediction_daily_points (outcome_id TEXT NOT NULL, prediction_at TEXT NOT NULL, day_index INTEGER NOT NULL, sampled_at TEXT NOT NULL, price REAL NOT NULL, change_pct REAL NOT NULL, PRIMARY KEY(outcome_id, day_index))",
+    ),
+    env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_daily_points_day ON prediction_daily_points(day_index)"),
   ]);
 }
 
@@ -3166,6 +3365,68 @@ function predictionDirection(row: ResearchResultRow, detail: ImpactDetail | null
 function predictionIntervalTargets(predictionAt: string): Record<string, number> {
   const base = unixSeconds(predictionAt);
   return Object.fromEntries(PREDICTION_INTERVALS.map((item) => [item.label, base + item.seconds]));
+}
+
+function predictionDailyPoints(
+  predictionAt: string,
+  baseline: { at: number; price: number } | null,
+  chart: { timestamps: number[]; closes: Array<number | null> },
+): PredictionDailyPoint[] {
+  if (!baseline || !Number.isFinite(baseline.price) || baseline.price === 0) return [];
+  const predictionEpoch = unixSeconds(predictionAt);
+  const now = Math.floor(Date.now() / 1000);
+  const byDay = new Map<number, PredictionDailyPoint>();
+  byDay.set(0, {
+    day_index: 0,
+    at: isoFromUnix(baseline.at),
+    price: baseline.price,
+    change_pct: 0,
+  });
+  chart.timestamps.forEach((at, index) => {
+    const price = chart.closes[index];
+    if (at <= predictionEpoch || at > now || typeof price !== "number" || !Number.isFinite(price)) return;
+    const dayIndex = Math.max(1, Math.ceil((at - predictionEpoch) / (24 * 60 * 60)));
+    byDay.set(dayIndex, {
+      day_index: dayIndex,
+      at: isoFromUnix(at),
+      price,
+      change_pct: ((price - baseline.price) / baseline.price) * 100,
+    });
+  });
+  return Array.from(byDay.values()).sort((a, b) => a.day_index - b.day_index);
+}
+
+async function persistPredictionDailyPoints(env: Env, outcome: PredictionOutcome): Promise<void> {
+  const points = outcome.daily_points || [];
+  if (!points.length) return;
+  const existing = await env.NEWS_DB.prepare(
+    "SELECT prediction_at, MAX(day_index) AS max_day FROM prediction_daily_points WHERE outcome_id = ?",
+  )
+    .bind(outcome.id)
+    .first<{ prediction_at: string | null; max_day: number | null }>();
+  const samePredictionTime = existing?.prediction_at && unixSeconds(existing.prediction_at) === unixSeconds(outcome.prediction_at);
+  if (existing?.prediction_at && !samePredictionTime) {
+    await env.NEWS_DB.prepare("DELETE FROM prediction_daily_points WHERE outcome_id = ?").bind(outcome.id).run();
+  }
+  const maxStoredDay = samePredictionTime ? Number(existing?.max_day ?? -1) : -1;
+  const pending = points.filter((point) => point.day_index >= Math.max(0, maxStoredDay - 1));
+  for (let offset = 0; offset < pending.length; offset += 15) {
+    const chunk = pending.slice(offset, offset + 15);
+    const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
+    const bindings = chunk.flatMap((point) => [
+      outcome.id,
+      outcome.prediction_at,
+      point.day_index,
+      point.at,
+      point.price,
+      point.change_pct,
+    ]);
+    await env.NEWS_DB.prepare(
+      `INSERT INTO prediction_daily_points (outcome_id, prediction_at, day_index, sampled_at, price, change_pct) VALUES ${placeholders} ON CONFLICT(outcome_id, day_index) DO UPDATE SET prediction_at = excluded.prediction_at, sampled_at = excluded.sampled_at, price = excluded.price, change_pct = excluded.change_pct`,
+    )
+      .bind(...bindings)
+      .run();
+  }
 }
 
 async function computePredictionOutcome(row: ResearchResultRow, symbol: string, detail: ImpactDetail | null): Promise<PredictionOutcome | null> {
@@ -3211,6 +3472,7 @@ async function computePredictionOutcome(row: ResearchResultRow, symbol: string, 
     baseline_price: baseline?.price ?? null,
     baseline_at: baseline ? isoFromUnix(baseline.at) : null,
     intervals,
+    daily_points: predictionDailyPoints(predictionAt, baseline, longChart),
     updated_at: new Date().toISOString(),
   };
 }
@@ -3222,7 +3484,7 @@ async function processPredictionOutcomes(
   await ensurePredictionOutcomeTables(env);
   const clamped = Math.min(Math.max(limit, 1), 500);
   const result = await env.NEWS_DB.prepare(
-    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' ORDER BY CASE WHEN prediction_outcome_scans.result_id IS NULL THEN 0 WHEN EXISTS (SELECT 1 FROM prediction_outcomes WHERE prediction_outcomes.result_id = research_results.id AND datetime(prediction_outcomes.prediction_at) != datetime(COALESCE(articles.published_at, research_results.created_at))) THEN 1 ELSE 2 END, datetime(prediction_outcome_scans.scanned_at) ASC, datetime(research_results.created_at) ASC LIMIT ?",
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_outcome_scans ON prediction_outcome_scans.result_id = research_results.id WHERE research_results.symbols IS NOT NULL AND research_results.symbols != '[]' ORDER BY CASE WHEN prediction_outcome_scans.result_id IS NULL THEN 0 WHEN EXISTS (SELECT 1 FROM prediction_outcomes WHERE prediction_outcomes.result_id = research_results.id AND NOT EXISTS (SELECT 1 FROM prediction_daily_points WHERE prediction_daily_points.outcome_id = prediction_outcomes.id)) THEN 1 WHEN EXISTS (SELECT 1 FROM prediction_outcomes WHERE prediction_outcomes.result_id = research_results.id AND datetime(prediction_outcomes.prediction_at) != datetime(COALESCE(articles.published_at, research_results.created_at))) THEN 2 ELSE 3 END, datetime(prediction_outcome_scans.scanned_at) ASC, datetime(research_results.created_at) ASC LIMIT ?",
   )
     .bind(clamped)
     .all<ResearchResultRow>();
@@ -3263,6 +3525,9 @@ async function processPredictionOutcomes(
             JSON.stringify(outcome.intervals),
           )
           .run();
+        await persistPredictionDailyPoints(env, outcome).catch((error) =>
+          console.error("Prediction daily point persistence failed", symbol, row.id, error),
+        );
         outcomes += 1;
         rowOutcomes += 1;
       } catch (error) {
@@ -3311,6 +3576,14 @@ type PredictionSummaryRow = {
   average_movement_pct: number | null;
 };
 
+type PredictionDailySummaryRow = {
+  direction: "bullish" | "bearish";
+  confidence_bin: number;
+  day_index: number;
+  samples: number;
+  average_movement_pct: number | null;
+};
+
 const PREDICTION_DATE_MATCH_SQL =
   "datetime(prediction_outcomes.prediction_at) = datetime(COALESCE(articles.published_at, research_results.created_at))";
 const PREDICTION_CONFIDENCE_PCT_SQL =
@@ -3347,6 +3620,32 @@ async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>
       bearish: cellsFor("bearish"),
     };
   });
+}
+
+async function buildPredictionDailySummary(env: Env): Promise<{
+  series: PredictionDailySummaryRow[];
+  coverage: Record<string, number>;
+}> {
+  const daily = await env.NEWS_DB.prepare(
+    `WITH eligible AS (SELECT prediction_outcomes.direction, ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct, prediction_daily_points.day_index, prediction_daily_points.sampled_at, prediction_daily_points.change_pct FROM prediction_daily_points INNER JOIN prediction_outcomes ON prediction_outcomes.id = prediction_daily_points.outcome_id INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL} AND NOT EXISTS (SELECT 1 FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND unixepoch(opposite_outcomes.prediction_at) <= unixepoch(prediction_daily_points.sampled_at) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, day_index, COUNT(*) AS samples, AVG(change_pct) AS average_movement_pct FROM eligible WHERE confidence_pct >= 0 AND confidence_pct <= 100 GROUP BY direction, confidence_bin, day_index ORDER BY day_index, direction, confidence_bin`,
+  ).all<PredictionDailySummaryRow>();
+  const coverage = await env.NEWS_DB.prepare(
+    `SELECT MAX(MAX(0, CAST((unixepoch('now') - unixepoch(prediction_outcomes.prediction_at)) / 86400 AS INTEGER))) AS oldest_age_days, COUNT(DISTINCT prediction_outcomes.id) AS eligible_predictions, COUNT(DISTINCT prediction_daily_points.outcome_id) AS daily_predictions FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_daily_points ON prediction_daily_points.outcome_id = prediction_outcomes.id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL}`,
+  ).first<{ oldest_age_days: number | null; eligible_predictions: number; daily_predictions: number }>();
+  return {
+    series: (daily.results || []).map((row) => ({
+      direction: row.direction,
+      confidence_bin: Number(row.confidence_bin),
+      day_index: Number(row.day_index),
+      samples: Number(row.samples || 0),
+      average_movement_pct: row.average_movement_pct === null ? null : Number(row.average_movement_pct),
+    })),
+    coverage: {
+      oldest_age_days: Number(coverage?.oldest_age_days || 0),
+      eligible_predictions: Number(coverage?.eligible_predictions || 0),
+      daily_predictions: Number(coverage?.daily_predictions || 0),
+    },
+  };
 }
 
 function predictionOutcomeFromStoredRow(row: StoredPredictionOutcomeRow): PredictionOutcome {
@@ -3468,14 +3767,17 @@ async function buildPredictionOutcomes(
   total: number;
   summary: Record<string, unknown>[];
   coverage: Record<string, number>;
+  daily_series: PredictionDailySummaryRow[];
+  daily_coverage: Record<string, number>;
 }> {
   await ensurePredictionOutcomeTables(env);
   await processPredictionOutcomes(env, Math.min(Math.max(limit, 5), 10)).catch((error) =>
     console.error("Inline prediction outcome refresh failed", error),
   );
-  const [page, summary, coverage, dateRepair] = await Promise.all([
+  const [page, summary, dailySummary, coverage, dateRepair] = await Promise.all([
     buildPredictionPage(env, limit, filters),
     buildPredictionSummary(env),
+    buildPredictionDailySummary(env),
     env.NEWS_DB.prepare(
       `SELECT COUNT(*) AS predictions, COUNT(DISTINCT prediction_outcomes.article_id) AS articles FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE ${PREDICTION_DATE_MATCH_SQL}`,
     ).first<{ predictions: number; articles: number }>(),
@@ -3487,6 +3789,8 @@ async function buildPredictionOutcomes(
   return {
     ...page,
     summary,
+    daily_series: dailySummary.series,
+    daily_coverage: dailySummary.coverage,
     coverage: {
       predictions: Number(coverage?.predictions || 0),
       articles: Number(coverage?.articles || 0),
