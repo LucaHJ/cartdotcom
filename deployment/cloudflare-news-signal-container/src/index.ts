@@ -5193,23 +5193,19 @@ async function buildSourceActivity(
     const yearEnd = rangeEnd;
     const yearDays = Math.round((yearEnd - yearStart) / (24 * HOUR_MS));
     domainMax = yearDays / 7;
-    const localJanOne = new Date(yearStart + BRISBANE_OFFSET_MS);
-    const daysSinceMonday = (localJanOne.getUTCDay() + 6) % 7;
-    const firstWeekStart = yearStart - daysSinceMonday * 24 * HOUR_MS;
     let weekNumber = 1;
-    for (let weekStart = firstWeekStart; weekStart < yearEnd; weekStart += 7 * 24 * HOUR_MS) {
-      const clippedStart = Math.max(weekStart, yearStart);
-      const clippedEnd = Math.min(weekStart + 7 * 24 * HOUR_MS, yearEnd);
-      const started = clippedStart <= currentHour;
-      const totals = sumRange(clippedStart, clippedEnd);
+    for (let weekStart = yearStart; weekStart < yearEnd; weekStart += 7 * 24 * HOUR_MS) {
+      const weekEnd = Math.min(weekStart + 7 * 24 * HOUR_MS, yearEnd);
+      const started = weekStart <= currentHour;
+      const totals = sumRange(weekStart, weekEnd);
       buckets.push({
-        position: ((clippedStart + clippedEnd) / 2 - yearStart) / (7 * 24 * HOUR_MS),
-        label: `Week ${weekNumber}: ${localDateLabel(clippedStart, { day: "numeric", month: "short" })}-${localDateLabel(clippedEnd - 1, { day: "numeric", month: "short" })}`,
+        position: ((weekStart + weekEnd) / 2 - yearStart) / (7 * 24 * HOUR_MS),
+        label: `Week ${weekNumber}: ${localDateLabel(weekStart, { day: "numeric", month: "short" })}-${localDateLabel(weekEnd - 1, { day: "numeric", month: "short" })}`,
         articles: started ? totals.articles : null,
         tickers: started ? totals.tickers : null,
-        partial: started && clippedEnd > currentHour,
+        partial: started && weekEnd > currentHour,
       });
-      if (weekNumber === 1 || weekNumber % 4 === 1) ticks.push({ position: (clippedStart - yearStart) / (7 * 24 * HOUR_MS), label: `W${weekNumber}` });
+      if (weekNumber === 1 || weekNumber % 4 === 1) ticks.push({ position: (weekStart - yearStart) / (7 * 24 * HOUR_MS), label: `W${weekNumber}` });
       weekNumber += 1;
     }
     for (let month = 1; month <= 12; month += 1) {
