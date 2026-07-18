@@ -996,7 +996,8 @@ const DASHBOARD_HTML = `<!doctype html>
       width: 100%;
       height: 320px;
       min-height: 320px;
-      overflow: hidden;
+      overflow-x: auto;
+      overflow-y: hidden;
       border: 1px solid var(--line);
       border-radius: 6px;
       background: #fbfcfe;
@@ -1005,6 +1006,7 @@ const DASHBOARD_HTML = `<!doctype html>
     .prediction-trend-chart svg {
       display: block;
       width: 100%;
+      min-width: 760px;
       height: 100%;
     }
 
