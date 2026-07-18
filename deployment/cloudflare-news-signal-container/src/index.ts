@@ -3484,9 +3484,9 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   }
 
   const acquired = await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT slot FROM (SELECT 0 AS slot UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = slots.slot) ORDER BY slot LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ?",
+    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT slot FROM (SELECT 0 AS slot UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = slots.slot) ORDER BY slot LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ? AND (? = 0 OR NOT EXISTS (SELECT 1 FROM research_jobs AS first_pass_jobs WHERE first_pass_jobs.status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = first_pass_jobs.id)))",
   )
-    .bind(jobId, RESEARCH_CONTAINER_COUNT)
+    .bind(jobId, RESEARCH_CONTAINER_COUNT, existing.has_result ? 1 : 0)
     .run();
   if (!acquired.meta?.changes) throw new ResearchBusyError();
 
@@ -3582,9 +3582,9 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
 }
 
 async function processNextJob(env: Env): Promise<{ ok: boolean; jobId?: string; skipped?: string }> {
-  const job = await env.NEWS_DB.prepare("SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY queued_at ASC LIMIT 1").first<{
-    id: string;
-  }>();
+  const job = await env.NEWS_DB.prepare(
+    "SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) ASC, queued_at ASC LIMIT 1",
+  ).first<{ id: string }>();
   if (!job) return { ok: true, skipped: "no_pending_jobs" };
   return processJob(env, job.id);
 }
@@ -3616,7 +3616,9 @@ async function drainResearchBacklog(env: Env): Promise<number> {
 
 async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: number }> {
   const clamped = Math.min(Math.max(limit, 1), 100);
-  const pending = await env.NEWS_DB.prepare("SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY queued_at ASC LIMIT ?")
+  const pending = await env.NEWS_DB.prepare(
+    "SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) ASC, queued_at ASC LIMIT ?",
+  )
     .bind(clamped)
     .all<{ id: string }>();
 
@@ -5344,6 +5346,7 @@ export default {
       } catch (error) {
         if (error instanceof ResearchBusyError) {
           message.retry({ delaySeconds: 5 });
+          await drainResearchBacklog(env);
           continue;
         }
         throw error;
