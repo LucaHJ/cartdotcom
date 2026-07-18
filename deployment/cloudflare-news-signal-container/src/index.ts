@@ -5122,7 +5122,7 @@ async function buildSourceActivity(
   const metricRows = await env.NEWS_DB.prepare(
     "SELECT hour_start, article_count, ticker_count FROM source_hourly_metrics WHERE datetime(hour_start) >= datetime(?) AND datetime(hour_start) < datetime(?) AND datetime(hour_start) < datetime(?) ORDER BY datetime(hour_start)",
   )
-    .bind(new Date(rangeStart).toISOString(), new Date(rangeEnd).toISOString(), new Date(currentHour).toISOString())
+    .bind(new Date(rangeStart).toISOString(), new Date(rangeEnd).toISOString(), new Date(currentHour + HOUR_MS).toISOString())
     .all<SourceHourlyMetricRow>();
   const hourly = new Map(
     (metricRows.results || []).map((row) => [Math.floor(Date.parse(row.hour_start) / HOUR_MS) * HOUR_MS, {
@@ -5133,7 +5133,7 @@ async function buildSourceActivity(
   const sumRange = (start: number, end: number) => {
     let articles = 0;
     let tickers = 0;
-    for (let hour = start; hour < Math.min(end, currentHour); hour += HOUR_MS) {
+    for (let hour = start; hour < Math.min(end, currentHour + HOUR_MS); hour += HOUR_MS) {
       const row = hourly.get(hour);
       articles += row?.articles || 0;
       tickers += row?.tickers || 0;
@@ -5149,15 +5149,15 @@ async function buildSourceActivity(
   if (mode === "day") {
     for (let hour = 0; hour < 24; hour += 1) {
       const start = rangeStart + hour * HOUR_MS;
-      const complete = start < currentHour;
+      const started = start <= currentHour;
       const totals = sumRange(start, start + HOUR_MS);
       const hourLabel = hour === 0 ? "12am" : hour === 12 ? "12pm" : hour < 12 ? `${hour}am` : `${hour - 12}pm`;
       buckets.push({
         position: hour + 0.5,
         label: `${hourLabel}-${hour === 23 ? "12am" : hour + 1 === 12 ? "12pm" : hour + 1 < 12 ? `${hour + 1}am` : `${hour + 1 - 12}pm`}`,
-        articles: complete ? totals.articles : null,
-        tickers: complete ? totals.tickers : null,
-        partial: false,
+        articles: started ? totals.articles : null,
+        tickers: started ? totals.tickers : null,
+        partial: start === currentHour,
       });
     }
     for (let hour = 0; hour <= 24; hour += 4) {
@@ -5170,7 +5170,7 @@ async function buildSourceActivity(
     for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
       const start = rangeStart + dayIndex * 24 * HOUR_MS;
       const end = start + 24 * HOUR_MS;
-      const started = start < currentHour;
+      const started = start <= currentHour;
       const totals = sumRange(start, end);
       buckets.push({
         position: dayIndex + 0.5,
@@ -5200,7 +5200,7 @@ async function buildSourceActivity(
     for (let weekStart = firstWeekStart; weekStart < yearEnd; weekStart += 7 * 24 * HOUR_MS) {
       const clippedStart = Math.max(weekStart, yearStart);
       const clippedEnd = Math.min(weekStart + 7 * 24 * HOUR_MS, yearEnd);
-      const started = clippedStart < currentHour;
+      const started = clippedStart <= currentHour;
       const totals = sumRange(clippedStart, clippedEnd);
       buckets.push({
         position: ((clippedStart + clippedEnd) / 2 - yearStart) / (7 * 24 * HOUR_MS),
