@@ -1064,7 +1064,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     <section id="simulation-panel" class="hidden">
       <section class="panel">
-        <div class="model-blurb">Prediction Accuracy measures every bullish or bearish ticker prediction against real market movement. Each row stores the ticker price at prediction time, then records movement at 12h, 24h, 48h, 1w, 2w, 1m, 3m, 6m, 1y, 2y, 3y, and 4y once those windows have elapsed.</div>
+        <div class="model-blurb">Prediction Accuracy tracks every bullish or bearish ticker prediction against real market movement. Price collection continues for every call at 12h, 24h, 48h, 1w, 2w, 1m, 3m, 6m, 1y, 2y, 3y, and 4y. A call contributes to the accuracy charts only until a later opposite call is made for the same ticker; same-direction calls continue in parallel.</div>
         <div class="panel-header">
           <div class="panel-title">Accuracy by Interval and Confidence</div>
           <div class="panel-meta" id="prediction-summary-meta">0 intervals</div>
@@ -2951,6 +2951,9 @@ async function ensurePredictionOutcomeTables(env: Env): Promise<void> {
     env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_prediction_at ON prediction_outcomes(prediction_at DESC)"),
     env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_symbol ON prediction_outcomes(symbol)"),
     env.NEWS_DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_symbol_prediction_at_direction ON prediction_outcomes(symbol, prediction_at, direction)",
+    ),
+    env.NEWS_DB.prepare(
       "CREATE TABLE IF NOT EXISTS prediction_outcome_scans (result_id TEXT PRIMARY KEY, scanned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, outcome_count INTEGER NOT NULL DEFAULT 0, skipped_count INTEGER NOT NULL DEFAULT 0)",
     ),
     env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcome_scans_scanned_at ON prediction_outcome_scans(scanned_at ASC)"),
@@ -3120,9 +3123,10 @@ const PREDICTION_CONFIDENCE_PCT_SQL =
 async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>[]> {
   const statements = PREDICTION_INTERVALS.map((interval) => {
     const path = `$."${interval.label}".change_pct`;
+    const sampledAtPath = `$."${interval.label}".at`;
     return env.NEWS_DB.prepare(
-      `WITH eligible AS (SELECT prediction_outcomes.direction, ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct, CAST(json_extract(prediction_outcomes.intervals_json, ?) AS REAL) AS movement_pct FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL} AND json_type(prediction_outcomes.intervals_json, ?) IN ('integer', 'real')) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, COUNT(*) AS samples, SUM(CASE WHEN (direction = 'bullish' AND movement_pct > 0) OR (direction = 'bearish' AND movement_pct < 0) THEN 1 ELSE 0 END) AS accurate, AVG(movement_pct) AS average_movement_pct FROM eligible WHERE confidence_pct >= 0 AND confidence_pct <= 100 GROUP BY direction, confidence_bin ORDER BY direction, confidence_bin`,
-    ).bind(path, path);
+      `WITH eligible AS (SELECT prediction_outcomes.direction, ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct, CAST(json_extract(prediction_outcomes.intervals_json, ?) AS REAL) AS movement_pct FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL} AND json_type(prediction_outcomes.intervals_json, ?) IN ('integer', 'real') AND NOT EXISTS (SELECT 1 FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND unixepoch(opposite_outcomes.prediction_at) <= unixepoch(json_extract(prediction_outcomes.intervals_json, ?)) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, COUNT(*) AS samples, SUM(CASE WHEN (direction = 'bullish' AND movement_pct > 0) OR (direction = 'bearish' AND movement_pct < 0) THEN 1 ELSE 0 END) AS accurate, AVG(movement_pct) AS average_movement_pct FROM eligible WHERE confidence_pct >= 0 AND confidence_pct <= 100 GROUP BY direction, confidence_bin ORDER BY direction, confidence_bin`,
+    ).bind(path, path, sampledAtPath);
   });
   const results = await env.NEWS_DB.batch<PredictionSummaryRow>(statements);
   return PREDICTION_INTERVALS.map((interval, index) => {
