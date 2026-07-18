@@ -325,7 +325,8 @@ const SOURCES: Source[] = [
 
 const ARTICLE_CONTENT_MAX_CHARS = 120_000;
 const ARTICLE_FETCH_TIMEOUT_MS = 15_000;
-const ARTICLE_INGESTION_MAX_AGE_DAYS = 2;
+const ARTICLE_INGESTION_WINDOW_MINUTES = 5;
+const ARTICLE_INGESTION_WINDOW_MS = ARTICLE_INGESTION_WINDOW_MINUTES * 60 * 1000;
 const SOURCE_EXPANSION_CUTOFF = "2026-07-18T08:28:55Z";
 const RESEARCH_CONTAINER_COUNT = 4;
 const QUEUE_DRAIN_MAX_JOBS = 8;
@@ -353,11 +354,45 @@ async function pruneLegacyFirstPassBacklog(db: D1Database): Promise<{ cancelled:
   return { cancelled: Number(cancelled.meta?.changes || 0), archived: Number(archived.meta?.changes || 0) };
 }
 
+async function resetPendingFirstPassQueue(db: D1Database): Promise<{
+  cancelled_first_pass: number;
+  retained_resynthesis: number;
+  prediction_delay_samples_reset: number;
+}> {
+  const [firstPass, resynthesis, delaySamples] = await Promise.all([
+    db.prepare(
+      "SELECT COUNT(*) AS count FROM research_jobs WHERE status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id)",
+    ).first<{ count: number }>(),
+    db.prepare(
+      "SELECT COUNT(*) AS count FROM research_jobs WHERE status = 'pending' AND EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id)",
+    ).first<{ count: number }>(),
+    db.prepare(
+      "SELECT COUNT(*) AS count FROM research_jobs WHERE status = 'succeeded' AND prediction_delay_eligible = 1 AND prediction_delay_seconds IS NOT NULL",
+    ).first<{ count: number }>(),
+  ]);
+
+  await db.batch([
+    db.prepare("UPDATE research_jobs SET prediction_delay_eligible = 0 WHERE prediction_delay_eligible != 0"),
+    db.prepare(
+      "UPDATE research_jobs SET status = 'cancelled', last_error = 'Cleared first-pass queue during delay reset', finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id)",
+    ),
+    db.prepare(
+      "UPDATE articles SET status = 'archived' WHERE status != 'archived' AND EXISTS (SELECT 1 FROM research_jobs WHERE research_jobs.article_id = articles.id AND research_jobs.status = 'cancelled' AND research_jobs.last_error = 'Cleared first-pass queue during delay reset')",
+    ),
+  ]);
+
+  return {
+    cancelled_first_pass: Number(firstPass?.count || 0),
+    retained_resynthesis: Number(resynthesis?.count || 0),
+    prediction_delay_samples_reset: Number(delaySamples?.count || 0),
+  };
+}
+
 const STALE_BACKFILL_ARTICLE_SQL = `
   SELECT articles.id
   FROM articles
   WHERE articles.published_at IS NOT NULL
-    AND datetime(articles.published_at) < datetime(articles.discovered_at, '-${ARTICLE_INGESTION_MAX_AGE_DAYS} days')
+    AND datetime(articles.published_at) < datetime(articles.discovered_at, '-${ARTICLE_INGESTION_WINDOW_MINUTES} minutes')
     AND NOT EXISTS (
       SELECT 1
       FROM research_results AS preserved_results
@@ -401,7 +436,7 @@ async function purgeStaleHistoricalBackfill(env: Env): Promise<Record<string, nu
     deleted_outcomes: Number(outcomes?.count || 0),
     deleted_daily_points: Number(dailyPoints?.count || 0),
     preserved_before: SOURCE_EXPANSION_CUTOFF,
-    acquisition_window_days: ARTICLE_INGESTION_MAX_AGE_DAYS,
+    acquisition_window_minutes: ARTICLE_INGESTION_WINDOW_MINUTES,
   };
 }
 
@@ -3066,10 +3101,10 @@ function chunks<T>(items: T[], size: number): T[][] {
 }
 
 function isWithinArticleIngestionWindow(item: FeedItem, now = Date.now()): boolean {
-  if (!item.publishedAt) return true;
+  if (!item.publishedAt) return false;
   const publishedAt = Date.parse(item.publishedAt);
-  if (!Number.isFinite(publishedAt)) return true;
-  return publishedAt >= now - ARTICLE_INGESTION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(publishedAt)) return false;
+  return publishedAt >= now - ARTICLE_INGESTION_WINDOW_MS;
 }
 
 async function enqueueArticles(db: D1Database, queue: Queue<ResearchJobMessage>, items: FeedItem[]): Promise<number> {
@@ -5163,6 +5198,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...normalized, ...pruned, ...requeued });
   }
 
+  if (url.pathname === "/api/research/reset-first-pass-queue" && request.method === "POST") {
+    return json({ ok: true, ...(await resetPendingFirstPassQueue(env.NEWS_DB)) });
+  }
+
   if (url.pathname === "/api/reanalyze-recent" && request.method === "POST") {
     return json({ ok: true, ...(await reanalyzeRecentJobs(env, limit)) });
   }
@@ -5256,6 +5295,7 @@ export default {
           "/api/predictions/outcomes",
           "/api/predictions/process",
           "/api/research/recover",
+          "/api/research/reset-first-pass-queue",
           "/api/reanalyze-recent",
           "/api/reanalyze-legacy",
           "/container/health",
