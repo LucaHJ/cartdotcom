@@ -3411,7 +3411,6 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
       env.NEWS_DB.prepare("DELETE FROM prediction_outcome_scans WHERE result_id = (SELECT id FROM research_results WHERE job_id = ?)").bind(jobId),
       env.NEWS_DB.prepare("DELETE FROM prediction_outcomes WHERE result_id = (SELECT id FROM research_results WHERE job_id = ?)").bind(jobId),
     ]);
-    await processPredictionOutcomes(env, 25).catch((error) => console.error("Prediction outcome processing failed after research", error));
     return { ok: true, jobId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -3443,7 +3442,6 @@ async function drainResearchBacklog(env: Env): Promise<number> {
       if (!result.skipped) {
         processed += 1;
         consecutiveBusy = 0;
-        await processPredictionOutcomes(env, 5).catch((error) => console.error("Backlog prediction outcome processing failed", error));
       }
     } catch (error) {
       if (!(error instanceof ResearchBusyError)) {
@@ -5164,7 +5162,6 @@ export default {
     for (const message of batch.messages) {
       try {
         await processJob(env, message.body.jobId);
-        await processPredictionOutcomes(env, 5).catch((error) => console.error("Queue prediction outcome processing failed", error));
         message.ack();
         await drainResearchBacklog(env);
       } catch (error) {
