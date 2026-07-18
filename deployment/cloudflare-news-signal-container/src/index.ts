@@ -785,6 +785,14 @@ const DASHBOARD_HTML = `<!doctype html>
       white-space: nowrap;
     }
 
+    .prediction-outcomes-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: #e9edf3;
+      box-shadow: 0 1px 0 var(--line), 0 4px 8px rgba(16, 24, 40, 0.08);
+    }
+
     .heatmap-stack {
       display: grid;
       gap: 18px;
@@ -875,6 +883,7 @@ const DASHBOARD_HTML = `<!doctype html>
       font-size: 9px;
       line-height: 0;
       vertical-align: super;
+      cursor: help;
     }
 
     .heatmap-cell.clickable:hover,
@@ -888,8 +897,10 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .heatmap-empty { background: #f3f4f6; color: #98a2b3; }
     .heatmap-scale-wrong { background: #dc2626; }
-    .heatmap-scale-neutral { background: #f59e0b; }
+    .heatmap-scale-neutral { background: #facc15; }
     .heatmap-scale-correct { background: #16a34a; }
+    .heatmap-scale-outlier-wrong { background: #7f1d1d; }
+    .heatmap-scale-outlier-correct { background: #14532d; }
 
     .heatmap-legend {
       display: flex;
@@ -905,11 +916,18 @@ const DASHBOARD_HTML = `<!doctype html>
       gap: 5px;
     }
 
+    .heatmap-legend-item[title] { cursor: help; }
+
     .heatmap-swatch {
       width: 13px;
       height: 13px;
       border: 1px solid rgba(16, 24, 40, 0.08);
       border-radius: 3px;
+    }
+
+    .heatmap-outlier-swatches {
+      display: inline-flex;
+      gap: 2px;
     }
 
     .prediction-filterbar {
@@ -1447,7 +1465,7 @@ const DASHBOARD_HTML = `<!doctype html>
       const failed = count(status.jobs, "failed");
       const results = Number((status.results && status.results.count) || 0);
       metricsEl.innerHTML = [
-        metric("Articles", analyzed + queued, analyzed + " analyzed (including tickerless), " + queued + " queued"),
+        metric("Articles", analyzed + queued, analyzed + " actionable analyzed, " + queued + " queued"),
         metric("Results", results, succeeded + " succeeded"),
         metric("Running", running, "Serialized Codex jobs"),
         metric("Pending", pending, "Queued for research"),
@@ -1564,6 +1582,7 @@ const DASHBOARD_HTML = `<!doctype html>
               heatmapLegendItem("heatmap-scale-wrong", "Strongest wrong-direction average") +
               heatmapLegendItem("heatmap-scale-neutral", "0% average movement") +
               heatmapLegendItem("heatmap-scale-correct", "Strongest correct-direction average") +
+              heatmapOutlierLegendItem() +
               heatmapLegendItem("heatmap-empty", "No samples") +
             '</div>' +
           '</div>'
@@ -1740,7 +1759,7 @@ const DASHBOARD_HTML = `<!doctype html>
         const cells = Array.isArray(item[direction]) ? item[direction] : [];
         return '<tr><th scope="row">' + escapeHtml(item.interval || "") + '</th>' + bands.map((band) => renderHeatmapCell(cells[band.index], direction, item.interval, band, scale)).join("") + '</tr>';
       }).join("");
-      const minimumWidth = 76 + bands.length * 104;
+      const minimumWidth = 76 + bands.length * 132;
       return '<section class="heatmap-section" aria-label="' + escapeAttr(heading + " accuracy by confidence and interval") + '">' +
         '<div class="heatmap-heading"><div class="heatmap-title">' + heading + '</div><div class="heatmap-axis-label">Prediction confidence (%)</div></div>' +
         '<div class="heatmap-scroll"><table class="confidence-heatmap" style="--heatmap-min-width:' + minimumWidth + 'px"><thead><tr>' + headers + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
@@ -1756,11 +1775,13 @@ const DASHBOARD_HTML = `<!doctype html>
       const label = direction === "bullish" ? "Bullish" : "Bearish";
       const averageMovement = Number(cell.average_movement_pct || 0);
       const movement = signedPct(averageMovement);
-      const accessibilityLabel = label + ", " + band.min + "-" + band.max + "% confidence, " + interval + ": average movement " + movement + ", " + accuracy.toFixed(1) + "% accurate, " + samples + " samples.";
+      const sampleConfidence = sampleSizeConfidence(samples);
+      const outlier = heatmapMovementIsOutlier(averageMovement, direction, scale);
+      const accessibilityLabel = label + ", " + band.min + "-" + band.max + "% confidence, " + interval + ": " + (outlier ? "outlier, " : "") + "average movement " + movement + ", " + accuracy.toFixed(1) + "% accurate, " + samples + " samples, " + sampleConfidence.toFixed(0) + "% sample-size confidence.";
       const active = predictionFilters.direction === direction && predictionFilters.confidenceBin === band.min / 10;
-      return '<td class="heatmap-cell clickable' + (active ? ' active-filter' : '') + '" style="' + heatmapMovementStyle(averageMovement, direction, scale) + '">' +
+      return '<td class="heatmap-cell clickable' + (active ? ' active-filter' : '') + '" style="' + heatmapMovementStyle(averageMovement, direction, scale, outlier) + '">' +
         '<button class="heatmap-filter-button" type="button" data-heatmap-direction="' + direction + '" data-confidence-bin="' + (band.min / 10) + '" aria-label="' + escapeAttr(accessibilityLabel + " Filter outcomes by this direction and confidence band.") + '">' +
-          movement + ' <span class="heatmap-accuracy">(' + accuracy.toFixed(0) + '%)</span><sup class="heatmap-samples">' + samples + '</sup>' +
+          (outlier ? '*' : '') + movement + ' <span class="heatmap-accuracy">(' + accuracy.toFixed(0) + '%)</span><sup class="heatmap-samples" title="' + escapeAttr(sampleSizeConfidenceTooltip(samples, sampleConfidence)) + '">' + samples + ' (' + sampleConfidence.toFixed(0) + '%)</sup>' +
         '</button></td>';
     }
 
@@ -1775,15 +1796,45 @@ const DASHBOARD_HTML = `<!doctype html>
           if (Number.isFinite(movement)) directionalValues.push(direction === "bullish" ? movement : -movement);
         }
       }
+      const sorted = directionalValues.slice().sort((a, b) => a - b);
+      const q1 = heatmapQuantile(sorted, 0.25);
+      const q3 = heatmapQuantile(sorted, 0.75);
+      const iqr = q3 - q1;
+      const lowerFence = iqr > 0 ? q1 - 1.5 * iqr : Number.NEGATIVE_INFINITY;
+      const upperFence = iqr > 0 ? q3 + 1.5 * iqr : Number.POSITIVE_INFINITY;
+      const inliers = directionalValues.filter((value) => value >= lowerFence && value <= upperFence);
+      const scaledValues = inliers.length ? inliers : directionalValues;
       return {
-        correct: Math.max(0, ...directionalValues),
-        wrong: Math.max(0, ...directionalValues.map((value) => -value)),
+        correct: Math.max(0, ...scaledValues),
+        wrong: Math.max(0, ...scaledValues.map((value) => -value)),
+        lowerFence,
+        upperFence,
       };
     }
 
-    function heatmapMovementStyle(movement, direction, scale) {
+    function heatmapQuantile(sortedValues, percentile) {
+      if (!sortedValues.length) return 0;
+      const position = (sortedValues.length - 1) * percentile;
+      const lower = Math.floor(position);
+      const fraction = position - lower;
+      return sortedValues[lower + 1] === undefined
+        ? sortedValues[lower]
+        : sortedValues[lower] + fraction * (sortedValues[lower + 1] - sortedValues[lower]);
+    }
+
+    function heatmapMovementIsOutlier(movement, direction, scale) {
       const directionalMovement = direction === "bullish" ? movement : -movement;
-      const neutral = [245, 158, 11];
+      return directionalMovement < scale.lowerFence || directionalMovement > scale.upperFence;
+    }
+
+    function heatmapMovementStyle(movement, direction, scale, outlier) {
+      const directionalMovement = direction === "bullish" ? movement : -movement;
+      if (outlier) {
+        return directionalMovement >= 0
+          ? "background:#14532d;color:#ffffff"
+          : "background:#7f1d1d;color:#ffffff";
+      }
+      const neutral = [250, 204, 21];
       const target = directionalMovement >= 0 ? [22, 163, 74] : [220, 38, 38];
       const extent = directionalMovement >= 0 ? scale.correct : scale.wrong;
       const ratio = extent > 0 ? Math.min(1, Math.abs(directionalMovement) / extent) : 0;
@@ -1792,8 +1843,21 @@ const DASHBOARD_HTML = `<!doctype html>
       return "background:rgb(" + channels.join(",") + ");color:" + foreground;
     }
 
+    function sampleSizeConfidence(samples) {
+      return Math.max(0, Math.min(100, (samples / (samples + 25)) * 100));
+    }
+
+    function sampleSizeConfidenceTooltip(samples, confidence) {
+      return "Sample-size confidence = n / (n + 25) × 100 = " + samples + " / (" + samples + " + 25) × 100 = " + confidence.toFixed(1) + "%. The 25-sample constant makes 25 samples equal 50% confidence. This measures sample volume only and does not correct for correlated calls.";
+    }
+
     function heatmapLegendItem(cls, label) {
       return '<span class="heatmap-legend-item"><span class="heatmap-swatch ' + cls + '"></span>' + escapeHtml(label) + '</span>';
+    }
+
+    function heatmapOutlierLegendItem() {
+      const hint = "Outliers use Tukey fences: values below Q1 − 1.5 × IQR or above Q3 + 1.5 × IQR. They are excluded from the normal colour scale and shown in darker red or green.";
+      return '<span class="heatmap-legend-item" title="' + escapeAttr(hint) + '"><span class="heatmap-outlier-swatches"><span class="heatmap-swatch heatmap-scale-outlier-wrong"></span><span class="heatmap-swatch heatmap-scale-outlier-correct"></span></span>* Outliers</span>';
     }
 
     function predictionPointPill(point, direction, label) {
@@ -2560,7 +2624,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
         memo,
       ),
       env.NEWS_DB.prepare("UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?").bind(jobId),
-      env.NEWS_DB.prepare("UPDATE articles SET status = 'analyzed' WHERE id = ?").bind(article.id),
+      env.NEWS_DB.prepare("UPDATE articles SET status = ? WHERE id = ?").bind(symbols.length ? "analyzed" : "archived", article.id),
     ]);
     await ensurePredictionOutcomeTables(env);
     await env.NEWS_DB.batch([
@@ -2604,7 +2668,7 @@ async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: num
 async function reanalyzeRecentJobs(env: Env, limit = 20): Promise<{ requeued: number }> {
   const clamped = Math.min(Math.max(limit, 1), 50);
   const jobs = await env.NEWS_DB.prepare(
-    "SELECT research_jobs.id, research_jobs.article_id FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE research_jobs.status = 'succeeded' ORDER BY COALESCE(articles.published_at, articles.discovered_at) DESC LIMIT ?",
+    "SELECT research_jobs.id, research_jobs.article_id FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE research_jobs.status = 'succeeded' AND articles.status != 'archived' ORDER BY COALESCE(articles.published_at, articles.discovered_at) DESC LIMIT ?",
   )
     .bind(clamped)
     .all<{ id: string; article_id: string }>();
@@ -2837,7 +2901,7 @@ async function computePriceImpact(article: ResearchResultRow, symbol: string, de
 async function getRecentResearchRows(env: Env, limit: number): Promise<ResearchResultRow[]> {
   return listRows<ResearchResultRow>(
     env.NEWS_DB,
-    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id ORDER BY research_results.created_at DESC LIMIT ?",
+    "SELECT research_results.id, research_results.article_id, research_results.created_at, research_results.symbols, research_results.sentiment_score, research_results.confidence, research_results.event_type, research_results.summary, research_results.memo, articles.title, articles.url, articles.published_at FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE articles.status != 'archived' AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]') ORDER BY research_results.created_at DESC LIMIT ?",
     limit,
   );
 }
@@ -2948,7 +3012,7 @@ async function buildTickerSignals(env: Env, limit: number): Promise<TickerSignal
 async function buildEventSummaries(env: Env, limit: number): Promise<Array<ResearchResultRow & Record<string, unknown>>> {
   const rows = await listRows<ResearchResultRow & Record<string, unknown>>(
     env.NEWS_DB,
-    "SELECT research_results.*, articles.title, articles.url, articles.published_at, sources.name AS source_name FROM research_results LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN sources ON sources.id = articles.source_id ORDER BY research_results.created_at DESC LIMIT ?",
+    "SELECT research_results.*, articles.title, articles.url, articles.published_at, sources.name AS source_name FROM research_results INNER JOIN articles ON articles.id = research_results.article_id LEFT JOIN sources ON sources.id = articles.source_id WHERE articles.status != 'archived' AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]') ORDER BY research_results.created_at DESC LIMIT ?",
     limit,
   );
 
@@ -3852,6 +3916,13 @@ async function listRows<T>(db: D1Database, query: string, limit: number): Promis
   return result.results || [];
 }
 
+async function archiveTickerlessArticles(env: Env): Promise<number> {
+  const result = await env.NEWS_DB.prepare(
+    "UPDATE articles SET status = 'archived' WHERE status = 'analyzed' AND EXISTS (SELECT 1 FROM research_results WHERE research_results.article_id = articles.id) AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.article_id = articles.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))",
+  ).run();
+  return Number(result.meta?.changes || 0);
+}
+
 function predictionFiltersFromUrl(url: URL): PredictionOutcomeFilters {
   const directionValue = url.searchParams.get("direction");
   const direction = directionValue === "bullish" || directionValue === "bearish" ? directionValue : null;
@@ -3879,10 +3950,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   const limit = Number(url.searchParams.get("limit") || 25);
 
   if (url.pathname === "/api/status") {
+    await archiveTickerlessArticles(env);
     const [articles, jobs, results] = await Promise.all([
-      env.NEWS_DB.prepare("SELECT status, COUNT(*) AS count FROM articles GROUP BY status").all(),
-      env.NEWS_DB.prepare("SELECT status, COUNT(*) AS count FROM research_jobs GROUP BY status").all(),
-      env.NEWS_DB.prepare("SELECT COUNT(*) AS count FROM research_results").first(),
+      env.NEWS_DB.prepare("SELECT status, COUNT(*) AS count FROM articles WHERE status != 'archived' GROUP BY status").all(),
+      env.NEWS_DB.prepare("SELECT research_jobs.status, COUNT(*) AS count FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE articles.status != 'archived' AND (research_jobs.status != 'succeeded' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) GROUP BY research_jobs.status").all(),
+      env.NEWS_DB.prepare("SELECT COUNT(*) AS count FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE articles.status != 'archived' AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]')").first(),
     ]);
     return json({ ok: true, articles: articles.results, jobs: jobs.results, results });
   }
@@ -3897,7 +3969,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       ok: true,
       articles: await listRows(
         env.NEWS_DB,
-        "SELECT articles.*, sources.name AS source_name FROM articles LEFT JOIN sources ON sources.id = articles.source_id ORDER BY discovered_at DESC LIMIT ?",
+        "SELECT articles.*, sources.name AS source_name FROM articles LEFT JOIN sources ON sources.id = articles.source_id WHERE articles.status != 'archived' AND (articles.status != 'analyzed' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.article_id = articles.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) ORDER BY discovered_at DESC LIMIT ?",
         limit,
       ),
     });
@@ -3908,7 +3980,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       ok: true,
       jobs: await listRows(
         env.NEWS_DB,
-        "SELECT research_jobs.*, articles.title, articles.url FROM research_jobs LEFT JOIN articles ON articles.id = research_jobs.article_id ORDER BY queued_at DESC LIMIT ?",
+        "SELECT research_jobs.*, articles.title, articles.url FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE articles.status != 'archived' AND (research_jobs.status != 'succeeded' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) ORDER BY queued_at DESC LIMIT ?",
         limit,
       ),
     });
@@ -4065,6 +4137,7 @@ export default {
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       ingestFeeds(env).then(async () => {
+        await archiveTickerlessArticles(env);
         await requeuePendingJobs(env, 25);
         await processPredictionOutcomes(env, 50).catch((error) => console.error("Scheduled prediction outcome processing failed", error));
       }),
