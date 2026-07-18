@@ -76,6 +76,7 @@ type PricePoint = {
 
 type PredictionPoint = PricePoint & {
   accurate: boolean | null;
+  counts_toward_accuracy?: boolean;
 };
 
 type PriceImpact = {
@@ -126,6 +127,7 @@ type StoredPredictionOutcomeRow = Omit<PredictionOutcome, "title" | "url" | "int
   article_title: string | null;
   article_url: string | null;
   intervals_json: string;
+  accuracy_cutoff_epoch: number | null;
 };
 
 type PredictionOutcomeFilters = {
@@ -461,6 +463,7 @@ const DASHBOARD_HTML = `<!doctype html>
       background: #eef2f6;
       color: #344054;
       font-size: 12px;
+      font-weight: 400;
       line-height: 1.2;
       max-width: 100%;
     }
@@ -469,6 +472,7 @@ const DASHBOARD_HTML = `<!doctype html>
     .pill.red { background: #fdecec; color: var(--red); }
     .pill.amber { background: #fff2d6; color: var(--amber); }
     .pill.blue { background: #e8f1ff; color: var(--blue); }
+    .pill.accuracy-counted { font-weight: 750; }
 
     .summary {
       margin-top: 10px;
@@ -821,7 +825,8 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .confidence-heatmap {
-      min-width: 1120px;
+      width: 100%;
+      min-width: var(--heatmap-min-width, 100%);
       table-layout: fixed;
     }
 
@@ -860,7 +865,7 @@ const DASHBOARD_HTML = `<!doctype html>
       cursor: pointer;
     }
 
-    .heatmap-movement {
+    .heatmap-accuracy {
       font-weight: 650;
       opacity: 0.86;
     }
@@ -882,11 +887,9 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .heatmap-empty { background: #f3f4f6; color: #98a2b3; }
-    .heatmap-very-low { background: #f7c9c9; color: #8f1d1d; }
-    .heatmap-low { background: #fde8df; color: #9f3a22; }
-    .heatmap-mid { background: #fff0c2; color: #7a4e00; }
-    .heatmap-high { background: #d8efe3; color: #17633d; }
-    .heatmap-very-high { background: #a9dec2; color: #0f5132; }
+    .heatmap-scale-wrong { background: #dc2626; }
+    .heatmap-scale-neutral { background: #f59e0b; }
+    .heatmap-scale-correct { background: #16a34a; }
 
     .heatmap-legend {
       display: flex;
@@ -1551,21 +1554,30 @@ const DASHBOARD_HTML = `<!doctype html>
       const trackedPredictions = Number(coverage.predictions || 0);
       const trackedArticles = Number(coverage.articles || 0);
       const repairPending = Number(coverage.date_repair_pending || 0);
-      predictionSummaryMeta.textContent = summary.length + " intervals · " + trackedPredictions + " corrected ticker predictions across " + trackedArticles + " articles" + (repairPending ? " · " + repairPending + " analyses rebuilding dates" : "");
-      predictionSummaryEl.innerHTML = summary.length
+      const dimensions = predictionSummaryDimensions(summary);
+      predictionSummaryMeta.textContent = dimensions.intervals.length + " intervals · " + trackedPredictions + " corrected ticker predictions across " + trackedArticles + " articles" + (repairPending ? " · " + repairPending + " analyses rebuilding dates" : "");
+      predictionSummaryEl.innerHTML = dimensions.intervals.length && dimensions.confidenceBins.length
         ? '<div class="heatmap-stack">' +
-            renderConfidenceHeatmap(summary, "bullish") +
-            renderConfidenceHeatmap(summary, "bearish") +
-            '<div class="heatmap-legend" aria-label="Accuracy colour legend">' +
-              heatmapLegendItem("heatmap-very-low", "Below 30%") +
-              heatmapLegendItem("heatmap-low", "30-44.9%") +
-              heatmapLegendItem("heatmap-mid", "45-54.9%") +
-              heatmapLegendItem("heatmap-high", "55-69.9%") +
-              heatmapLegendItem("heatmap-very-high", "70% or higher") +
+            renderConfidenceHeatmap(dimensions.intervals, "bullish", dimensions.confidenceBins) +
+            renderConfidenceHeatmap(dimensions.intervals, "bearish", dimensions.confidenceBins) +
+            '<div class="heatmap-legend" aria-label="Average movement colour legend">' +
+              heatmapLegendItem("heatmap-scale-wrong", "Strongest wrong-direction average") +
+              heatmapLegendItem("heatmap-scale-neutral", "0% average movement") +
+              heatmapLegendItem("heatmap-scale-correct", "Strongest correct-direction average") +
               heatmapLegendItem("heatmap-empty", "No samples") +
             '</div>' +
           '</div>'
         : '<div class="empty">No prediction intervals have elapsed yet.</div>';
+    }
+
+    function predictionSummaryDimensions(summary) {
+      const intervals = summary.filter((item) => ["bullish", "bearish"].some((direction) =>
+        Array.isArray(item[direction]) && item[direction].some((cell) => Number(cell && cell.samples || 0) > 0),
+      ));
+      const confidenceBins = Array.from({ length: 10 }, (_, index) => index).filter((index) =>
+        intervals.some((item) => ["bullish", "bearish"].some((direction) => Number(item[direction] && item[direction][index] && item[direction][index].samples || 0) > 0)),
+      );
+      return { intervals, confidenceBins };
     }
 
     function renderPredictionOutcomeShell(loading) {
@@ -1719,42 +1731,65 @@ const DASHBOARD_HTML = `<!doctype html>
       }
     }
 
-    function renderConfidenceHeatmap(summary, direction) {
-      const bands = Array.from({ length: 10 }, (_, index) => ({ min: index * 10, max: (index + 1) * 10 }));
+    function renderConfidenceHeatmap(summary, direction, confidenceBins) {
+      const bands = confidenceBins.map((index) => ({ index, min: index * 10, max: (index + 1) * 10 }));
       const heading = direction === "bullish" ? "Bullish predictions" : "Bearish predictions";
       const headers = '<th scope="col">Interval</th>' + bands.map((band) => '<th scope="col">' + band.min + '-' + band.max + '</th>').join("");
+      const scale = heatmapMovementScale(summary, direction, confidenceBins);
       const rows = summary.map((item) => {
         const cells = Array.isArray(item[direction]) ? item[direction] : [];
-        return '<tr><th scope="row">' + escapeHtml(item.interval || "") + '</th>' + bands.map((band, index) => renderHeatmapCell(cells[index], direction, item.interval, band)).join("") + '</tr>';
+        return '<tr><th scope="row">' + escapeHtml(item.interval || "") + '</th>' + bands.map((band) => renderHeatmapCell(cells[band.index], direction, item.interval, band, scale)).join("") + '</tr>';
       }).join("");
+      const minimumWidth = 76 + bands.length * 104;
       return '<section class="heatmap-section" aria-label="' + escapeAttr(heading + " accuracy by confidence and interval") + '">' +
         '<div class="heatmap-heading"><div class="heatmap-title">' + heading + '</div><div class="heatmap-axis-label">Prediction confidence (%)</div></div>' +
-        '<div class="heatmap-scroll"><table class="confidence-heatmap"><thead><tr>' + headers + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        '<div class="heatmap-scroll"><table class="confidence-heatmap" style="--heatmap-min-width:' + minimumWidth + 'px"><thead><tr>' + headers + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
       '</section>';
     }
 
-    function renderHeatmapCell(cell, direction, interval, band) {
+    function renderHeatmapCell(cell, direction, interval, band, scale) {
       const samples = Number(cell && cell.samples || 0);
       if (!samples) {
         return '<td class="heatmap-cell heatmap-empty">n/a</td>';
       }
       const accuracy = Number(cell.accuracy_pct || 0);
       const label = direction === "bullish" ? "Bullish" : "Bearish";
-      const movement = signedPct(Number(cell.average_movement_pct || 0));
-      const accessibilityLabel = label + ", " + band.min + "-" + band.max + "% confidence, " + interval + ": " + accuracy.toFixed(1) + "% accurate, average movement " + movement + ", " + samples + " samples.";
+      const averageMovement = Number(cell.average_movement_pct || 0);
+      const movement = signedPct(averageMovement);
+      const accessibilityLabel = label + ", " + band.min + "-" + band.max + "% confidence, " + interval + ": average movement " + movement + ", " + accuracy.toFixed(1) + "% accurate, " + samples + " samples.";
       const active = predictionFilters.direction === direction && predictionFilters.confidenceBin === band.min / 10;
-      return '<td class="heatmap-cell clickable ' + heatmapAccuracyClass(accuracy) + (active ? ' active-filter' : '') + '">' +
+      return '<td class="heatmap-cell clickable' + (active ? ' active-filter' : '') + '" style="' + heatmapMovementStyle(averageMovement, direction, scale) + '">' +
         '<button class="heatmap-filter-button" type="button" data-heatmap-direction="' + direction + '" data-confidence-bin="' + (band.min / 10) + '" aria-label="' + escapeAttr(accessibilityLabel + " Filter outcomes by this direction and confidence band.") + '">' +
-          accuracy.toFixed(0) + '% <span class="heatmap-movement">(' + movement + ')</span><sup class="heatmap-samples">' + samples + '</sup>' +
+          movement + ' <span class="heatmap-accuracy">(' + accuracy.toFixed(0) + '%)</span><sup class="heatmap-samples">' + samples + '</sup>' +
         '</button></td>';
     }
 
-    function heatmapAccuracyClass(accuracy) {
-      if (accuracy >= 70) return "heatmap-very-high";
-      if (accuracy >= 55) return "heatmap-high";
-      if (accuracy >= 45) return "heatmap-mid";
-      if (accuracy >= 30) return "heatmap-low";
-      return "heatmap-very-low";
+    function heatmapMovementScale(summary, direction, confidenceBins) {
+      const directionalValues = [];
+      for (const item of summary) {
+        const cells = Array.isArray(item[direction]) ? item[direction] : [];
+        for (const index of confidenceBins) {
+          const cell = cells[index];
+          if (!cell || Number(cell.samples || 0) <= 0) continue;
+          const movement = Number(cell.average_movement_pct || 0);
+          if (Number.isFinite(movement)) directionalValues.push(direction === "bullish" ? movement : -movement);
+        }
+      }
+      return {
+        correct: Math.max(0, ...directionalValues),
+        wrong: Math.max(0, ...directionalValues.map((value) => -value)),
+      };
+    }
+
+    function heatmapMovementStyle(movement, direction, scale) {
+      const directionalMovement = direction === "bullish" ? movement : -movement;
+      const neutral = [245, 158, 11];
+      const target = directionalMovement >= 0 ? [22, 163, 74] : [220, 38, 38];
+      const extent = directionalMovement >= 0 ? scale.correct : scale.wrong;
+      const ratio = extent > 0 ? Math.min(1, Math.abs(directionalMovement) / extent) : 0;
+      const channels = neutral.map((channel, index) => Math.round(channel + (target[index] - channel) * ratio));
+      const foreground = ratio >= 0.62 ? "#ffffff" : "#3b2a08";
+      return "background:rgb(" + channels.join(",") + ");color:" + foreground;
     }
 
     function heatmapLegendItem(cls, label) {
@@ -1767,10 +1802,11 @@ const DASHBOARD_HTML = `<!doctype html>
       }
       const change = Number(point.change_pct);
       const accurate = direction === "bullish" ? change > 0 : direction === "bearish" ? change < 0 : false;
+      const counted = point.counts_toward_accuracy === true;
       return pill(
         formatMoney(point.price) + " " + signedPct(change),
-        accurate ? "green" : "red",
-        "Price sampled at " + formatDate(point.at) + ". " + (accurate ? "Accurate" : "Inaccurate") + " " + direction + " prediction at " + label + " after prediction time.",
+        (accurate ? "green" : "red") + (counted ? " accuracy-counted" : ""),
+        "Price sampled at " + formatDate(point.at) + ". " + (accurate ? "Accurate" : "Inaccurate") + " " + direction + " prediction at " + label + " after prediction time. " + (counted ? "Included in the accuracy chart." : "Excluded from the accuracy chart because an opposite call was made before this sample."),
       );
     }
 
@@ -3119,6 +3155,8 @@ const PREDICTION_DATE_MATCH_SQL =
   "datetime(prediction_outcomes.prediction_at) = datetime(COALESCE(articles.published_at, research_results.created_at))";
 const PREDICTION_CONFIDENCE_PCT_SQL =
   "CASE WHEN prediction_outcomes.confidence <= 1 THEN prediction_outcomes.confidence * 100 ELSE prediction_outcomes.confidence END";
+const PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL =
+  "(SELECT MIN(unixepoch(opposite_outcomes.prediction_at)) FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))";
 
 async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>[]> {
   const statements = PREDICTION_INTERVALS.map((interval) => {
@@ -3152,6 +3190,21 @@ async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>
 }
 
 function predictionOutcomeFromStoredRow(row: StoredPredictionOutcomeRow): PredictionOutcome {
+  const cutoffEpoch = Number(row.accuracy_cutoff_epoch);
+  const hasCutoff = Number.isFinite(cutoffEpoch) && cutoffEpoch > 0;
+  const confidence = Number(row.confidence);
+  const confidencePct = confidence <= 1 ? confidence * 100 : confidence;
+  const hasEligibleConfidence = row.confidence !== null && Number.isFinite(confidencePct) && confidencePct >= 0 && confidencePct <= 100;
+  const intervals = parsePredictionIntervals(row.intervals_json);
+  for (const point of Object.values(intervals)) {
+    const sampledAt = unixSeconds(point.at);
+    point.counts_toward_accuracy =
+      hasEligibleConfidence &&
+      point.change_pct !== null &&
+      point.change_pct !== undefined &&
+      Number.isFinite(sampledAt) &&
+      (!hasCutoff || sampledAt < cutoffEpoch);
+  }
   return {
     id: row.id,
     result_id: row.result_id,
@@ -3167,7 +3220,7 @@ function predictionOutcomeFromStoredRow(row: StoredPredictionOutcomeRow): Predic
     prediction_at: row.prediction_at,
     baseline_price: row.baseline_price,
     baseline_at: row.baseline_at,
-    intervals: parsePredictionIntervals(row.intervals_json),
+    intervals,
     updated_at: row.updated_at,
   };
 }
@@ -3229,7 +3282,7 @@ async function buildPredictionPage(
   pageBindings.push(pageLimit + 1);
 
   const result = await env.NEWS_DB.prepare(
-    `SELECT prediction_outcomes.* ${fromSql} WHERE ${pageClauses.join(" AND ")} ORDER BY datetime(prediction_outcomes.prediction_at) DESC, prediction_outcomes.id DESC LIMIT ?`,
+    `SELECT prediction_outcomes.*, ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch ${fromSql} WHERE ${pageClauses.join(" AND ")} ORDER BY datetime(prediction_outcomes.prediction_at) DESC, prediction_outcomes.id DESC LIMIT ?`,
   )
     .bind(...pageBindings)
     .all<StoredPredictionOutcomeRow>();
