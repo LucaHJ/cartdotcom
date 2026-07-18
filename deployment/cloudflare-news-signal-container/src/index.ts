@@ -1683,7 +1683,7 @@ const DASHBOARD_HTML = `<!doctype html>
       metricsEl.innerHTML = [
         metric("Articles", analyzed + queued, analyzed + " actionable analyzed, " + queued + " queued"),
         metric("Results", results, succeeded + " succeeded"),
-        metric("Running", running, "Serialized Codex jobs"),
+        metric("Running", running, "Parallel Codex jobs (maximum 4)"),
         metric("Pending", pending, "Queued for research"),
         metric("Failed", failed, "Needs review"),
       ].join("");
