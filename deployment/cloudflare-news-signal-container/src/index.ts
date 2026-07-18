@@ -325,6 +325,7 @@ const SOURCES: Source[] = [
 
 const ARTICLE_CONTENT_MAX_CHARS = 120_000;
 const ARTICLE_FETCH_TIMEOUT_MS = 15_000;
+const ARTICLE_INGESTION_MAX_AGE_DAYS = 31;
 const RESEARCH_CONTAINER_COUNT = 4;
 const QUEUE_DRAIN_MAX_JOBS = 8;
 const QUEUE_DRAIN_MAX_MS = 4 * 60 * 1000;
@@ -341,6 +342,16 @@ async function addColumnIfMissing(db: D1Database, table: string, column: string,
   }
 }
 
+async function pruneLegacyFirstPassBacklog(db: D1Database): Promise<{ cancelled: number; archived: number }> {
+  const cancelled = await db.prepare(
+    "UPDATE research_jobs SET status = 'cancelled', last_error = 'Cancelled pre-cohort first-pass backlog', finished_at = CURRENT_TIMESTAMP, research_slot = NULL WHERE status = 'pending' AND prediction_delay_eligible = 0 AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id)",
+  ).run();
+  const archived = await db.prepare(
+    "UPDATE articles SET status = 'archived' WHERE status != 'archived' AND EXISTS (SELECT 1 FROM research_jobs WHERE research_jobs.article_id = articles.id AND research_jobs.status = 'cancelled' AND research_jobs.last_error = 'Cancelled pre-cohort first-pass backlog')",
+  ).run();
+  return { cancelled: Number(cancelled.meta?.changes || 0), archived: Number(archived.meta?.changes || 0) };
+}
+
 async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
   if (!articleStorageSchemaReady) {
     articleStorageSchemaReady = (async () => {
@@ -354,6 +365,7 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
       await addColumnIfMissing(db, "research_jobs", "synthesis_duration_seconds", "INTEGER");
       await addColumnIfMissing(db, "research_jobs", "prediction_delay_seconds", "INTEGER");
       await addColumnIfMissing(db, "research_jobs", "research_slot", "INTEGER");
+      await addColumnIfMissing(db, "research_jobs", "prediction_delay_eligible", "INTEGER NOT NULL DEFAULT 0");
       await db.prepare(
         "CREATE INDEX IF NOT EXISTS idx_articles_content_backfill ON articles(content_status, content_fetch_attempts, discovered_at)",
       ).run();
@@ -361,11 +373,15 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_research_jobs_running_slot ON research_jobs(research_slot) WHERE status = 'running' AND research_slot IS NOT NULL",
       ).run();
       await db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_research_jobs_prediction_delay_cohort ON research_jobs(prediction_delay_eligible, status, finished_at)",
+      ).run();
+      await db.prepare(
         "UPDATE research_jobs SET synthesis_duration_seconds = MAX(0, unixepoch(finished_at) - unixepoch(started_at)) WHERE synthesis_duration_seconds IS NULL AND started_at IS NOT NULL AND finished_at IS NOT NULL AND status IN ('succeeded', 'failed')",
       ).run();
       await db.prepare(
-        "UPDATE research_jobs SET prediction_delay_seconds = (SELECT MAX(0, unixepoch(research_results.created_at) - unixepoch(articles.published_at)) FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE research_results.job_id = research_jobs.id AND articles.published_at IS NOT NULL AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]')) WHERE prediction_delay_seconds IS NULL AND status = 'succeeded'",
+        "UPDATE research_jobs SET prediction_delay_seconds = (SELECT MAX(0, unixepoch(research_results.created_at) - unixepoch(articles.published_at)) FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE research_results.job_id = research_jobs.id AND articles.published_at IS NOT NULL AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]')) WHERE prediction_delay_seconds IS NULL AND prediction_delay_eligible = 1 AND status = 'succeeded'",
       ).run();
+      await pruneLegacyFirstPassBacklog(db);
     })().catch((error) => {
       articleStorageSchemaReady = null;
       throw error;
@@ -1758,7 +1774,7 @@ const DASHBOARD_HTML = `<!doctype html>
         metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers"),
         metric("Failed", failed, "Needs review"),
         metric("Avg synthesis", formatDuration(timing.average_synthesis_seconds), synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s")),
-        metric("Avg prediction delay", formatDuration(timing.average_prediction_delay_seconds), delaySamples + " publication-to-ticker prediction sample" + (delaySamples === 1 ? "" : "s")),
+        metric("Avg prediction delay", formatDuration(timing.average_prediction_delay_seconds), delaySamples + " new first-pass prediction sample" + (delaySamples === 1 ? "" : "s")),
       ].join("");
     }
 
@@ -2996,8 +3012,15 @@ function chunks<T>(items: T[], size: number): T[][] {
   return result;
 }
 
+function isWithinArticleIngestionWindow(item: FeedItem, now = Date.now()): boolean {
+  if (!item.publishedAt) return true;
+  const publishedAt = Date.parse(item.publishedAt);
+  if (!Number.isFinite(publishedAt)) return true;
+  return publishedAt >= now - ARTICLE_INGESTION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+}
+
 async function enqueueArticles(db: D1Database, queue: Queue<ResearchJobMessage>, items: FeedItem[]): Promise<number> {
-  const uniqueItems = [...new Map(items.map((item) => [item.url, item])).values()];
+  const uniqueItems = [...new Map(items.filter((item) => isWithinArticleIngestionWindow(item)).map((item) => [item.url, item])).values()];
   const prepared = await Promise.all(
     uniqueItems.map(async (item) => ({
       ...item,
@@ -3046,7 +3069,7 @@ async function enqueueArticles(db: D1Database, queue: Queue<ResearchJobMessage>,
       const jobs = newItems.map((item) => ({ jobId: crypto.randomUUID(), articleId: item.articleId }));
       await db.batch(
         jobs.map((job) =>
-          db.prepare("INSERT OR IGNORE INTO research_jobs (id, article_id, status) VALUES (?, ?, 'pending')").bind(job.jobId, job.articleId),
+          db.prepare("INSERT OR IGNORE INTO research_jobs (id, article_id, status, prediction_delay_eligible) VALUES (?, ?, 'pending', 1)").bind(job.jobId, job.articleId),
         ),
       );
       for (const jobGroup of chunks(jobs, 100)) {
@@ -3347,11 +3370,24 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
   await ensureArticleStorageSchema(env.NEWS_DB);
   await normalizeResearchJobConcurrency(env);
 
-  const existing = await env.NEWS_DB.prepare("SELECT status FROM research_jobs WHERE id = ?").bind(jobId).first<{ status: string }>();
+  const existing = await env.NEWS_DB.prepare(
+    "SELECT status, prediction_delay_eligible, EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) AS has_result FROM research_jobs WHERE id = ?",
+  ).bind(jobId).first<{ status: string; prediction_delay_eligible: number; has_result: number }>();
   if (!existing) return { ok: false, jobId, skipped: "missing" };
   if (existing.status === "succeeded") return { ok: true, jobId, skipped: existing.status };
   if (existing.status === "running") throw new ResearchBusyError();
   if (existing.status !== "pending") return { ok: false, jobId, skipped: existing.status };
+  if (!existing.prediction_delay_eligible && !existing.has_result) {
+    await env.NEWS_DB.batch([
+      env.NEWS_DB.prepare(
+        "UPDATE research_jobs SET status = 'cancelled', last_error = 'Cancelled pre-cohort first-pass backlog', finished_at = CURRENT_TIMESTAMP, research_slot = NULL WHERE id = ? AND status = 'pending'",
+      ).bind(jobId),
+      env.NEWS_DB.prepare(
+        "UPDATE articles SET status = 'archived' WHERE id = (SELECT article_id FROM research_jobs WHERE id = ?)",
+      ).bind(jobId),
+    ]);
+    return { ok: true, jobId, skipped: "legacy_first_pass" };
+  }
 
   const acquired = await env.NEWS_DB.prepare(
     "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT slot FROM (SELECT 0 AS slot UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = slots.slot) ORDER BY slot LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ?",
@@ -3500,7 +3536,7 @@ async function reanalyzeRecentJobs(env: Env, limit = 20): Promise<{ requeued: nu
   for (const job of jobs.results || []) {
     await env.NEWS_DB.batch([
       env.NEWS_DB.prepare(
-        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
+        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, prediction_delay_eligible = 0, research_slot = NULL WHERE id = ?",
       ).bind(job.id),
       env.NEWS_DB.prepare("UPDATE articles SET status = 'queued' WHERE id = ?").bind(job.article_id),
       env.NEWS_DB.prepare("DELETE FROM price_impacts WHERE article_id = ?").bind(job.article_id),
@@ -3523,7 +3559,7 @@ async function reanalyzeLegacyJobs(env: Env, limit = 100): Promise<{ requeued: n
   for (const job of jobs.results || []) {
     await env.NEWS_DB.batch([
       env.NEWS_DB.prepare(
-        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
+        "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = NULL, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, prediction_delay_eligible = 0, research_slot = NULL WHERE id = ?",
       ).bind(job.id),
       env.NEWS_DB.prepare("UPDATE articles SET status = 'queued' WHERE id = ?").bind(job.article_id),
       env.NEWS_DB.prepare("DELETE FROM price_impacts WHERE article_id = ?").bind(job.article_id),
@@ -4884,7 +4920,7 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
   };
 }> {
   const [row, activeJobs] = await Promise.all([db.prepare(
-    "SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, AVG(CASE WHEN status = 'succeeded' THEN synthesis_duration_seconds END) AS average_synthesis_seconds, SUM(CASE WHEN status = 'succeeded' AND synthesis_duration_seconds IS NOT NULL THEN 1 ELSE 0 END) AS synthesis_samples, AVG(CASE WHEN status = 'succeeded' THEN prediction_delay_seconds END) AS average_prediction_delay_seconds, SUM(CASE WHEN status = 'succeeded' AND prediction_delay_seconds IS NOT NULL THEN 1 ELSE 0 END) AS prediction_delay_samples FROM research_jobs",
+    "SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, AVG(CASE WHEN status = 'succeeded' THEN synthesis_duration_seconds END) AS average_synthesis_seconds, SUM(CASE WHEN status = 'succeeded' AND synthesis_duration_seconds IS NOT NULL THEN 1 ELSE 0 END) AS synthesis_samples, AVG(CASE WHEN status = 'succeeded' AND prediction_delay_eligible = 1 THEN prediction_delay_seconds END) AS average_prediction_delay_seconds, SUM(CASE WHEN status = 'succeeded' AND prediction_delay_eligible = 1 AND prediction_delay_seconds IS NOT NULL THEN 1 ELSE 0 END) AS prediction_delay_samples FROM research_jobs",
   ).first<{
     pending: number | null;
     running: number | null;
@@ -5057,8 +5093,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
   if (url.pathname === "/api/research/recover" && request.method === "POST") {
     const normalized = await normalizeResearchJobConcurrency(env, url.searchParams.get("force") === "1");
+    const pruned = await pruneLegacyFirstPassBacklog(env.NEWS_DB);
     const requeued = await requeuePendingJobs(env, limit);
-    return json({ ok: true, ...normalized, ...requeued });
+    return json({ ok: true, ...normalized, ...pruned, ...requeued });
   }
 
   if (url.pathname === "/api/reanalyze-recent" && request.method === "POST") {
@@ -5172,6 +5209,7 @@ export default {
     ctx.waitUntil(
       ingestFeeds(env).then(async () => {
         await normalizeResearchJobConcurrency(env);
+        await pruneLegacyFirstPassBacklog(env.NEWS_DB);
         await archiveTickerlessArticles(env);
         await requeuePendingJobs(env, 25);
         await Promise.all([
