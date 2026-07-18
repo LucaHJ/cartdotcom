@@ -765,7 +765,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .confidence-heatmap {
-      min-width: 860px;
+      min-width: 1120px;
       table-layout: fixed;
     }
 
@@ -786,10 +786,22 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .heatmap-cell {
       height: 42px;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 750;
-      cursor: help;
+      white-space: nowrap;
       transition: box-shadow 120ms ease;
+    }
+
+    .heatmap-movement {
+      font-weight: 650;
+      opacity: 0.86;
+    }
+
+    .heatmap-samples {
+      margin-left: 2px;
+      font-size: 9px;
+      line-height: 0;
+      vertical-align: super;
     }
 
     .heatmap-cell:hover {
@@ -1352,17 +1364,15 @@ const DASHBOARD_HTML = `<!doctype html>
     function renderHeatmapCell(cell, direction, interval, band) {
       const samples = Number(cell && cell.samples || 0);
       if (!samples) {
-        return '<td class="heatmap-cell heatmap-empty" title="' + escapeAttr(heatmapTooltip(direction, interval, band, null)) + '">n/a</td>';
+        return '<td class="heatmap-cell heatmap-empty">n/a</td>';
       }
       const accuracy = Number(cell.accuracy_pct || 0);
-      return '<td class="heatmap-cell ' + heatmapAccuracyClass(accuracy) + '" title="' + escapeAttr(heatmapTooltip(direction, interval, band, cell)) + '">' + accuracy.toFixed(0) + '%</td>';
-    }
-
-    function heatmapTooltip(direction, interval, band, cell) {
       const label = direction === "bullish" ? "Bullish" : "Bearish";
-      const context = label + " · " + band.min + "-" + band.max + "% confidence · " + interval + ". ";
-      if (!cell || !Number(cell.samples || 0)) return context + "0 samples.";
-      return context + Number(cell.samples) + " samples. " + Number(cell.accuracy_pct || 0).toFixed(1) + "% moved in the predicted direction. Average ticker movement " + signedPct(Number(cell.average_movement_pct || 0)) + ".";
+      const movement = signedPct(Number(cell.average_movement_pct || 0));
+      const accessibilityLabel = label + ", " + band.min + "-" + band.max + "% confidence, " + interval + ": " + accuracy.toFixed(1) + "% accurate, average movement " + movement + ", " + samples + " samples.";
+      return '<td class="heatmap-cell ' + heatmapAccuracyClass(accuracy) + '" aria-label="' + escapeAttr(accessibilityLabel) + '">' +
+        accuracy.toFixed(0) + '% <span class="heatmap-movement">(' + movement + ')</span><sup class="heatmap-samples">' + samples + '</sup>' +
+      '</td>';
     }
 
     function heatmapAccuracyClass(accuracy) {
