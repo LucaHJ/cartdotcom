@@ -633,6 +633,24 @@ const DASHBOARD_HTML = `<!doctype html>
       min-height: 86px;
     }
 
+    .metric-button {
+      width: 100%;
+      color: var(--text);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .metric-button:hover {
+      border-color: #8ba8c7;
+      background: #f8fbff;
+    }
+
+    .metric-button:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
     .metric .label {
       color: var(--muted);
       font-size: 12px;
@@ -663,6 +681,14 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .panel {
       overflow: hidden;
+    }
+
+    .metric .value sup {
+      margin-left: 5px;
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 750;
+      vertical-align: super;
     }
 
     #simulation-panel > .panel {
@@ -1365,6 +1391,8 @@ const DASHBOARD_HTML = `<!doctype html>
       .confidence-heatmap td:nth-child(3) { display: table-cell; }
       .prediction-outcomes-table th:nth-child(3),
       .prediction-outcomes-table td:nth-child(3) { display: table-cell; }
+      #source-stats th:nth-child(3),
+      #source-stats td:nth-child(3) { display: table-cell; }
       .prediction-filter-status { width: 100%; margin-left: 0; }
       .prediction-trend-heading { align-items: flex-start; flex-direction: column; }
       .prediction-trend-meta { text-align: left; }
@@ -1400,6 +1428,7 @@ const DASHBOARD_HTML = `<!doctype html>
     <nav class="tabs" aria-label="Dashboard sections">
       <button class="tab active" id="simulation-tab" type="button">Prediction Accuracy</button>
       <button class="tab" id="overview-tab" type="button">Overview</button>
+      <button class="tab" id="sources-tab" type="button">Sources</button>
     </nav>
 
     <section id="overview-panel" class="hidden">
@@ -1413,14 +1442,6 @@ const DASHBOARD_HTML = `<!doctype html>
     </section>
 
     <section id="settings-panel" class="hidden">
-      <section class="panel" style="margin-top:14px">
-        <div class="panel-header">
-          <div class="panel-title">Recent Source Checks</div>
-          <div class="panel-meta" id="source-checks-meta">0 checks</div>
-        </div>
-        <div id="source-checks"></div>
-      </section>
-
       <section class="panel" style="margin-top:14px">
         <div class="panel-header">
           <div class="panel-title">Recent Jobs</div>
@@ -1438,6 +1459,16 @@ const DASHBOARD_HTML = `<!doctype html>
           <div class="panel-meta" id="articles-meta">0 rows</div>
         </div>
         <div id="articles"></div>
+      </section>
+    </section>
+
+    <section id="sources-panel" class="hidden">
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Source Coverage and Prediction Movement</div>
+          <div class="panel-meta" id="source-stats-meta">0 sources</div>
+        </div>
+        <div id="source-stats"></div>
       </section>
     </section>
 
@@ -1477,17 +1508,19 @@ const DASHBOARD_HTML = `<!doctype html>
     const resultsEl = document.getElementById("results");
     const jobsEl = document.getElementById("jobs");
     const articlesEl = document.getElementById("articles");
-    const sourceChecksEl = document.getElementById("source-checks");
+    const sourceStatsEl = document.getElementById("source-stats");
     const resultsMeta = document.getElementById("results-meta");
     const jobsMeta = document.getElementById("jobs-meta");
     const articlesMeta = document.getElementById("articles-meta");
-    const sourceChecksMeta = document.getElementById("source-checks-meta");
+    const sourceStatsMeta = document.getElementById("source-stats-meta");
     const overviewTab = document.getElementById("overview-tab");
     const simulationTab = document.getElementById("simulation-tab");
+    const sourcesTab = document.getElementById("sources-tab");
     const settingsBtn = document.getElementById("settings-btn");
     const overviewPanel = document.getElementById("overview-panel");
     const simulationPanel = document.getElementById("simulation-panel");
     const settingsPanel = document.getElementById("settings-panel");
+    const sourcesPanel = document.getElementById("sources-panel");
     const predictionSummaryEl = document.getElementById("prediction-summary");
     const predictionSummaryMeta = document.getElementById("prediction-summary-meta");
     const predictionTrendChartEl = document.getElementById("prediction-trend-chart");
@@ -1534,6 +1567,7 @@ const DASHBOARD_HTML = `<!doctype html>
     let liveStatusRefreshTimer = null;
     let liveStatusRefreshPending = false;
     let liveStatusLoading = false;
+    let sourceStatsLoading = false;
     const predictionLoadedArticles = new Set();
     const predictionFilters = { direction: "all", confidenceBin: null };
     const PREDICTION_PAGE_SIZE = 50;
@@ -1584,7 +1618,12 @@ const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("requeue-btn").addEventListener("click", () => runAction("/api/requeue-pending?limit=10"));
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
+    sourcesTab.addEventListener("click", () => setTab("sources"));
     settingsBtn.addEventListener("click", () => setTab("settings"));
+    metricsEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target.closest("[data-open-tab]") : null;
+      if (target) setTab(target.getAttribute("data-open-tab") || "simulation");
+    });
     predictionSummaryEl.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target.closest("[data-heatmap-direction]") : null;
       if (!target) return;
@@ -1609,14 +1648,18 @@ const DASHBOARD_HTML = `<!doctype html>
     function setTab(tab) {
       const simulation = tab === "simulation";
       const settings = tab === "settings";
-      overviewTab.classList.toggle("active", !simulation && !settings);
+      const sources = tab === "sources";
+      const overview = !simulation && !settings && !sources;
+      overviewTab.classList.toggle("active", overview);
       simulationTab.classList.toggle("active", simulation);
-      overviewPanel.classList.toggle("hidden", simulation || settings);
+      sourcesTab.classList.toggle("active", sources);
+      overviewPanel.classList.toggle("hidden", !overview);
       simulationPanel.classList.toggle("hidden", !simulation);
       settingsPanel.classList.toggle("hidden", !settings);
+      sourcesPanel.classList.toggle("hidden", !sources);
       settingsBtn.classList.toggle("active", settings);
       if (simulation && !predictionsLoaded) loadPredictions();
-      if (settings) refreshSourceChecks();
+      if (sources) loadSourceStats();
     }
 
     function setSimulationModel(model) {
@@ -1695,18 +1738,16 @@ const DASHBOARD_HTML = `<!doctype html>
       if (!metricsEl.children.length) showInitialSkeletons();
       setBusy(true);
       try {
-        const [status, results, jobs, sourceChecks] = await Promise.all([
+        const [status, results, jobs] = await Promise.all([
           api("/api/status"),
           api("/api/results?limit=20"),
           api("/api/jobs?limit=12"),
-          api("/api/source-checks?limit=20"),
         ]);
         latestStatus = status;
         renderMetrics(latestStatus);
         renderResults(results.results || []);
         renderJobs(jobs.jobs || []);
         renderArticles(results.results || []);
-        renderSourceChecks(sourceChecks.checks || []);
         lastUpdated.textContent = "Data refreshed " + new Date().toLocaleTimeString();
         liveStatusUpdated.textContent = "Live update " + new Date().toLocaleTimeString();
         if (!simulationPanel.classList.contains("hidden")) {
@@ -1787,13 +1828,19 @@ const DASHBOARD_HTML = `<!doctype html>
       }, delay);
     }
 
-    async function refreshSourceChecks() {
-      if (settingsPanel.classList.contains("hidden")) return;
+    async function loadSourceStats() {
+      if (sourceStatsLoading) return;
+      sourceStatsLoading = true;
+      sourceStatsMeta.textContent = "Loading sources";
+      sourceStatsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
       try {
-        const payload = await api("/api/source-checks?limit=20");
-        renderSourceChecks(payload.checks || []);
-      } catch {
-        sourceChecksMeta.textContent = "Update unavailable";
+        const payload = await api("/api/source-stats");
+        renderSourceStats(payload.sources || []);
+      } catch (error) {
+        sourceStatsMeta.textContent = "Update unavailable";
+        showError(sourceStatsEl, error);
+      } finally {
+        sourceStatsLoading = false;
       }
     }
 
@@ -1829,7 +1876,7 @@ const DASHBOARD_HTML = `<!doctype html>
             };
             renderMetrics(latestStatus);
           }
-          refreshSourceChecks();
+          if (!sourcesPanel.classList.contains("hidden")) loadSourceStats();
         }
         liveStatusUpdated.textContent = "Live signal " + new Date().toLocaleTimeString();
         scheduleLiveStatusRefresh();
@@ -1944,11 +1991,10 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function showInitialSkeletons() {
-      metricsEl.innerHTML = Array.from({ length: 8 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
+      metricsEl.innerHTML = Array.from({ length: 7 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
       resultsEl.innerHTML = Array.from({ length: 5 }, () => '<div class="skeleton-result"><span class="skeleton-block skeleton-line long"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
       jobsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
       articlesEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
-      sourceChecksEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
     }
 
     function showPredictionSkeletons() {
@@ -1980,40 +2026,63 @@ const DASHBOARD_HTML = `<!doctype html>
       const delaySamples = Number(timing.prediction_delay_samples || 0);
       const sourceCheck = status.latest_source_check || null;
       const sourceCheckDate = sourceCheck ? new Date(sourceCheck.checked_at) : null;
+      const configuredSources = Number(status.configured_source_count || (sourceCheck && sourceCheck.source_count) || 0);
+      const attemptedSources = Number((sourceCheck && sourceCheck.source_count) || 0);
+      const failedSources = Number((sourceCheck && sourceCheck.failed_source_count) || 0);
       metricsEl.innerHTML = [
         metric("Articles", analyzed + queued, analyzed + " actionable analyzed, " + queued + " queued"),
         metric("Results", results, succeeded + " succeeded"),
         metric("Running", running, running + " of " + capacity + " parallel Codex workers active"),
-        metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers"),
-        metric("Failed", failed, "Needs review"),
+        metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers", failed + " failed"),
         metric("Avg synthesis", formatDuration(timing.average_synthesis_seconds), synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s")),
         metric("Avg prediction delay", formatDuration(timing.average_prediction_delay_seconds), delaySamples + " new first-pass prediction sample" + (delaySamples === 1 ? "" : "s")),
         metric(
           "Last source check",
-          sourceCheckDate && Number.isFinite(sourceCheckDate.getTime()) ? sourceCheckDate.toLocaleTimeString() : "n/a",
+          sourceCheck ? attemptedSources + " / " + configuredSources : "n/a",
           sourceCheck
-            ? Number(sourceCheck.acquired_count || 0) + " acquired at " + sourceCheckDate.toLocaleString() + " · " + Number(sourceCheck.failed_source_count || 0) + " source failures"
+            ? Number(sourceCheck.acquired_count || 0) + " acquired at " + (sourceCheckDate && Number.isFinite(sourceCheckDate.getTime()) ? sourceCheckDate.toLocaleString() : "unknown time") + " | " + failedSources + " source failures"
             : "No source checks recorded yet",
+          "",
+          "sources",
         ),
       ].join("");
     }
 
-    function metric(label, value, note) {
-      return '<div class="metric"><div class="label">' + escapeHtml(label) + '</div><div class="value">' + escapeHtml(String(value)) + '</div><div class="note">' + escapeHtml(note) + '</div></div>';
+    function metric(label, value, note, supertext = "", openTab = "") {
+      const tag = openTab ? "button" : "div";
+      const attributes = openTab ? ' type="button" data-open-tab="' + escapeAttr(openTab) + '"' : "";
+      return '<' + tag + ' class="metric' + (openTab ? ' metric-button' : '') + '"' + attributes + '><div class="label">' + escapeHtml(label) + '</div><div class="value">' + escapeHtml(String(value)) + (supertext ? '<sup>' + escapeHtml(supertext) + '</sup>' : '') + '</div><div class="note">' + escapeHtml(note) + '</div></' + tag + '>';
     }
 
-    function renderSourceChecks(checks) {
-      sourceChecksMeta.textContent = checks.length + " check" + (checks.length === 1 ? "" : "s");
-      if (!checks.length) {
-        sourceChecksEl.innerHTML = '<div class="empty">No source checks have been recorded yet.</div>';
+    function renderSourceStats(sources) {
+      sourceStatsMeta.textContent = sources.length + " configured source" + (sources.length === 1 ? "" : "s");
+      if (!sources.length) {
+        sourceStatsEl.innerHTML = '<div class="empty">No configured sources are available.</div>';
         return;
       }
-      sourceChecksEl.innerHTML = table(["Checked", "Acquired", "Sources", "Failures"], checks.map((check) => [
-        escapeHtml(formatDate(check.checked_at)),
-        escapeHtml(String(Number(check.acquired_count || 0))),
-        escapeHtml(String(Number(check.source_count || 0))),
-        pill(String(Number(check.failed_source_count || 0)), Number(check.failed_source_count || 0) ? "red" : "green", "Number of configured sources that failed during this check."),
+      sourceStatsEl.innerHTML = '<div class="impact-wrap">' + table(["Source", "Type", "Articles", "Bull avg movement", "Bear avg movement"], sources.map((source) => [
+        '<a href="' + escapeAttr(source.url || "#") + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(source.name || source.id || "Unknown") + '</a>',
+        escapeHtml([source.source_type, source.category].filter(Boolean).join(" / ")),
+        escapeHtml(String(Number(source.acquired_article_count || 0))),
+        sourceMovementCell(source.bullish_average_movement_pct, source.bullish_samples, "bullish"),
+        sourceMovementCell(source.bearish_average_movement_pct, source.bearish_samples, "bearish"),
       ]));
+      sourceStatsEl.innerHTML += '</div>';
+    }
+
+    function sourceMovementCell(value, samples, direction) {
+      const count = Number(samples || 0);
+      const movement = Number(value);
+      if (!count || !Number.isFinite(movement)) {
+        return pill("n/a", "", "No accuracy-eligible " + direction + " interval samples have been recorded for this source.");
+      }
+      const favorable = direction === "bullish" ? movement > 0 : movement < 0;
+      const cls = movement === 0 ? "amber" : favorable ? "green" : "red";
+      return pill(
+        signedPct(movement) + " (" + count + ")",
+        cls,
+        "Average ticker movement across " + count + " recorded " + direction + " interval sample" + (count === 1 ? "" : "s") + " that count toward prediction accuracy. Opposite-call-truncated intervals are excluded.",
+      );
     }
 
     function renderResults(results) {
@@ -4480,6 +4549,19 @@ type PredictionDailySummaryRow = {
   average_movement_pct: number | null;
 };
 
+type SourceStatsRow = {
+  id: string;
+  name: string;
+  url: string;
+  category: string;
+  source_type: string;
+  acquired_article_count: number;
+  bullish_average_movement_pct: number | null;
+  bullish_samples: number;
+  bearish_average_movement_pct: number | null;
+  bearish_samples: number;
+};
+
 const PREDICTION_DATE_MATCH_SQL =
   "datetime(prediction_outcomes.prediction_at) = datetime(COALESCE(articles.published_at, research_results.created_at))";
 const PREDICTION_CONFIDENCE_PCT_SQL =
@@ -4488,6 +4570,53 @@ const PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL =
   "(SELECT MIN(unixepoch(opposite_outcomes.prediction_at)) FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))";
 const PREDICTION_HAS_COUNTED_INTERVAL_SQL =
   "EXISTS (SELECT 1 FROM json_each(prediction_outcomes.intervals_json) AS accuracy_interval WHERE json_type(accuracy_interval.value, '$.change_pct') IN ('integer', 'real') AND NOT EXISTS (SELECT 1 FROM prediction_outcomes AS interval_opposite_outcomes INNER JOIN research_results AS interval_opposite_results ON interval_opposite_results.id = interval_opposite_outcomes.result_id LEFT JOIN articles AS interval_opposite_articles ON interval_opposite_articles.id = interval_opposite_results.article_id WHERE interval_opposite_outcomes.symbol = prediction_outcomes.symbol AND interval_opposite_outcomes.direction IN ('bullish', 'bearish') AND interval_opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(interval_opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND unixepoch(interval_opposite_outcomes.prediction_at) <= unixepoch(json_extract(accuracy_interval.value, '$.at')) AND datetime(interval_opposite_outcomes.prediction_at) = datetime(COALESCE(interval_opposite_articles.published_at, interval_opposite_results.created_at))))";
+
+async function buildSourceStats(env: Env): Promise<SourceStatsRow[]> {
+  await ensurePredictionOutcomeTables(env);
+  const result = await env.NEWS_DB.prepare(
+    `WITH article_counts AS (
+      SELECT source_id, COUNT(*) AS acquired_article_count
+      FROM articles
+      GROUP BY source_id
+    ), eligible_outcomes AS (
+      SELECT articles.source_id, prediction_outcomes.direction, prediction_outcomes.intervals_json,
+        ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch
+      FROM prediction_outcomes
+      INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id
+      INNER JOIN articles ON articles.id = research_results.article_id
+      WHERE prediction_outcomes.direction IN ('bullish', 'bearish')
+        AND ${PREDICTION_DATE_MATCH_SQL}
+    ), eligible_movements AS (
+      SELECT eligible_outcomes.source_id, eligible_outcomes.direction,
+        CAST(json_extract(interval.value, '$.change_pct') AS REAL) AS movement_pct
+      FROM eligible_outcomes
+      CROSS JOIN json_each(eligible_outcomes.intervals_json) AS interval
+      WHERE json_type(interval.value, '$.change_pct') IN ('integer', 'real')
+        AND (eligible_outcomes.accuracy_cutoff_epoch IS NULL
+          OR unixepoch(json_extract(interval.value, '$.at')) < eligible_outcomes.accuracy_cutoff_epoch)
+    ), movement_stats AS (
+      SELECT source_id,
+        AVG(CASE WHEN direction = 'bullish' THEN movement_pct END) AS bullish_average_movement_pct,
+        SUM(CASE WHEN direction = 'bullish' THEN 1 ELSE 0 END) AS bullish_samples,
+        AVG(CASE WHEN direction = 'bearish' THEN movement_pct END) AS bearish_average_movement_pct,
+        SUM(CASE WHEN direction = 'bearish' THEN 1 ELSE 0 END) AS bearish_samples
+      FROM eligible_movements
+      GROUP BY source_id
+    )
+    SELECT sources.id, sources.name, sources.url, sources.category, sources.source_type,
+      COALESCE(article_counts.acquired_article_count, 0) AS acquired_article_count,
+      movement_stats.bullish_average_movement_pct,
+      COALESCE(movement_stats.bullish_samples, 0) AS bullish_samples,
+      movement_stats.bearish_average_movement_pct,
+      COALESCE(movement_stats.bearish_samples, 0) AS bearish_samples
+    FROM sources
+    LEFT JOIN article_counts ON article_counts.source_id = sources.id
+    LEFT JOIN movement_stats ON movement_stats.source_id = sources.id
+    WHERE sources.enabled = 1
+    ORDER BY acquired_article_count DESC, sources.weight DESC, sources.name ASC`,
+  ).all<SourceStatsRow>();
+  return result.results || [];
+}
 
 async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>[]> {
   const statements = PREDICTION_INTERVALS.map((interval) => {
@@ -5311,7 +5440,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       researchOperationsTelemetry(env.NEWS_DB),
       env.NEWS_DB.prepare("SELECT * FROM source_checks ORDER BY datetime(checked_at) DESC LIMIT 1").first<SourceCheckRow>(),
     ]);
-    return json({ ok: true, articles: articles.results, jobs: jobs.results, results, content: content.results, timing: operations.timing, latest_source_check: latestSourceCheck });
+    return json({ ok: true, articles: articles.results, jobs: jobs.results, results, content: content.results, timing: operations.timing, latest_source_check: latestSourceCheck, configured_source_count: SOURCES.length });
   }
 
   if (url.pathname === "/api/status/live") {
@@ -5319,7 +5448,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       researchOperationsTelemetry(env.NEWS_DB),
       env.NEWS_DB.prepare("SELECT * FROM source_checks ORDER BY datetime(checked_at) DESC LIMIT 1").first<SourceCheckRow>(),
     ]);
-    return json({ ok: true, ...operations, latest_source_check: latestSourceCheck });
+    return json({ ok: true, ...operations, latest_source_check: latestSourceCheck, configured_source_count: SOURCES.length });
   }
 
   if (url.pathname === "/api/source-checks") {
@@ -5336,6 +5465,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/api/sources") {
     await seedSources(env.NEWS_DB);
     return json({ ok: true, sources: await listRows(env.NEWS_DB, "SELECT * FROM sources ORDER BY weight DESC, name ASC LIMIT ?", Math.max(limit, SOURCES.length)) });
+  }
+
+  if (url.pathname === "/api/source-stats") {
+    await seedSources(env.NEWS_DB);
+    return json({ ok: true, sources: await buildSourceStats(env) });
   }
 
   if (url.pathname === "/api/articles/content") {
@@ -5560,6 +5694,7 @@ export default {
           "/api/status/live",
           "/api/events",
           "/api/source-checks",
+          "/api/source-stats",
           "/api/ingest",
           "/api/articles",
           "/api/articles/content?id=ARTICLE_ID",
