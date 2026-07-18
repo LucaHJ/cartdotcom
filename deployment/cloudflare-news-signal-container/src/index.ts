@@ -785,10 +785,22 @@ const DASHBOARD_HTML = `<!doctype html>
       white-space: nowrap;
     }
 
-    .prediction-outcomes-table thead th {
+    .prediction-sticky-header {
       position: sticky;
       top: 0;
-      z-index: 5;
+      z-index: 7;
+      overflow: hidden;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .prediction-sticky-header .prediction-outcomes-table {
+      margin: 0;
+      will-change: transform;
+    }
+
+    .prediction-sticky-header thead th {
       background: #e9edf3;
       box-shadow: 0 1px 0 var(--line), 0 4px 8px rgba(16, 24, 40, 0.08);
     }
@@ -1611,12 +1623,27 @@ const DASHBOARD_HTML = `<!doctype html>
       const intervals = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
       const headers = ["Date", "Ticker", "Dir", "Score", "Conf", "Baseline", ...intervals];
       const columns = [200, 90, 100, 80, 80, 110, ...intervals.map(() => 105)];
+      const colgroup = '<colgroup>' + columns.map((width) => '<col style="width:' + width + 'px">').join("") + '</colgroup>';
+      const header = '<thead><tr>' + headers.map((item) => '<th>' + escapeHtml(item) + '</th>').join("") + '</tr></thead>';
       predictionsEl.innerHTML = predictionFilterBarHtml() +
         '<div class="empty hidden" id="prediction-list-empty">No predictions match these filters.</div>' +
-        '<div class="impact-wrap hidden" id="prediction-table-shell"><table class="prediction-outcomes-table"><colgroup>' + columns.map((width) => '<col style="width:' + width + 'px">').join("") + '</colgroup><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody id="prediction-outcomes-body"></tbody></table></div>' +
+        '<div class="prediction-sticky-header hidden" id="prediction-sticky-header"><table class="prediction-outcomes-table" id="prediction-sticky-table">' + colgroup + header + '</table></div>' +
+        '<div class="impact-wrap hidden" id="prediction-table-shell"><table class="prediction-outcomes-table">' + colgroup + '<tbody id="prediction-outcomes-body"></tbody></table></div>' +
         '<div class="prediction-page-loader' + (loading ? '' : ' hidden') + '" id="prediction-page-loader" aria-label="Loading prediction outcomes">' + predictionLoadingRows() + '</div>' +
         '<div class="prediction-scroll-sentinel" id="prediction-scroll-sentinel" aria-hidden="true"></div>';
+      bindPredictionHeaderScroll();
       updatePredictionFilterUi();
+    }
+
+    function bindPredictionHeaderScroll() {
+      const shell = document.getElementById("prediction-table-shell");
+      const stickyTable = document.getElementById("prediction-sticky-table");
+      if (!shell || !stickyTable) return;
+      const sync = () => {
+        stickyTable.style.transform = "translateX(-" + shell.scrollLeft + "px)";
+      };
+      shell.addEventListener("scroll", sync, { passive: true });
+      sync();
     }
 
     function predictionFilterBarHtml() {
@@ -1649,8 +1676,10 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionLoadedCount += outcomes.length;
 
       const tableShell = document.getElementById("prediction-table-shell");
+      const stickyHeader = document.getElementById("prediction-sticky-header");
       const empty = document.getElementById("prediction-list-empty");
       if (tableShell) tableShell.classList.toggle("hidden", predictionLoadedCount === 0);
+      if (stickyHeader) stickyHeader.classList.toggle("hidden", predictionLoadedCount === 0);
       if (empty) empty.classList.toggle("hidden", predictionLoadedCount !== 0 || predictionLoading);
       updatePredictionMeta();
       setPredictionPageLoading(false);
