@@ -405,6 +405,10 @@ const DASHBOARD_HTML = `<!doctype html>
       overflow: hidden;
     }
 
+    #simulation-panel > .panel {
+      overflow: visible;
+    }
+
     .panel-header {
       display: flex;
       align-items: center;
