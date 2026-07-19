@@ -19,6 +19,23 @@ type FeedItem = {
   contentPlaintext: string | null;
 };
 
+type FeedFetchResult = {
+  source: string;
+  count: number;
+  error?: string;
+  items: FeedItem[];
+};
+
+type FeedLedgerRow = {
+  id: string;
+  source_id: string;
+  url: string;
+  title: string;
+  summary: string | null;
+  content_plaintext: string | null;
+  published_at: string | null;
+};
+
 type Article = {
   id: string;
   source_id: string;
@@ -362,8 +379,9 @@ const SOURCES: Source[] = [
 
 const ARTICLE_CONTENT_MAX_CHARS = 120_000;
 const ARTICLE_FETCH_TIMEOUT_MS = 15_000;
-const ARTICLE_INGESTION_WINDOW_MINUTES = 5;
-const ARTICLE_INGESTION_WINDOW_MS = ARTICLE_INGESTION_WINDOW_MINUTES * 60 * 1000;
+const SOURCE_CHECK_INTERVAL_MINUTES = 5;
+const SOURCE_CHECK_INTERVAL_MS = SOURCE_CHECK_INTERVAL_MINUTES * 60 * 1000;
+const LEGACY_STALE_BACKFILL_THRESHOLD_MINUTES = 5;
 const SOURCE_EXPANSION_CUTOFF = "2026-07-18T08:28:55Z";
 const BRISBANE_OFFSET_MS = 10 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -431,7 +449,13 @@ const STALE_BACKFILL_ARTICLE_SQL = `
   SELECT articles.id
   FROM articles
   WHERE articles.published_at IS NOT NULL
-    AND datetime(articles.published_at) < datetime(articles.discovered_at, '-${ARTICLE_INGESTION_WINDOW_MINUTES} minutes')
+    AND datetime(articles.published_at) < datetime(articles.discovered_at, '-${LEGACY_STALE_BACKFILL_THRESHOLD_MINUTES} minutes')
+    AND NOT EXISTS (
+      SELECT 1
+      FROM feed_item_ledger
+      WHERE feed_item_ledger.article_id = articles.id
+        AND feed_item_ledger.disposition IN ('acquired', 'duplicate')
+    )
     AND NOT EXISTS (
       SELECT 1
       FROM research_results AS preserved_results
@@ -475,7 +499,7 @@ async function purgeStaleHistoricalBackfill(env: Env): Promise<Record<string, nu
     deleted_outcomes: Number(outcomes?.count || 0),
     deleted_daily_points: Number(dailyPoints?.count || 0),
     preserved_before: SOURCE_EXPANSION_CUTOFF,
-    acquisition_window_minutes: ARTICLE_INGESTION_WINDOW_MINUTES,
+    legacy_stale_threshold_minutes: LEGACY_STALE_BACKFILL_THRESHOLD_MINUTES,
   };
 }
 
@@ -515,6 +539,28 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
       await db.prepare(
         "CREATE TABLE IF NOT EXISTS source_metric_state (key TEXT PRIMARY KEY, completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
       ).run();
+      await db.prepare(
+        "CREATE TABLE IF NOT EXISTS feed_ingestion_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+      ).run();
+      await db.prepare(
+        "INSERT OR IGNORE INTO feed_ingestion_meta (key, value) VALUES ('ledger_cutover_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+      ).run();
+      await db.prepare(
+        "CREATE TABLE IF NOT EXISTS feed_source_state (source_id TEXT PRIMARY KEY, initialized_at TEXT NOT NULL, last_checked_at TEXT NOT NULL, last_success_at TEXT, last_item_count INTEGER NOT NULL DEFAULT 0, last_error TEXT)",
+      ).run();
+      await db.prepare(
+        "CREATE TABLE IF NOT EXISTS feed_item_ledger (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT NOT NULL, article_id TEXT, title TEXT NOT NULL, summary TEXT, content_plaintext TEXT, published_at TEXT, first_seen_at TEXT NOT NULL, first_check_id TEXT NOT NULL, disposition TEXT NOT NULL, acquired_at TEXT, last_error TEXT, UNIQUE(source_id, url))",
+      ).run();
+      await db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_feed_item_ledger_disposition ON feed_item_ledger(disposition, first_seen_at)",
+      ).run();
+      await db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_feed_item_ledger_source ON feed_item_ledger(source_id, first_seen_at)",
+      ).run();
+      await db.prepare(
+        "CREATE TABLE IF NOT EXISTS source_check_details (check_id TEXT NOT NULL, source_id TEXT NOT NULL, fetched_item_count INTEGER NOT NULL DEFAULT 0, new_item_count INTEGER NOT NULL DEFAULT 0, acquired_count INTEGER NOT NULL DEFAULT 0, duplicate_count INTEGER NOT NULL DEFAULT 0, baseline_count INTEGER NOT NULL DEFAULT 0, pending_count INTEGER NOT NULL DEFAULT 0, error TEXT, PRIMARY KEY(check_id, source_id))",
+      ).run();
+      await db.prepare("CREATE INDEX IF NOT EXISTS idx_source_check_details_source ON source_check_details(source_id, check_id)").run();
       await db.prepare(
         "UPDATE research_jobs SET synthesis_duration_seconds = MAX(0, unixepoch(finished_at) - unixepoch(started_at)) WHERE synthesis_duration_seconds IS NULL AND started_at IS NOT NULL AND finished_at IS NOT NULL AND status IN ('succeeded', 'failed')",
       ).run();
@@ -2291,19 +2337,29 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function renderSourceStats(sources) {
-      sourceStatsMeta.textContent = sources.length + " configured source" + (sources.length === 1 ? "" : "s");
+      const ledgerPending = sources.reduce((sum, source) => sum + Number(source.ledger_pending_count || 0), 0);
+      const ledgerSeen = sources.reduce((sum, source) => sum + Number(source.ledger_seen_count || 0), 0);
+      sourceStatsMeta.textContent = sources.length + " configured source" + (sources.length === 1 ? "" : "s") + " | " + ledgerSeen + " URLs tracked" + (ledgerPending ? " | " + ledgerPending + " pending" : "");
       if (!sources.length) {
         sourceStatsEl.innerHTML = '<div class="empty">No configured sources are available.</div>';
         return;
       }
-      sourceStatsEl.innerHTML = '<div class="impact-wrap source-stats-table">' + table(["Source", "Type", "Articles", "Bull avg movement", "Bear avg movement"], sources.map((source) => [
+      sourceStatsEl.innerHTML = '<div class="impact-wrap source-stats-table">' + table(["Source", "Type", "Seen", "Acquired", "Baseline", "Pending", "Stored", "Bull avg movement", "Bear avg movement"], sources.map((source) => [
         '<a href="' + escapeAttr(source.url || "#") + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(source.name || source.id || "Unknown") + '</a>',
         escapeHtml([source.source_type, source.category].filter(Boolean).join(" / ")),
-        escapeHtml(String(Number(source.acquired_article_count || 0))),
+        sourceLedgerCell(source.ledger_seen_count, "Unique feed URLs observed since the persistent ledger was enabled."),
+        sourceLedgerCell(source.ledger_acquired_count, "Observed feed URLs that are present in the article store. This includes duplicate feed appearances for articles already acquired from another source."),
+        sourceLedgerCell(source.ledger_baseline_count, "Existing entries recorded during this source's initial baseline. They were deliberately not queued, preventing stale-feed backfill."),
+        sourceLedgerCell(source.ledger_pending_count, "Durable unseen feed entries still awaiting insertion or queue recovery."),
+        sourceLedgerCell(source.acquired_article_count, "All article records historically stored against this source."),
         sourceMovementCell(source.bullish_average_movement_pct, source.bullish_samples, "bullish"),
         sourceMovementCell(source.bearish_average_movement_pct, source.bearish_samples, "bearish"),
       ]));
       sourceStatsEl.innerHTML += '</div>';
+    }
+
+    function sourceLedgerCell(value, hint) {
+      return '<span title="' + escapeAttr(hint) + '">' + escapeHtml(String(Number(value || 0))) + '</span>';
     }
 
     function renderSourceActivity(payload) {
@@ -3612,8 +3668,7 @@ function parseFeed(xml: string, source: Source): FeedItem[] {
       if (!left.publishedAt) return 1;
       if (!right.publishedAt) return -1;
       return Date.parse(right.publishedAt) - Date.parse(left.publishedAt);
-    })
-    .slice(0, 15);
+    });
 }
 
 async function hashText(value: string): Promise<string> {
@@ -3633,11 +3688,12 @@ async function seedSources(db: D1Database): Promise<void> {
   if (statements.length) await db.batch(statements);
 }
 
-async function fetchSource(source: Source): Promise<{ source: string; count: number; error?: string; items: FeedItem[] }> {
+async function fetchSource(source: Source): Promise<FeedFetchResult> {
   let lastError = "Feed fetch failed";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const response = await fetch(source.url, {
+        signal: AbortSignal.timeout(ARTICLE_FETCH_TIMEOUT_MS),
         headers: {
           "user-agent": "cartdotcom-news-signal-mvp/0.1",
           accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
@@ -3646,9 +3702,11 @@ async function fetchSource(source: Source): Promise<{ source: string; count: num
       if (response.ok) {
         const xml = await response.text();
         const items = parseFeed(xml, source);
-        return { source: source.id, count: items.length, items };
+        if (items.length) return { source: source.id, count: items.length, items };
+        lastError = "No parseable RSS or Atom entries";
+      } else {
+        lastError = `HTTP ${response.status}`;
       }
-      lastError = `HTTP ${response.status}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
@@ -3677,20 +3735,13 @@ function chunks<T>(items: T[], size: number): T[][] {
   return result;
 }
 
-function isWithinArticleIngestionWindow(item: FeedItem, now = Date.now()): boolean {
-  if (!item.publishedAt) return false;
-  const publishedAt = Date.parse(item.publishedAt);
-  if (!Number.isFinite(publishedAt)) return false;
-  return publishedAt >= now - ARTICLE_INGESTION_WINDOW_MS;
-}
-
 async function enqueueArticles(
   db: D1Database,
   queue: Queue<ResearchJobMessage>,
   items: FeedItem[],
   checkedAt = Date.now(),
-): Promise<number> {
-  const uniqueItems = [...new Map(items.filter((item) => isWithinArticleIngestionWindow(item, checkedAt)).map((item) => [item.url, item])).values()];
+): Promise<{ inserted: number; acquiredUrls: Set<string>; duplicateUrls: Set<string> }> {
+  const uniqueItems = [...new Map(items.map((item) => [item.url, item])).values()];
   const prepared = await Promise.all(
     uniqueItems.map(async (item) => ({
       ...item,
@@ -3699,6 +3750,8 @@ async function enqueueArticles(
     })),
   );
   let inserted = 0;
+  const acquiredUrls = new Set<string>();
+  const duplicateUrls = new Set<string>();
 
   for (const group of chunks(prepared, 50)) {
     const insertResults = await db.batch(
@@ -3723,6 +3776,8 @@ async function enqueueArticles(
     );
     const newItems = group.filter((_item, index) => Boolean(insertResults[index]?.meta?.changes));
     const existingItems = group.filter((_item, index) => !insertResults[index]?.meta?.changes);
+    for (const item of newItems) acquiredUrls.add(item.url);
+    for (const item of existingItems) duplicateUrls.add(item.url);
 
     if (existingItems.length) {
       await db.batch(
@@ -3749,7 +3804,134 @@ async function enqueueArticles(
       inserted += newItems.length;
     }
   }
-  return inserted;
+  return { inserted, acquiredUrls, duplicateUrls };
+}
+
+async function recordFeedObservations(
+  db: D1Database,
+  fetched: FeedFetchResult[],
+  checkId: string,
+  checkedAtIso: string,
+): Promise<void> {
+  const [stateRows, cutoverRow] = await Promise.all([
+    db.prepare("SELECT source_id FROM feed_source_state").all<{ source_id: string }>(),
+    db.prepare("SELECT value FROM feed_ingestion_meta WHERE key = 'ledger_cutover_at'").first<{ value: string }>(),
+  ]);
+  const initializedSources = new Set((stateRows.results || []).map((row) => row.source_id));
+  const cutoverAt = Date.parse(cutoverRow?.value || checkedAtIso);
+  const observationStatements: D1PreparedStatement[] = [];
+  const stateStatements: D1PreparedStatement[] = [];
+
+  for (const result of fetched) {
+    if (result.error) {
+      if (initializedSources.has(result.source)) {
+        stateStatements.push(
+          db.prepare("UPDATE feed_source_state SET last_checked_at = ?, last_error = ? WHERE source_id = ?")
+            .bind(checkedAtIso, result.error.slice(0, 1000), result.source),
+        );
+      }
+      continue;
+    }
+
+    const initialized = initializedSources.has(result.source);
+    const uniqueItems = [...new Map(result.items.map((item) => [item.url, item])).values()];
+    const prepared = await Promise.all(uniqueItems.map(async (item) => {
+      const publishedAt = item.publishedAt ? Date.parse(item.publishedAt) : Number.NaN;
+      const proposedDisposition = initialized || (Number.isFinite(publishedAt) && publishedAt >= cutoverAt) ? "pending" : "baseline";
+      return {
+        ...item,
+        ledgerId: await hashText(`${item.source.id}\n${item.url}`),
+        articleId: await hashText(item.url),
+        proposedDisposition,
+      };
+    }));
+
+    observationStatements.push(...prepared.map((item) => db.prepare(
+        "INSERT OR IGNORE INTO feed_item_ledger (id, source_id, url, article_id, title, summary, content_plaintext, published_at, first_seen_at, first_check_id, disposition, acquired_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN EXISTS (SELECT 1 FROM articles WHERE id = ?) THEN 'duplicate' ELSE ? END, CASE WHEN EXISTS (SELECT 1 FROM articles WHERE id = ?) THEN CURRENT_TIMESTAMP ELSE NULL END)",
+      ).bind(
+        item.ledgerId,
+        item.source.id,
+        item.url,
+        item.articleId,
+        item.title,
+        item.proposedDisposition === "baseline" ? null : item.summary,
+        item.proposedDisposition === "baseline" ? null : item.contentPlaintext,
+        item.publishedAt,
+        checkedAtIso,
+        checkId,
+        item.articleId,
+        item.proposedDisposition,
+        item.articleId,
+      )));
+
+    stateStatements.push(
+      db.prepare(
+        "INSERT INTO feed_source_state (source_id, initialized_at, last_checked_at, last_success_at, last_item_count, last_error) VALUES (?, ?, ?, ?, ?, NULL) ON CONFLICT(source_id) DO UPDATE SET last_checked_at = excluded.last_checked_at, last_success_at = excluded.last_success_at, last_item_count = excluded.last_item_count, last_error = NULL",
+      ).bind(result.source, checkedAtIso, checkedAtIso, checkedAtIso, uniqueItems.length),
+    );
+  }
+
+  for (const group of chunks(observationStatements, 50)) await db.batch(group);
+  for (const group of chunks(stateStatements, 50)) await db.batch(group);
+}
+
+async function pendingFeedItems(db: D1Database): Promise<FeedItem[]> {
+  const rows = await db.prepare(
+    "SELECT id, source_id, url, title, summary, content_plaintext, published_at FROM feed_item_ledger WHERE disposition = 'pending' ORDER BY datetime(first_seen_at), id",
+  ).all<FeedLedgerRow>();
+  const sourceById = new Map(SOURCES.map((item) => [item.id, item]));
+  return (rows.results || []).flatMap((row) => {
+    const itemSource = sourceById.get(row.source_id);
+    return itemSource ? [{
+      source: itemSource,
+      title: row.title,
+      url: row.url,
+      summary: row.summary,
+      publishedAt: row.published_at,
+      contentPlaintext: row.content_plaintext,
+    }] : [];
+  });
+}
+
+async function settleFeedLedger(
+  db: D1Database,
+  result: { acquiredUrls: Set<string>; duplicateUrls: Set<string> },
+): Promise<void> {
+  const urls = [...new Set([...result.acquiredUrls, ...result.duplicateUrls])];
+  for (const group of chunks(urls, 50)) {
+    await db.batch(group.map((url) => db.prepare(
+      "UPDATE feed_item_ledger SET disposition = ?, acquired_at = COALESCE(acquired_at, CURRENT_TIMESTAMP), last_error = NULL WHERE url = ? AND disposition = 'pending'",
+    ).bind(result.acquiredUrls.has(url) ? "acquired" : "duplicate", url)));
+  }
+}
+
+async function recordSourceCheckDetails(
+  db: D1Database,
+  checkId: string,
+  fetched: FeedFetchResult[],
+): Promise<void> {
+  const ledger = await db.prepare(
+    "SELECT source_id, COUNT(*) AS new_item_count, SUM(CASE WHEN disposition = 'acquired' THEN 1 ELSE 0 END) AS acquired_count, SUM(CASE WHEN disposition = 'duplicate' THEN 1 ELSE 0 END) AS duplicate_count, SUM(CASE WHEN disposition = 'baseline' THEN 1 ELSE 0 END) AS baseline_count, SUM(CASE WHEN disposition = 'pending' THEN 1 ELSE 0 END) AS pending_count FROM feed_item_ledger WHERE first_check_id = ? GROUP BY source_id",
+  )
+    .bind(checkId)
+    .all<Record<string, number | string>>();
+  const bySource = new Map((ledger.results || []).map((row) => [String(row.source_id), row]));
+  await db.batch(fetched.map((result) => {
+    const row = bySource.get(result.source);
+    return db.prepare(
+      "INSERT OR REPLACE INTO source_check_details (check_id, source_id, fetched_item_count, new_item_count, acquired_count, duplicate_count, baseline_count, pending_count, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind(
+      checkId,
+      result.source,
+      result.count,
+      Number(row?.new_item_count || 0),
+      Number(row?.acquired_count || 0),
+      Number(row?.duplicate_count || 0),
+      Number(row?.baseline_count || 0),
+      Number(row?.pending_count || 0),
+      result.error || null,
+    );
+  }));
 }
 
 async function ingestFeeds(env: Env, scheduledAt?: number): Promise<{
@@ -3765,9 +3947,15 @@ async function ingestFeeds(env: Env, scheduledAt?: number): Promise<{
   await seedSources(env.NEWS_DB);
   const startedAt = Date.now();
   const checkedAt = scheduledAt ?? startedAt;
-  const fetched = await mapWithConcurrency(SOURCES, 12, fetchSource);
-  const inserted = await enqueueArticles(env.NEWS_DB, env.RESEARCH_QUEUE, fetched.flatMap((result) => result.items), checkedAt);
+  const checkId = crypto.randomUUID();
   const checkedAtIso = new Date(checkedAt).toISOString();
+  const fetched = await mapWithConcurrency(SOURCES, 12, fetchSource);
+  await recordFeedObservations(env.NEWS_DB, fetched, checkId, checkedAtIso);
+  const pendingItems = await pendingFeedItems(env.NEWS_DB);
+  const enqueueResult = await enqueueArticles(env.NEWS_DB, env.RESEARCH_QUEUE, pendingItems, checkedAt);
+  await settleFeedLedger(env.NEWS_DB, enqueueResult);
+  await recordSourceCheckDetails(env.NEWS_DB, checkId, fetched);
+  const inserted = enqueueResult.inserted;
   const completedAt = Date.now();
   const completedAtIso = new Date(completedAt).toISOString();
   const durationSeconds = Math.max(0, Math.round((completedAt - startedAt) / 1000));
@@ -3775,7 +3963,7 @@ async function ingestFeeds(env: Env, scheduledAt?: number): Promise<{
   await env.NEWS_DB.prepare(
     "INSERT INTO source_checks (id, checked_at, completed_at, duration_seconds, acquired_count, source_count, failed_source_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
   )
-    .bind(crypto.randomUUID(), checkedAtIso, completedAtIso, durationSeconds, inserted, fetched.length, failedSourceCount)
+    .bind(checkId, checkedAtIso, completedAtIso, durationSeconds, inserted, fetched.length, failedSourceCount)
     .run();
   await refreshSourceHourlyMetric(env.NEWS_DB, checkedAtIso);
   await publishDashboardEvent(env, {
@@ -5007,6 +5195,11 @@ type SourceStatsRow = {
   category: string;
   source_type: string;
   acquired_article_count: number;
+  ledger_seen_count: number;
+  ledger_acquired_count: number;
+  ledger_baseline_count: number;
+  ledger_pending_count: number;
+  ledger_duplicate_count: number;
   bullish_average_movement_pct: number | null;
   bullish_samples: number;
   bearish_average_movement_pct: number | null;
@@ -5025,7 +5218,16 @@ const PREDICTION_HAS_COUNTED_INTERVAL_SQL =
 async function buildSourceStats(env: Env): Promise<SourceStatsRow[]> {
   await ensurePredictionOutcomeTables(env);
   const result = await env.NEWS_DB.prepare(
-    `WITH article_counts AS (
+    `WITH ledger_stats AS (
+      SELECT source_id,
+        COUNT(*) AS ledger_seen_count,
+        SUM(CASE WHEN disposition IN ('acquired', 'duplicate') THEN 1 ELSE 0 END) AS ledger_acquired_count,
+        SUM(CASE WHEN disposition = 'baseline' THEN 1 ELSE 0 END) AS ledger_baseline_count,
+        SUM(CASE WHEN disposition = 'pending' THEN 1 ELSE 0 END) AS ledger_pending_count,
+        SUM(CASE WHEN disposition = 'duplicate' THEN 1 ELSE 0 END) AS ledger_duplicate_count
+      FROM feed_item_ledger
+      GROUP BY source_id
+    ), article_counts AS (
       SELECT source_id, COUNT(*) AS acquired_article_count
       FROM articles
       GROUP BY source_id
@@ -5056,11 +5258,17 @@ async function buildSourceStats(env: Env): Promise<SourceStatsRow[]> {
     )
     SELECT sources.id, sources.name, sources.url, sources.category, sources.source_type,
       COALESCE(article_counts.acquired_article_count, 0) AS acquired_article_count,
+      COALESCE(ledger_stats.ledger_seen_count, 0) AS ledger_seen_count,
+      COALESCE(ledger_stats.ledger_acquired_count, 0) AS ledger_acquired_count,
+      COALESCE(ledger_stats.ledger_baseline_count, 0) AS ledger_baseline_count,
+      COALESCE(ledger_stats.ledger_pending_count, 0) AS ledger_pending_count,
+      COALESCE(ledger_stats.ledger_duplicate_count, 0) AS ledger_duplicate_count,
       movement_stats.bullish_average_movement_pct,
       COALESCE(movement_stats.bullish_samples, 0) AS bullish_samples,
       movement_stats.bearish_average_movement_pct,
       COALESCE(movement_stats.bearish_samples, 0) AS bearish_samples
     FROM sources
+    LEFT JOIN ledger_stats ON ledger_stats.source_id = sources.id
     LEFT JOIN article_counts ON article_counts.source_id = sources.id
     LEFT JOIN movement_stats ON movement_stats.source_id = sources.id
     WHERE sources.enabled = 1
@@ -6108,6 +6316,20 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     });
   }
 
+  if (url.pathname === "/api/source-check-details") {
+    const requestedCheckId = url.searchParams.get("check_id");
+    const latestCheck = requestedCheckId
+      ? { id: requestedCheckId }
+      : await env.NEWS_DB.prepare("SELECT id FROM source_checks ORDER BY datetime(checked_at) DESC LIMIT 1").first<{ id: string }>();
+    if (!latestCheck?.id) return json({ ok: true, check_id: null, sources: [] });
+    const details = await env.NEWS_DB.prepare(
+      "SELECT source_check_details.*, sources.name, sources.url FROM source_check_details LEFT JOIN sources ON sources.id = source_check_details.source_id WHERE source_check_details.check_id = ? ORDER BY source_check_details.new_item_count DESC, sources.name",
+    )
+      .bind(latestCheck.id)
+      .all();
+    return json({ ok: true, check_id: latestCheck.id, sources: details.results || [] });
+  }
+
   if (url.pathname === "/api/sources") {
     await seedSources(env.NEWS_DB);
     return json({ ok: true, sources: await listRows(env.NEWS_DB, "SELECT * FROM sources ORDER BY weight DESC, name ASC LIMIT ?", Math.max(limit, SOURCES.length)) });
@@ -6354,6 +6576,7 @@ export default {
           "/api/status/live",
           "/api/events",
           "/api/source-checks",
+          "/api/source-check-details?check_id=CHECK_ID",
           "/api/source-stats",
           "/api/source-activity?mode=day|month|year&anchor=YYYY-MM-DD",
           "/api/ingest",
@@ -6397,7 +6620,7 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    const scheduledAt = Math.floor(event.scheduledTime / ARTICLE_INGESTION_WINDOW_MS) * ARTICLE_INGESTION_WINDOW_MS;
+    const scheduledAt = Math.floor(event.scheduledTime / SOURCE_CHECK_INTERVAL_MS) * SOURCE_CHECK_INTERVAL_MS;
     ctx.waitUntil(
       ingestFeeds(env, scheduledAt).then(async () => {
         await normalizeResearchJobConcurrency(env);

@@ -9,6 +9,8 @@ Routes:
 - `GET /api/status` - Counts for articles, jobs, and results.
 - `GET /api/status/live` - Lightweight live job counts, timing averages, and queue ETA.
 - `GET /api/sources` - Configured editorial, regulator, first-party, and press-release feeds.
+- `GET /api/source-stats` - Per-source feed-ledger, stored-article, and prediction-movement totals.
+- `GET /api/source-check-details?check_id=CHECK_ID` - Per-source fetched, newly seen, acquired, duplicate, baseline, pending, and error counts for a source check.
 - `GET /api/articles` - Recently discovered article metadata and plaintext capture status.
 - `GET /api/articles/content?id=ARTICLE_ID` - Stored source link, publication date, and plaintext content for one article.
 - `POST /api/articles/backfill?limit=25` - Capture plaintext content for existing articles that have not completed backfill.
@@ -127,6 +129,7 @@ Cloudflare's docs note that the first container deploy can take several minutes 
 
 - Durable MVP state lives in Cloudflare D1 (`cartdotcom-news-signal`) and research jobs are sent through Cloudflare Queues (`cartdotcom-news-signal-research`).
 - The Worker polls 81 configured RSS/Atom feeds every 5 minutes and can also be triggered manually with `POST /api/ingest`.
+- Feed URLs are recorded in a durable first-seen ledger. The first successful scan establishes a non-queued baseline; every subsequently unseen feed URL is queued without a publication-age cutoff, and pending ledger entries are retried after interruptions.
 - Public article bodies are extracted to plaintext and stored in D1. Feed text remains stored as an explicit fallback when a paywall or browser check prevents full-page extraction.
 - Existing article content is backfilled automatically in bounded batches on every scheduled run; research jobs also attempt capture before analysis.
 - Cloudflare Queues runs up to four research consumers concurrently across four independently scalable Codex containers.
