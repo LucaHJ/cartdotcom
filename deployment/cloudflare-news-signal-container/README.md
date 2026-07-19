@@ -129,7 +129,7 @@ Cloudflare's docs note that the first container deploy can take several minutes 
 
 - Durable MVP state lives in Cloudflare D1 (`cartdotcom-news-signal`) and research jobs are sent through Cloudflare Queues (`cartdotcom-news-signal-research`).
 - The Worker polls 81 configured RSS/Atom feeds every 5 minutes and can also be triggered manually with `POST /api/ingest`.
-- Feed URLs are recorded in a durable first-seen ledger. The first successful scan establishes a non-queued baseline; every subsequently unseen feed URL is queued without a publication-age cutoff, and pending ledger entries are retried after interruptions.
+- Feed URLs are recorded in a durable first-seen ledger. Each source receives a fixed activation timestamp: its initial archive becomes a non-queued baseline, unseen entries published after activation are queued regardless of discovery delay, pre-activation archive entries are recorded as stale, and pending ledger entries are retried after interruptions.
 - Public article bodies are extracted to plaintext and stored in D1. Feed text remains stored as an explicit fallback when a paywall or browser check prevents full-page extraction.
 - Existing article content is backfilled automatically in bounded batches on every scheduled run; research jobs also attempt capture before analysis.
 - Cloudflare Queues runs up to four research consumers concurrently across four independently scalable Codex containers.
