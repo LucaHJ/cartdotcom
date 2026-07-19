@@ -553,8 +553,9 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
         "INSERT OR IGNORE INTO feed_ingestion_meta (key, value) VALUES ('ledger_cutover_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
       ).run();
       await db.prepare(
-        "CREATE TABLE IF NOT EXISTS feed_source_state (source_id TEXT PRIMARY KEY, initialized_at TEXT NOT NULL, last_checked_at TEXT NOT NULL, last_success_at TEXT, last_item_count INTEGER NOT NULL DEFAULT 0, last_error TEXT)",
+        "CREATE TABLE IF NOT EXISTS feed_source_state (source_id TEXT PRIMARY KEY, initialized_at TEXT NOT NULL, last_checked_at TEXT NOT NULL, last_success_at TEXT, last_item_count INTEGER NOT NULL DEFAULT 0, last_feed_hash TEXT, last_error TEXT)",
       ).run();
+      await addColumnIfMissing(db, "feed_source_state", "last_feed_hash", "TEXT");
       await db.prepare(
         "CREATE TABLE IF NOT EXISTS feed_item_ledger (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT NOT NULL, article_id TEXT, title TEXT NOT NULL, summary TEXT, content_plaintext TEXT, published_at TEXT, first_seen_at TEXT NOT NULL, first_check_id TEXT NOT NULL, disposition TEXT NOT NULL, acquired_at TEXT, last_error TEXT, UNIQUE(source_id, url))",
       ).run();
@@ -3822,8 +3823,8 @@ async function recordFeedObservations(
   checkId: string,
   checkedAtIso: string,
 ): Promise<void> {
-  const stateRows = await db.prepare("SELECT source_id, initialized_at FROM feed_source_state").all<{ source_id: string; initialized_at: string }>();
-  const initializedSources = new Map((stateRows.results || []).map((row) => [row.source_id, row.initialized_at]));
+  const stateRows = await db.prepare("SELECT source_id, initialized_at, last_feed_hash FROM feed_source_state").all<{ source_id: string; initialized_at: string; last_feed_hash: string | null }>();
+  const initializedSources = new Map((stateRows.results || []).map((row) => [row.source_id, row]));
   const observationStatements: D1PreparedStatement[] = [];
   const stateStatements: D1PreparedStatement[] = [];
 
@@ -3838,11 +3839,14 @@ async function recordFeedObservations(
       continue;
     }
 
-    const initializedAt = initializedSources.get(result.source) || checkedAtIso;
+    const sourceState = initializedSources.get(result.source);
+    const initializedAt = sourceState?.initialized_at || checkedAtIso;
     const initialized = initializedSources.has(result.source);
     const initializedEpoch = Date.parse(initializedAt);
     const uniqueItems = [...new Map(result.items.map((item) => [item.url, item])).values()];
-    const prepared = await Promise.all(uniqueItems.map(async (item) => {
+    const feedHash = await hashText(uniqueItems.map((item) => item.url).sort().join("\n"));
+    const changedItems = initialized && sourceState?.last_feed_hash === feedHash ? [] : uniqueItems;
+    const prepared = await Promise.all(changedItems.map(async (item) => {
       const publishedAt = item.publishedAt ? Date.parse(item.publishedAt) : Number.NaN;
       const proposedDisposition = Number.isFinite(publishedAt)
         ? publishedAt >= initializedEpoch ? "pending" : initialized ? "stale" : "baseline"
@@ -3875,8 +3879,8 @@ async function recordFeedObservations(
 
     stateStatements.push(
       db.prepare(
-        "INSERT INTO feed_source_state (source_id, initialized_at, last_checked_at, last_success_at, last_item_count, last_error) VALUES (?, ?, ?, ?, ?, NULL) ON CONFLICT(source_id) DO UPDATE SET last_checked_at = excluded.last_checked_at, last_success_at = excluded.last_success_at, last_item_count = excluded.last_item_count, last_error = NULL",
-      ).bind(result.source, checkedAtIso, checkedAtIso, checkedAtIso, uniqueItems.length),
+        "INSERT INTO feed_source_state (source_id, initialized_at, last_checked_at, last_success_at, last_item_count, last_feed_hash, last_error) VALUES (?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(source_id) DO UPDATE SET last_checked_at = excluded.last_checked_at, last_success_at = excluded.last_success_at, last_item_count = excluded.last_item_count, last_feed_hash = excluded.last_feed_hash, last_error = NULL",
+      ).bind(result.source, checkedAtIso, checkedAtIso, checkedAtIso, uniqueItems.length, feedHash),
     );
   }
 
