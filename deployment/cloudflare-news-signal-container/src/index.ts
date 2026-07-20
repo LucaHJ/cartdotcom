@@ -3296,12 +3296,13 @@ const DASHBOARD_HTML = `<!doctype html>
       '</span>';
     }
 
-    function predictionDailyMovementClass(value) {
+    function predictionDailyMovementClass(value, direction) {
       const movement = Number(value);
       if (!Number.isFinite(movement) || movement === 0) return "prediction-daily-flat";
       const magnitude = Math.abs(movement);
       const level = magnitude < 1 ? 1 : magnitude < 2.5 ? 2 : magnitude < 5 ? 3 : magnitude < 10 ? 4 : 5;
-      return "prediction-daily-" + (movement > 0 ? "up-" : "down-") + level;
+      const movementInPredictedDirection = direction === "bearish" ? -movement : movement;
+      return "prediction-daily-" + (movementInPredictedDirection > 0 ? "up-" : "down-") + level;
     }
 
     function predictionDailyGrid(item) {
@@ -3321,10 +3322,13 @@ const DASHBOARD_HTML = `<!doctype html>
         const hint = "Day " + Number(point.day_index || 0) + " at " + formatDate(point.at) +
           ": " + formatMoney(price) + ", from baseline " + signedPct(baselineMovement) +
           ", day-over-day " + signedPct(dailyMovement) + ".";
-        cells.push('<span class="prediction-daily-cell ' + predictionDailyMovementClass(baselineMovement) + '" title="' + escapeAttr(hint) + '" aria-label="' + escapeAttr(hint) + '"></span>');
+        cells.push('<span class="prediction-daily-cell ' + predictionDailyMovementClass(baselineMovement, item.direction) + '" title="' + escapeAttr(hint) + '" aria-label="' + escapeAttr(hint) + '"></span>');
         previous = point;
       }
-      const label = cells.length + " tracked daily prices. Each square is coloured by movement from the call baseline: green is above baseline, red is below baseline, and darker colour means larger magnitude.";
+      const colourMeaning = item.direction === "bearish"
+        ? "green is below baseline and red is above baseline"
+        : "green is above baseline and red is below baseline";
+      const label = cells.length + " tracked daily prices for a " + item.direction + " call. Each square is coloured by movement from the call baseline: " + colourMeaning + ", and darker colour means larger magnitude.";
       return '<div class="prediction-daily-viewport" data-daily-grid-scroll title="Scroll horizontally for older daily prices.">' +
         '<div class="prediction-daily-grid" role="img" aria-label="' + escapeAttr(label) + '">' + cells.join("") + '</div>' +
       '</div>';
