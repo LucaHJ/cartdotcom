@@ -143,6 +143,8 @@ type PredictionDailyPoint = {
   change_pct: number;
 };
 
+type PredictionOutcomeSort = "newest" | "current_desc" | "current_asc" | "peak_desc" | "peak_asc";
+
 type PriceImpact = {
   article_id: string;
   title: string;
@@ -185,6 +187,13 @@ type PredictionOutcome = {
   baseline_at: string | null;
   intervals: Record<string, PredictionPoint>;
   daily_points?: PredictionDailyPoint[];
+  days_since_call?: number;
+  call_status?: "active" | "inactive";
+  inactive_at?: string | null;
+  current_price?: number | null;
+  current_price_at?: string | null;
+  current_movement_pct?: number | null;
+  peak_movement_pct?: number | null;
   updated_at: string;
 };
 
@@ -199,6 +208,7 @@ type PredictionOutcomeFilters = {
   direction: "bullish" | "bearish" | null;
   confidenceMin: number | null;
   confidenceMax: number | null;
+  sort: PredictionOutcomeSort;
   cursor: string | null;
 };
 
@@ -1211,6 +1221,9 @@ const DASHBOARD_HTML = `<!doctype html>
     .prediction-article-row a:hover { text-decoration: underline; }
 
     .prediction-outcomes-table .prediction-data-row td {
+      padding-top: 6px;
+      padding-bottom: 6px;
+      vertical-align: middle;
       white-space: nowrap;
     }
 
@@ -1218,6 +1231,95 @@ const DASHBOARD_HTML = `<!doctype html>
       width: max-content;
       max-width: none;
       white-space: nowrap;
+    }
+
+    .prediction-call-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 24px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .prediction-call-age { font-weight: 750; }
+
+    .prediction-call-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .prediction-call-status::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #98a2b3;
+      content: "";
+    }
+
+    .prediction-call-status.active { color: var(--green); }
+    .prediction-call-status.active::before { background: var(--green); }
+
+    .prediction-current-price {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 7px;
+      min-height: 24px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .prediction-current-move { color: var(--muted); font-size: 11px; font-weight: 750; }
+    .prediction-current-move.positive { color: var(--green); }
+    .prediction-current-move.negative { color: var(--red); }
+
+    .prediction-daily-viewport {
+      width: 100%;
+      max-width: 300px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      touch-action: pan-x;
+    }
+
+    .prediction-daily-viewport::-webkit-scrollbar { display: none; }
+
+    .prediction-daily-grid {
+      display: grid;
+      grid-template-rows: repeat(7, 4px);
+      grid-auto-flow: column;
+      grid-auto-columns: 4px;
+      align-content: center;
+      gap: 1px;
+      width: max-content;
+      min-height: 34px;
+    }
+
+    .prediction-daily-cell {
+      width: 4px;
+      height: 4px;
+      border-radius: 1px;
+      background: #e5e7eb;
+    }
+
+    .prediction-daily-flat { background: #d0d5dd; }
+    .prediction-daily-up-1 { background: #dcfce7; }
+    .prediction-daily-up-2 { background: #bbf7d0; }
+    .prediction-daily-up-3 { background: #86efac; }
+    .prediction-daily-up-4 { background: #22c55e; }
+    .prediction-daily-up-5 { background: #15803d; }
+    .prediction-daily-down-1 { background: #fee2e2; }
+    .prediction-daily-down-2 { background: #fecaca; }
+    .prediction-daily-down-3 { background: #fca5a5; }
+    .prediction-daily-down-4 { background: #ef4444; }
+    .prediction-daily-down-5 { background: #b91c1c; }
+
+    .prediction-daily-empty {
+      color: var(--muted);
+      font-size: 11px;
     }
 
     .prediction-sticky-header {
@@ -1479,7 +1581,8 @@ const DASHBOARD_HTML = `<!doctype html>
     .prediction-direction-button:last-child { border-right: 0; }
     .prediction-direction-button.active { background: #e8f1ff; color: #123c69; }
 
-    .prediction-confidence-select {
+    .prediction-confidence-select,
+    .prediction-sort-select {
       min-width: 150px;
       height: 36px;
       border: 1px solid var(--line);
@@ -1815,8 +1918,20 @@ const DASHBOARD_HTML = `<!doctype html>
     let sourceActivityMode = "day";
     let sourceActivityAnchor = brisbaneDateKey();
     const predictionLoadedArticles = new Set();
-    const predictionFilters = { direction: "all", confidenceBin: null };
+    const predictionFilters = { direction: "all", confidenceBin: null, sort: "newest" };
     const PREDICTION_PAGE_SIZE = 50;
+    const PREDICTION_OUTCOME_INTERVALS = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
+    const PREDICTION_OUTCOME_COLUMNS = [
+      { label: "Date", width: 190 },
+      { label: "Ticker", width: 82 },
+      { label: "Call", width: 138 },
+      { label: "Dir", width: 100 },
+      { label: "Score", width: 80 },
+      { label: "Conf", width: 80 },
+      { label: "Baseline", width: 116 },
+      { label: "Current Day", width: 170 },
+      { label: "Daily Movement", width: 324 },
+    ];
     let simulationLoaded = false;
     let eodSimulationLoaded = false;
     let activeSimulation = null;
@@ -1898,9 +2013,12 @@ const DASHBOARD_HTML = `<!doctype html>
       if (target?.closest("[data-reset-prediction-filters]")) setPredictionFilters("all", null);
     });
     predictionsEl.addEventListener("change", (event) => {
-      const select = event.target instanceof HTMLSelectElement && event.target.id === "prediction-confidence-filter" ? event.target : null;
+      const select = event.target instanceof HTMLSelectElement ? event.target : null;
       if (!select) return;
-      setPredictionFilters(predictionFilters.direction, select.value === "all" ? null : Number(select.value));
+      if (select.id === "prediction-confidence-filter") {
+        setPredictionFilters(predictionFilters.direction, select.value === "all" ? null : Number(select.value));
+      }
+      if (select.id === "prediction-sort") setPredictionSort(select.value);
     });
 
     function setTab(tab) {
@@ -2668,13 +2786,11 @@ const DASHBOARD_HTML = `<!doctype html>
       predictionTotal = 0;
       predictionLastArticleKey = null;
       predictionLoadedArticles.clear();
-      const intervals = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
-      const headers = ["Date", "Ticker", "Dir", "Score", "Conf", "Baseline", ...intervals];
-      const columns = [200, 90, 100, 80, 80, 110];
-      const intervalColumns = intervals.map((interval) => '<col data-prediction-interval="' + interval + '" style="width:150px">').join("");
-      const colgroup = '<colgroup>' + columns.map((width) => '<col style="width:' + width + 'px">').join("") + intervalColumns + '</colgroup>';
+      const headers = PREDICTION_OUTCOME_COLUMNS.map((column) => column.label).concat(PREDICTION_OUTCOME_INTERVALS);
+      const intervalColumns = PREDICTION_OUTCOME_INTERVALS.map((interval) => '<col data-prediction-interval="' + interval + '" style="width:150px">').join("");
+      const colgroup = '<colgroup>' + PREDICTION_OUTCOME_COLUMNS.map((column) => '<col style="width:' + column.width + 'px">').join("") + intervalColumns + '</colgroup>';
       const header = '<thead><tr>' + headers.map((item) => '<th>' + escapeHtml(item) + '</th>').join("") + '</tr></thead>';
-      const initialTableWidth = columns.reduce((sum, width) => sum + width, 0) + intervals.length * 150;
+      const initialTableWidth = PREDICTION_OUTCOME_COLUMNS.reduce((sum, column) => sum + column.width, 0) + PREDICTION_OUTCOME_INTERVALS.length * 150;
       predictionsEl.innerHTML = predictionFilterBarHtml() +
         '<div class="empty hidden" id="prediction-list-empty">No predictions match these filters.</div>' +
         '<div class="prediction-sticky-header hidden" id="prediction-sticky-header"><table class="prediction-outcomes-table" id="prediction-sticky-table" style="width:' + initialTableWidth + 'px;min-width:' + initialTableWidth + 'px">' + colgroup + header + '</table></div>' +
@@ -2698,6 +2814,13 @@ const DASHBOARD_HTML = `<!doctype html>
 
     function predictionFilterBarHtml() {
       const confidenceOptions = ['<option value="all">All confidence</option>'].concat(Array.from({ length: 10 }, (_, index) => '<option value="' + index + '">' + (index * 10) + '-' + ((index + 1) * 10) + '%</option>')).join("");
+      const sortOptions = [
+        ["newest", "Newest calls"],
+        ["current_desc", "Current movement: high to low"],
+        ["current_asc", "Current movement: low to high"],
+        ["peak_desc", "Peak movement: high to low"],
+        ["peak_asc", "Peak movement: low to high"],
+      ].map((option) => '<option value="' + option[0] + '">' + option[1] + '</option>').join("");
       return '<div class="prediction-filterbar">' +
         '<div class="prediction-filter-group"><span class="prediction-filter-label">Direction</span><div class="prediction-direction-control" role="group" aria-label="Prediction direction">' +
           '<button class="prediction-direction-button" type="button" data-outcome-direction="all">All</button>' +
@@ -2705,6 +2828,7 @@ const DASHBOARD_HTML = `<!doctype html>
           '<button class="prediction-direction-button" type="button" data-outcome-direction="bearish">Bearish</button>' +
         '</div></div>' +
         '<label class="prediction-filter-group"><span class="prediction-filter-label">Confidence</span><select class="prediction-confidence-select" id="prediction-confidence-filter">' + confidenceOptions + '</select></label>' +
+        '<label class="prediction-filter-group"><span class="prediction-filter-label">Sort</span><select class="prediction-sort-select" id="prediction-sort" title="Peak movement is the signed daily-sample movement furthest from the baseline price.">' + sortOptions + '</select></label>' +
         '<button class="btn" type="button" data-reset-prediction-filters>Reset filters</button>' +
         '<div class="prediction-filter-status" id="prediction-filter-status">Loading outcomes</div>' +
       '</div>';
@@ -2738,8 +2862,7 @@ const DASHBOARD_HTML = `<!doctype html>
     function appendPredictionOutcomes(outcomes) {
       const body = document.getElementById("prediction-outcomes-body");
       if (!body || !outcomes.length) return;
-      const intervals = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
-      const columnCount = 6 + intervals.length;
+      const columnCount = PREDICTION_OUTCOME_COLUMNS.length + PREDICTION_OUTCOME_INTERVALS.length;
       let html = "";
       for (const item of outcomes) {
         const articleKey = item.article_id || item.result_id || [item.title, item.url, item.prediction_at].join("|");
@@ -2751,27 +2874,31 @@ const DASHBOARD_HTML = `<!doctype html>
         const cells = [
           escapeHtml(formatDate(item.prediction_at)),
           escapeHtml(item.symbol || ""),
+          predictionCallCell(item),
           pill(item.direction || "unknown", directionClass(item.direction), item.rationale || "Predicted direction for this ticker."),
           pill(formatNumber(item.score), Number(item.score || 0) > 0 ? "green" : "red", "Article prediction score used when the ticker outcome was recorded."),
           pill(formatNumber(item.confidence), "green", "Prediction confidence from the analyzed impact detail or article-level result."),
           priceCell(item.baseline_price, item.baseline_at, "Closest available ticker price at the article publication time."),
-          ...intervals.map((interval) => predictionPointPill(item.intervals && item.intervals[interval], item.direction, interval)),
+          predictionCurrentPriceCell(item),
+          predictionDailyGrid(item),
+          ...PREDICTION_OUTCOME_INTERVALS.map((interval) => predictionPointPill(item.intervals && item.intervals[interval], item.direction, interval)),
         ];
         html += '<tr class="prediction-data-row">' + cells.map((cell) => '<td>' + cell + '</td>').join("") + '</tr>';
         predictionLastArticleKey = articleKey;
       }
       body.insertAdjacentHTML("beforeend", html);
-      resizePredictionOutcomeColumns(intervals);
+      resizePredictionOutcomeColumns(PREDICTION_OUTCOME_INTERVALS);
+      scrollPredictionDailyGridsToLatest();
     }
 
     function resizePredictionOutcomeColumns(intervals) {
       const bodyTable = document.getElementById("prediction-outcomes-table");
       const stickyTable = document.getElementById("prediction-sticky-table");
       if (!bodyTable || !stickyTable) return;
-      const fixedWidth = 200 + 90 + 100 + 80 + 80 + 110;
+      const fixedWidth = PREDICTION_OUTCOME_COLUMNS.reduce((sum, column) => sum + column.width, 0);
       let intervalWidthTotal = 0;
       intervals.forEach((interval, intervalIndex) => {
-        const cellIndex = 6 + intervalIndex;
+        const cellIndex = PREDICTION_OUTCOME_COLUMNS.length + intervalIndex;
         let width = 150;
         for (const row of bodyTable.querySelectorAll("tr.prediction-data-row")) {
           const cell = row.children[cellIndex];
@@ -2808,12 +2935,22 @@ const DASHBOARD_HTML = `<!doctype html>
       reloadPredictionOutcomes();
     }
 
+    function setPredictionSort(sort) {
+      const allowed = ["newest", "current_desc", "current_asc", "peak_desc", "peak_asc"];
+      const normalized = allowed.includes(sort) ? sort : "newest";
+      if (predictionFilters.sort === normalized) return;
+      predictionFilters.sort = normalized;
+      reloadPredictionOutcomes();
+    }
+
     function updatePredictionFilterUi() {
       for (const button of predictionsEl.querySelectorAll("[data-outcome-direction]")) {
         button.classList.toggle("active", button.getAttribute("data-outcome-direction") === predictionFilters.direction);
       }
       const select = document.getElementById("prediction-confidence-filter");
       if (select) select.value = predictionFilters.confidenceBin === null ? "all" : String(predictionFilters.confidenceBin);
+      const sortSelect = document.getElementById("prediction-sort");
+      if (sortSelect) sortSelect.value = predictionFilters.sort;
       for (const button of predictionSummaryEl.querySelectorAll("[data-heatmap-direction]")) {
         const confidenceBin = button.getAttribute("data-confidence-bin");
         const normalizedBin = confidenceBin === "all" ? null : Number(confidenceBin);
@@ -2829,6 +2966,7 @@ const DASHBOARD_HTML = `<!doctype html>
         params.set("confidence_min", String(predictionFilters.confidenceBin * 10));
         params.set("confidence_max", String((predictionFilters.confidenceBin + 1) * 10));
       }
+      params.set("sort", predictionFilters.sort);
       if (cursor) params.set("cursor", cursor);
       return endpoint + "?" + params.toString();
     }
@@ -3120,6 +3258,82 @@ const DASHBOARD_HTML = `<!doctype html>
         (accurate ? "green" : "red") + (counted ? " accuracy-counted" : ""),
         "Price sampled at " + formatDate(point.at) + ". " + (accurate ? "Accurate" : "Inaccurate") + " " + direction + " prediction at " + label + " after prediction time. " + (counted ? "Included in the accuracy chart." : "Excluded from the accuracy chart because an opposite call was made before this sample."),
       );
+    }
+
+    function predictionCallCell(item) {
+      const suppliedDays = Number(item.days_since_call);
+      const predictionTime = new Date(item.prediction_at).getTime();
+      const calculatedDays = Number.isFinite(predictionTime) ? Math.max(0, Math.floor((Date.now() - predictionTime) / 86400000)) : 0;
+      const days = Number.isFinite(suppliedDays) ? Math.max(0, Math.floor(suppliedDays)) : calculatedDays;
+      const inactive = item.call_status === "inactive";
+      const status = inactive ? "Inactive" : "Active";
+      const statusHint = inactive
+        ? "A later opposite call ended this prediction's contribution to accuracy at " + formatDate(item.inactive_at) + ". Price tracking continues."
+        : "No later opposite call has ended this prediction's contribution to accuracy.";
+      return '<span class="prediction-call-meta" title="' + escapeAttr(days + " days since the call. " + statusHint) + '">' +
+        '<span class="prediction-call-age">' + days + 'd</span>' +
+        '<span class="prediction-call-status ' + (inactive ? 'inactive' : 'active') + '">' + status + '</span>' +
+      '</span>';
+    }
+
+    function predictionCurrentPriceCell(item) {
+      if (item.current_price === null || item.current_price === undefined || item.current_price === "") {
+        return '<span class="prediction-daily-empty">n/a</span>';
+      }
+      const price = Number(item.current_price);
+      if (!Number.isFinite(price)) return '<span class="prediction-daily-empty">n/a</span>';
+      const hasMovement = item.current_movement_pct !== null && item.current_movement_pct !== undefined && item.current_movement_pct !== "";
+      const movement = hasMovement ? Number(item.current_movement_pct) : NaN;
+      const movementClass = movement > 0 ? "positive" : movement < 0 ? "negative" : "";
+      const hasPeak = item.peak_movement_pct !== null && item.peak_movement_pct !== undefined && item.peak_movement_pct !== "";
+      const peak = hasPeak ? Number(item.peak_movement_pct) : NaN;
+      const hint = "Latest stored daily price sampled at " + formatDate(item.current_price_at) +
+        ". Current movement is measured from the baseline price." +
+        (Number.isFinite(peak) ? " Signed peak movement is " + signedPct(peak) + "." : "");
+      return '<span class="prediction-current-price" title="' + escapeAttr(hint) + '">' +
+        '<span>' + escapeHtml(formatMoney(price)) + '</span>' +
+        '<span class="prediction-current-move ' + movementClass + '">' + escapeHtml(hasMovement ? signedPct(movement) : "n/a") + '</span>' +
+      '</span>';
+    }
+
+    function predictionDailyMovementClass(value) {
+      const movement = Number(value);
+      if (!Number.isFinite(movement) || movement === 0) return "prediction-daily-flat";
+      const magnitude = Math.abs(movement);
+      const level = magnitude < 0.25 ? 1 : magnitude < 0.75 ? 2 : magnitude < 1.5 ? 3 : magnitude < 3 ? 4 : 5;
+      return "prediction-daily-" + (movement > 0 ? "up-" : "down-") + level;
+    }
+
+    function predictionDailyGrid(item) {
+      const points = Array.isArray(item.daily_points)
+        ? item.daily_points.slice().sort((left, right) => Number(left.day_index || 0) - Number(right.day_index || 0))
+        : [];
+      if (points.length < 2) return '<span class="prediction-daily-empty" title="Daily price tracking begins after the first full day.">Awaiting day 1</span>';
+      let previous = points[0];
+      const cells = [];
+      for (const point of points.slice(1)) {
+        const price = Number(point.price);
+        const previousPrice = Number(previous.price);
+        const dailyMovement = Number.isFinite(price) && Number.isFinite(previousPrice) && previousPrice !== 0
+          ? ((price - previousPrice) / previousPrice) * 100
+          : 0;
+        const hint = "Day " + Number(point.day_index || 0) + " at " + formatDate(point.at) +
+          ": " + formatMoney(price) + ", day-over-day " + signedPct(dailyMovement) +
+          ", from baseline " + signedPct(point.change_pct) + ".";
+        cells.push('<span class="prediction-daily-cell ' + predictionDailyMovementClass(dailyMovement) + '" title="' + escapeAttr(hint) + '" aria-label="' + escapeAttr(hint) + '"></span>');
+        previous = point;
+      }
+      const label = cells.length + " tracked daily price movements. Green is an increase, red is a decrease, and darker colour means larger magnitude.";
+      return '<div class="prediction-daily-viewport" data-daily-grid-scroll title="Scroll horizontally for older daily prices.">' +
+        '<div class="prediction-daily-grid" role="img" aria-label="' + escapeAttr(label) + '">' + cells.join("") + '</div>' +
+      '</div>';
+    }
+
+    function scrollPredictionDailyGridsToLatest() {
+      for (const viewport of predictionsEl.querySelectorAll("[data-daily-grid-scroll]:not([data-scroll-initialized])")) {
+        viewport.setAttribute("data-scroll-initialized", "");
+        viewport.scrollLeft = viewport.scrollWidth;
+      }
     }
 
     function renderSimulation(simulation) {
@@ -5549,6 +5763,13 @@ async function buildPredictionDailySummary(env: Env): Promise<{
 function predictionOutcomeFromStoredRow(row: StoredPredictionOutcomeRow): PredictionOutcome {
   const cutoffEpoch = Number(row.accuracy_cutoff_epoch);
   const hasCutoff = Number.isFinite(cutoffEpoch) && cutoffEpoch > 0;
+  const nowEpoch = Math.floor(Date.now() / 1000);
+  const predictionEpoch = unixSeconds(row.prediction_at);
+  const nullableNumber = (value: unknown): number | null => {
+    if (value === null || value === undefined || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
   const confidence = Number(row.confidence);
   const confidencePct = confidence <= 1 ? confidence * 100 : confidence;
   const hasEligibleConfidence = row.confidence !== null && Number.isFinite(confidencePct) && confidencePct >= 0 && confidencePct <= 100;
@@ -5578,24 +5799,70 @@ function predictionOutcomeFromStoredRow(row: StoredPredictionOutcomeRow): Predic
     baseline_price: row.baseline_price,
     baseline_at: row.baseline_at,
     intervals,
+    daily_points: [],
+    days_since_call: Number.isFinite(predictionEpoch) ? Math.max(0, Math.floor((nowEpoch - predictionEpoch) / 86400)) : 0,
+    call_status: hasCutoff && cutoffEpoch <= nowEpoch ? "inactive" : "active",
+    inactive_at: hasCutoff ? isoFromUnix(cutoffEpoch) : null,
+    current_price: nullableNumber(row.current_price),
+    current_price_at: row.current_price_at || null,
+    current_movement_pct: nullableNumber(row.current_movement_pct),
+    peak_movement_pct: nullableNumber(row.peak_movement_pct),
     updated_at: row.updated_at,
   };
 }
 
-function encodePredictionCursor(outcome: PredictionOutcome): string {
-  return btoa(JSON.stringify({ prediction_at: outcome.prediction_at, id: outcome.id }));
+function encodePredictionCursor(offset: number, sort: PredictionOutcomeSort): string {
+  return btoa(JSON.stringify({ offset, sort }));
 }
 
-function decodePredictionCursor(value: string | null): { prediction_at: string; id: string } | null {
-  if (!value) return null;
+function decodePredictionCursor(value: string | null, sort: PredictionOutcomeSort): number {
+  if (!value) return 0;
   try {
-    const parsed = JSON.parse(atob(value)) as { prediction_at?: unknown; id?: unknown };
-    return typeof parsed.prediction_at === "string" && typeof parsed.id === "string"
-      ? { prediction_at: parsed.prediction_at, id: parsed.id }
-      : null;
+    const parsed = JSON.parse(atob(value)) as { offset?: unknown; sort?: unknown };
+    const offset = Number(parsed.offset);
+    return parsed.sort === sort && Number.isInteger(offset) && offset >= 0 ? offset : 0;
   } catch {
-    return null;
+    return 0;
   }
+}
+
+function predictionOutcomeOrderSql(sort: PredictionOutcomeSort): string {
+  const groupTail = "group_metrics.latest_prediction_epoch DESC, filtered_outcomes.article_id DESC";
+  if (sort === "current_desc") {
+    return `group_metrics.current_max IS NULL ASC, group_metrics.current_max DESC, ${groupTail}, filtered_outcomes.current_movement_pct IS NULL ASC, filtered_outcomes.current_movement_pct DESC, filtered_outcomes.id DESC`;
+  }
+  if (sort === "current_asc") {
+    return `group_metrics.current_min IS NULL ASC, group_metrics.current_min ASC, ${groupTail}, filtered_outcomes.current_movement_pct IS NULL ASC, filtered_outcomes.current_movement_pct ASC, filtered_outcomes.id DESC`;
+  }
+  if (sort === "peak_desc") {
+    return `group_metrics.peak_max IS NULL ASC, group_metrics.peak_max DESC, ${groupTail}, filtered_outcomes.peak_movement_pct IS NULL ASC, filtered_outcomes.peak_movement_pct DESC, filtered_outcomes.id DESC`;
+  }
+  if (sort === "peak_asc") {
+    return `group_metrics.peak_min IS NULL ASC, group_metrics.peak_min ASC, ${groupTail}, filtered_outcomes.peak_movement_pct IS NULL ASC, filtered_outcomes.peak_movement_pct ASC, filtered_outcomes.id DESC`;
+  }
+  return `${groupTail}, filtered_outcomes.id DESC`;
+}
+
+async function attachPredictionDailyPoints(env: Env, outcomes: PredictionOutcome[]): Promise<void> {
+  if (!outcomes.length) return;
+  const placeholders = outcomes.map(() => "?").join(", ");
+  const result = await env.NEWS_DB.prepare(
+    `SELECT outcome_id, day_index, sampled_at, price, change_pct FROM prediction_daily_points_v2 WHERE outcome_id IN (${placeholders}) ORDER BY outcome_id, day_index`,
+  )
+    .bind(...outcomes.map((outcome) => outcome.id))
+    .all<{ outcome_id: string; day_index: number; sampled_at: string; price: number; change_pct: number }>();
+  const pointsByOutcome = new Map<string, PredictionDailyPoint[]>();
+  for (const row of result.results || []) {
+    const points = pointsByOutcome.get(row.outcome_id) || [];
+    points.push({
+      day_index: Number(row.day_index),
+      at: row.sampled_at,
+      price: Number(row.price),
+      change_pct: Number(row.change_pct),
+    });
+    pointsByOutcome.set(row.outcome_id, points);
+  }
+  for (const outcome of outcomes) outcome.daily_points = pointsByOutcome.get(outcome.id) || [];
 }
 
 async function buildPredictionPage(
@@ -5627,28 +5894,45 @@ async function buildPredictionPage(
     .bind(...bindings)
     .first<{ count: number }>();
 
-  const pageClauses = [...clauses];
-  const pageBindings = [...bindings];
-  const cursor = decodePredictionCursor(filters.cursor);
-  if (cursor) {
-    pageClauses.push(
-      "(datetime(prediction_outcomes.prediction_at) < datetime(?) OR (datetime(prediction_outcomes.prediction_at) = datetime(?) AND prediction_outcomes.id < ?))",
-    );
-    pageBindings.push(cursor.prediction_at, cursor.prediction_at, cursor.id);
-  }
-  pageBindings.push(pageLimit + 1);
+  const offset = decodePredictionCursor(filters.cursor, filters.sort);
+  const pageBindings = [...bindings, pageLimit + 1, offset];
+  const orderSql = predictionOutcomeOrderSql(filters.sort);
 
   const result = await env.NEWS_DB.prepare(
-    `SELECT prediction_outcomes.*, ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch ${fromSql} WHERE ${pageClauses.join(" AND ")} ORDER BY datetime(prediction_outcomes.prediction_at) DESC, prediction_outcomes.id DESC LIMIT ?`,
+    `WITH filtered_outcomes AS (
+      SELECT prediction_outcomes.*,
+        ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch,
+        (SELECT daily.price FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_price,
+        (SELECT daily.sampled_at FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_price_at,
+        (SELECT daily.change_pct FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_movement_pct,
+        (SELECT daily.change_pct FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY ABS(daily.change_pct) DESC, daily.day_index DESC LIMIT 1) AS peak_movement_pct
+      ${fromSql}
+      WHERE ${clauses.join(" AND ")}
+    ), group_metrics AS (
+      SELECT article_id,
+        MAX(unixepoch(prediction_at)) AS latest_prediction_epoch,
+        MAX(current_movement_pct) AS current_max,
+        MIN(current_movement_pct) AS current_min,
+        MAX(peak_movement_pct) AS peak_max,
+        MIN(peak_movement_pct) AS peak_min
+      FROM filtered_outcomes
+      GROUP BY article_id
+    )
+    SELECT filtered_outcomes.*
+    FROM filtered_outcomes
+    INNER JOIN group_metrics ON group_metrics.article_id = filtered_outcomes.article_id
+    ORDER BY ${orderSql}
+    LIMIT ? OFFSET ?`,
   )
     .bind(...pageBindings)
     .all<StoredPredictionOutcomeRow>();
   const rows = result.results || [];
   const hasMore = rows.length > pageLimit;
   const outcomes = rows.slice(0, pageLimit).map(predictionOutcomeFromStoredRow);
+  await attachPredictionDailyPoints(env, outcomes);
   return {
     outcomes,
-    next_cursor: hasMore && outcomes.length ? encodePredictionCursor(outcomes[outcomes.length - 1]) : null,
+    next_cursor: hasMore && outcomes.length ? encodePredictionCursor(offset + outcomes.length, filters.sort) : null,
     has_more: hasMore,
     total: Number(count?.count || 0),
   };
@@ -6277,6 +6561,10 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
 function predictionFiltersFromUrl(url: URL): PredictionOutcomeFilters {
   const directionValue = url.searchParams.get("direction");
   const direction = directionValue === "bullish" || directionValue === "bearish" ? directionValue : null;
+  const sortValue = url.searchParams.get("sort");
+  const sort: PredictionOutcomeSort = sortValue === "current_desc" || sortValue === "current_asc" || sortValue === "peak_desc" || sortValue === "peak_asc"
+    ? sortValue
+    : "newest";
   const parseConfidence = (name: string) => {
     const value = url.searchParams.get(name);
     if (value === null || value === "") return null;
@@ -6289,6 +6577,7 @@ function predictionFiltersFromUrl(url: URL): PredictionOutcomeFilters {
     direction,
     confidenceMin,
     confidenceMax: confidenceMin !== null && confidenceMax !== null && confidenceMax <= confidenceMin ? null : confidenceMax,
+    sort,
     cursor: url.searchParams.get("cursor"),
   };
 }
