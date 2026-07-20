@@ -527,6 +527,51 @@ async function purgeStaleHistoricalBackfill(env: Env): Promise<Record<string, nu
   };
 }
 
+async function archiveArticleAndRemoveDerivedData(
+  env: Env,
+  articleId: string,
+  reason: string,
+): Promise<Record<string, number | string> | null> {
+  await ensurePredictionOutcomeTables(env);
+  const db = env.NEWS_DB;
+  const article = await db.prepare("SELECT id, title FROM articles WHERE id = ?").bind(articleId).first<{ id: string; title: string }>();
+  if (!article) return null;
+
+  const [results, outcomes, dailyPoints] = await Promise.all([
+    db.prepare("SELECT COUNT(*) AS count FROM research_results WHERE article_id = ?").bind(articleId).first<{ count: number }>(),
+    db.prepare("SELECT COUNT(*) AS count FROM prediction_outcomes WHERE article_id = ?").bind(articleId).first<{ count: number }>(),
+    db.prepare(
+      "SELECT COUNT(*) AS count FROM prediction_daily_points_v2 WHERE outcome_id IN (SELECT id FROM prediction_outcomes WHERE article_id = ?)",
+    ).bind(articleId).first<{ count: number }>(),
+  ]);
+
+  await db.batch([
+    db.prepare(
+      "DELETE FROM prediction_daily_points_v2 WHERE outcome_id IN (SELECT id FROM prediction_outcomes WHERE article_id = ?)",
+    ).bind(articleId),
+    db.prepare(
+      "DELETE FROM prediction_outcome_scans WHERE result_id IN (SELECT id FROM research_results WHERE article_id = ?)",
+    ).bind(articleId),
+    db.prepare("DELETE FROM simulation_trades WHERE article_id = ?").bind(articleId),
+    db.prepare("DELETE FROM simulation_processed_results WHERE article_id = ?").bind(articleId),
+    db.prepare("DELETE FROM prediction_outcomes WHERE article_id = ?").bind(articleId),
+    db.prepare("DELETE FROM price_impacts WHERE article_id = ?").bind(articleId),
+    db.prepare(
+      "UPDATE research_jobs SET status = 'cancelled', last_error = ?, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, prediction_delay_eligible = 0, research_slot = NULL WHERE article_id = ?",
+    ).bind(reason.slice(0, 500), articleId),
+    db.prepare("DELETE FROM research_results WHERE article_id = ?").bind(articleId),
+    db.prepare("UPDATE articles SET status = 'archived' WHERE id = ?").bind(articleId),
+  ]);
+
+  return {
+    article_id: article.id,
+    title: article.title,
+    deleted_results: Number(results?.count || 0),
+    deleted_outcomes: Number(outcomes?.count || 0),
+    deleted_daily_points: Number(dailyPoints?.count || 0),
+  };
+}
+
 async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
   if (!articleStorageSchemaReady) {
     articleStorageSchemaReady = (async () => {
@@ -6690,6 +6735,17 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...(await purgeStaleHistoricalBackfill(env)) });
   }
 
+  if (url.pathname === "/api/articles/archive" && request.method === "POST") {
+    const body = (await request.json().catch(() => ({}))) as { article_id?: unknown; reason?: unknown };
+    const articleId = typeof body.article_id === "string" ? body.article_id.trim() : "";
+    if (!articleId) return json({ error: "Missing article_id" }, { status: 400 });
+    const reason = typeof body.reason === "string" && body.reason.trim()
+      ? body.reason.trim()
+      : "Archived manually with derived prediction data removed";
+    const archived = await archiveArticleAndRemoveDerivedData(env, articleId, reason);
+    return archived ? json({ ok: true, ...archived }) : json({ error: "Article not found" }, { status: 404 });
+  }
+
   if (url.pathname === "/api/articles") {
     return json({
       ok: true,
@@ -6920,6 +6976,7 @@ export default {
           "/api/articles/content?id=ARTICLE_ID",
           "/api/articles/backfill",
           "/api/articles/purge-stale-backfill",
+          "/api/articles/archive",
           "/api/jobs",
           "/api/jobs/failures",
           "/api/results",
