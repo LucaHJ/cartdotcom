@@ -143,7 +143,7 @@ type PredictionDailyPoint = {
   change_pct: number;
 };
 
-type PredictionOutcomeSort = "newest" | "current_desc" | "current_asc" | "peak_desc" | "peak_asc";
+type PredictionOutcomeSort = "newest" | "oldest" | "current_desc" | "current_asc" | "peak_desc" | "peak_asc";
 
 type PriceImpact = {
   article_id: string;
@@ -2816,6 +2816,7 @@ const DASHBOARD_HTML = `<!doctype html>
       const confidenceOptions = ['<option value="all">All confidence</option>'].concat(Array.from({ length: 10 }, (_, index) => '<option value="' + index + '">' + (index * 10) + '-' + ((index + 1) * 10) + '%</option>')).join("");
       const sortOptions = [
         ["newest", "Newest calls"],
+        ["oldest", "Oldest calls"],
         ["current_desc", "Current movement: high to low"],
         ["current_asc", "Current movement: low to high"],
         ["peak_desc", "Peak movement: high to low"],
@@ -2936,7 +2937,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function setPredictionSort(sort) {
-      const allowed = ["newest", "current_desc", "current_asc", "peak_desc", "peak_asc"];
+      const allowed = ["newest", "oldest", "current_desc", "current_asc", "peak_desc", "peak_asc"];
       const normalized = allowed.includes(sort) ? sort : "newest";
       if (predictionFilters.sort === normalized) return;
       predictionFilters.sort = normalized;
@@ -5833,6 +5834,9 @@ function decodePredictionCursor(value: string | null, sort: PredictionOutcomeSor
 
 function predictionOutcomeOrderSql(sort: PredictionOutcomeSort): string {
   const groupTail = "group_metrics.latest_prediction_epoch DESC, filtered_outcomes.article_id DESC";
+  if (sort === "oldest") {
+    return "group_metrics.latest_prediction_epoch ASC, filtered_outcomes.article_id ASC, filtered_outcomes.id ASC";
+  }
   if (sort === "current_desc") {
     return `group_metrics.current_max IS NULL ASC, group_metrics.current_max DESC, ${groupTail}, filtered_outcomes.current_movement_pct IS NULL ASC, filtered_outcomes.current_movement_pct DESC, filtered_outcomes.id DESC`;
   }
@@ -6567,7 +6571,7 @@ function predictionFiltersFromUrl(url: URL): PredictionOutcomeFilters {
   const directionValue = url.searchParams.get("direction");
   const direction = directionValue === "bullish" || directionValue === "bearish" ? directionValue : null;
   const sortValue = url.searchParams.get("sort");
-  const sort: PredictionOutcomeSort = sortValue === "current_desc" || sortValue === "current_asc" || sortValue === "peak_desc" || sortValue === "peak_asc"
+  const sort: PredictionOutcomeSort = sortValue === "oldest" || sortValue === "current_desc" || sortValue === "current_asc" || sortValue === "peak_desc" || sortValue === "peak_asc"
     ? sortValue
     : "newest";
   const parseConfidence = (name: string) => {
