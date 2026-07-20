@@ -3300,7 +3300,7 @@ const DASHBOARD_HTML = `<!doctype html>
       const movement = Number(value);
       if (!Number.isFinite(movement) || movement === 0) return "prediction-daily-flat";
       const magnitude = Math.abs(movement);
-      const level = magnitude < 0.25 ? 1 : magnitude < 0.75 ? 2 : magnitude < 1.5 ? 3 : magnitude < 3 ? 4 : 5;
+      const level = magnitude < 1 ? 1 : magnitude < 2.5 ? 2 : magnitude < 5 ? 3 : magnitude < 10 ? 4 : 5;
       return "prediction-daily-" + (movement > 0 ? "up-" : "down-") + level;
     }
 
@@ -3317,13 +3317,14 @@ const DASHBOARD_HTML = `<!doctype html>
         const dailyMovement = Number.isFinite(price) && Number.isFinite(previousPrice) && previousPrice !== 0
           ? ((price - previousPrice) / previousPrice) * 100
           : 0;
+        const baselineMovement = Number(point.change_pct);
         const hint = "Day " + Number(point.day_index || 0) + " at " + formatDate(point.at) +
-          ": " + formatMoney(price) + ", day-over-day " + signedPct(dailyMovement) +
-          ", from baseline " + signedPct(point.change_pct) + ".";
-        cells.push('<span class="prediction-daily-cell ' + predictionDailyMovementClass(dailyMovement) + '" title="' + escapeAttr(hint) + '" aria-label="' + escapeAttr(hint) + '"></span>');
+          ": " + formatMoney(price) + ", from baseline " + signedPct(baselineMovement) +
+          ", day-over-day " + signedPct(dailyMovement) + ".";
+        cells.push('<span class="prediction-daily-cell ' + predictionDailyMovementClass(baselineMovement) + '" title="' + escapeAttr(hint) + '" aria-label="' + escapeAttr(hint) + '"></span>');
         previous = point;
       }
-      const label = cells.length + " tracked daily price movements. Green is an increase, red is a decrease, and darker colour means larger magnitude.";
+      const label = cells.length + " tracked daily prices. Each square is coloured by movement from the call baseline: green is above baseline, red is below baseline, and darker colour means larger magnitude.";
       return '<div class="prediction-daily-viewport" data-daily-grid-scroll title="Scroll horizontally for older daily prices.">' +
         '<div class="prediction-daily-grid" role="img" aria-label="' + escapeAttr(label) + '">' + cells.join("") + '</div>' +
       '</div>';
