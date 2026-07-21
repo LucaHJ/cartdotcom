@@ -1903,6 +1903,8 @@ const DASHBOARD_HTML = `<!doctype html>
       .actions { justify-content: flex-start; }
       .tokenbar { grid-template-columns: 1fr; }
       .metrics { grid-template-columns: 1fr; }
+      .panel-header { align-items: flex-start; flex-direction: column; }
+      .panel-meta { white-space: normal; }
       th:nth-child(3), td:nth-child(3) { display: none; }
       .confidence-heatmap th:nth-child(3),
       .confidence-heatmap td:nth-child(3) { display: table-cell; }
