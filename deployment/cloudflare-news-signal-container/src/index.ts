@@ -710,6 +710,17 @@ const DASHBOARD_HTML = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>News Signal Dashboard</title>
+  <script>
+    (() => {
+      try {
+        const savedTheme = localStorage.getItem("newsSignalTheme");
+        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme = savedTheme || (prefersDark ? "dark" : "light");
+      } catch (_) {
+        document.documentElement.dataset.theme = "light";
+      }
+    })();
+  </script>
   <style>
     :root {
       color-scheme: light;
@@ -723,7 +734,70 @@ const DASHBOARD_HTML = `<!doctype html>
       --red: #b42318;
       --amber: #a15c07;
       --blue: #1457a8;
+      --primary: #123c69;
+      --primary-text: #ffffff;
+      --text-secondary: #344054;
+      --surface-hover: #f8fbff;
+      --surface-raised: #ffffff;
+      --surface-alt: #fbfcfe;
+      --surface-input: #ffffff;
+      --pill-neutral-bg: #eef2f6;
+      --green-bg: #e6f4ee;
+      --red-bg: #fdecec;
+      --amber-bg: #fff2d6;
+      --blue-bg: #e8f1ff;
+      --skeleton: #dfe4ea;
+      --sticky-header: #e9edf3;
+      --chart-bg: #fbfcfe;
+      --chart-grid: #e4e9f0;
+      --chart-grid-subtle: #eef1f5;
+      --chart-zero: #475467;
+      --chart-sample: #8aaec7;
+      --chart-sample-text: #7893a8;
+      --chart-band: #f7f9fc;
+      --chart-separator: #c7d0dc;
+      --heatmap-empty-bg: #f3f4f6;
+      --heatmap-empty-text: #98a2b3;
       --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0f1216;
+      --panel: #171b21;
+      --panel-soft: #20262e;
+      --text: #edf2f7;
+      --muted: #a4afbd;
+      --line: #343d49;
+      --green: #4fd1a1;
+      --red: #ff7a70;
+      --amber: #f7bd67;
+      --blue: #78b7ff;
+      --primary: #2f6da8;
+      --primary-text: #ffffff;
+      --text-secondary: #c9d2dc;
+      --surface-hover: #222b35;
+      --surface-raised: #1c222a;
+      --surface-alt: #1b2027;
+      --surface-input: #14181e;
+      --pill-neutral-bg: #29313b;
+      --green-bg: #153a31;
+      --red-bg: #452526;
+      --amber-bg: #46351d;
+      --blue-bg: #1c3551;
+      --skeleton: #333c47;
+      --sticky-header: #252c35;
+      --chart-bg: #171b21;
+      --chart-grid: #3d4652;
+      --chart-grid-subtle: #2b333d;
+      --chart-zero: #b0bac7;
+      --chart-sample: #80a9c8;
+      --chart-sample-text: #94b5cc;
+      --chart-band: #1a2027;
+      --chart-separator: #4a5664;
+      --heatmap-empty-bg: #252b33;
+      --heatmap-empty-text: #8e99a7;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
     }
 
     * { box-sizing: border-box; }
@@ -777,6 +851,64 @@ const DASHBOARD_HTML = `<!doctype html>
       gap: 8px;
     }
 
+    .theme-control {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .theme-control input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .theme-switch {
+      position: relative;
+      width: 38px;
+      height: 22px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--pill-neutral-bg);
+      transition: background 140ms ease, border-color 140ms ease;
+    }
+
+    .theme-switch::after {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--muted);
+      content: "";
+      transition: transform 140ms ease, background 140ms ease;
+    }
+
+    .theme-control input:checked + .theme-switch {
+      border-color: var(--primary);
+      background: var(--primary);
+    }
+
+    .theme-control input:checked + .theme-switch::after {
+      background: var(--primary-text);
+      transform: translateX(16px);
+    }
+
+    .theme-control input:focus-visible + .theme-switch {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
     .btn {
       min-height: 36px;
       border: 1px solid var(--line);
@@ -789,9 +921,9 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .btn.primary {
-      border-color: #123c69;
-      background: #123c69;
-      color: white;
+      border-color: var(--primary);
+      background: var(--primary);
+      color: var(--primary-text);
     }
 
     .btn:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -844,8 +976,8 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .metric-button:hover {
-      border-color: #8ba8c7;
-      background: #f8fbff;
+      border-color: var(--blue);
+      background: var(--surface-hover);
     }
 
     .metric-button:focus-visible {
@@ -952,23 +1084,23 @@ const DASHBOARD_HTML = `<!doctype html>
       min-height: 24px;
       padding: 3px 8px;
       border-radius: 999px;
-      background: #eef2f6;
-      color: #344054;
+      background: var(--pill-neutral-bg);
+      color: var(--text-secondary);
       font-size: 12px;
       font-weight: 400;
       line-height: 1.2;
       max-width: 100%;
     }
 
-    .pill.green { background: #e6f4ee; color: var(--green); }
-    .pill.red { background: #fdecec; color: var(--red); }
-    .pill.amber { background: #fff2d6; color: var(--amber); }
-    .pill.blue { background: #e8f1ff; color: var(--blue); }
+    .pill.green { background: var(--green-bg); color: var(--green); }
+    .pill.red { background: var(--red-bg); color: var(--red); }
+    .pill.amber { background: var(--amber-bg); color: var(--amber); }
+    .pill.blue { background: var(--blue-bg); color: var(--blue); }
     .pill.accuracy-counted { font-weight: 750; }
 
     .summary {
       margin-top: 10px;
-      color: #344054;
+      color: var(--text-secondary);
       font-size: 13px;
       line-height: 1.45;
     }
@@ -999,10 +1131,10 @@ const DASHBOARD_HTML = `<!doctype html>
       overflow: auto;
       white-space: pre-wrap;
       word-break: break-word;
-      color: #344054;
+      color: var(--text-secondary);
       font-size: 12px;
       line-height: 1.45;
-      background: #f8fafc;
+      background: var(--surface-alt);
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 10px;
@@ -1060,7 +1192,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .skeleton-block {
       display: block;
-      background: #dfe4ea;
+      background: var(--skeleton);
       border-radius: 4px;
       animation: skeletonPulse 1.15s ease-in-out infinite;
     }
@@ -1120,7 +1252,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .tab.active {
       color: var(--text);
-      border-bottom-color: #123c69;
+      border-bottom-color: var(--primary);
     }
 
     .subtabs {
@@ -1132,7 +1264,7 @@ const DASHBOARD_HTML = `<!doctype html>
     .subtab {
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: #fff;
+      background: var(--surface-input);
       color: var(--muted);
       padding: 7px 10px;
       cursor: pointer;
@@ -1141,13 +1273,13 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .subtab.active {
       color: var(--text);
-      border-color: #123c69;
-      background: #e8f1ff;
+      border-color: var(--primary);
+      background: var(--blue-bg);
     }
 
     .model-blurb {
       padding: 12px 18px 0;
-      color: #344054;
+      color: var(--text-secondary);
       font-size: 13px;
       line-height: 1.45;
     }
@@ -1159,7 +1291,8 @@ const DASHBOARD_HTML = `<!doctype html>
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 8px 10px;
-      background: #fff;
+      background: var(--surface-input);
+      color: var(--text);
     }
 
     .report-box {
@@ -1167,7 +1300,7 @@ const DASHBOARD_HTML = `<!doctype html>
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 12px;
-      background: #fbfcfe;
+      background: var(--surface-alt);
     }
 
     .hidden { display: none; }
@@ -1208,7 +1341,7 @@ const DASHBOARD_HTML = `<!doctype html>
     .range-btn {
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: #fff;
+      background: var(--surface-input);
       color: var(--muted);
       padding: 5px 8px;
       cursor: pointer;
@@ -1218,8 +1351,8 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .range-btn.active {
       color: var(--text);
-      border-color: #123c69;
-      background: #e8f1ff;
+      border-color: var(--primary);
+      background: var(--blue-bg);
     }
 
     .chart {
@@ -1232,7 +1365,7 @@ const DASHBOARD_HTML = `<!doctype html>
       width: 100%;
       height: 100%;
       display: block;
-      background: #fbfcfe;
+      background: var(--chart-bg);
       border: 1px solid var(--line);
       border-radius: 8px;
     }
@@ -1249,7 +1382,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .prediction-outcomes-table .prediction-article-row th {
       padding: 12px;
-      background: #f8fafc;
+      background: var(--surface-alt);
       color: var(--text);
       font-size: 13px;
       text-transform: none;
@@ -1310,7 +1443,7 @@ const DASHBOARD_HTML = `<!doctype html>
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: #98a2b3;
+      background: var(--muted);
       content: "";
     }
 
@@ -1370,6 +1503,19 @@ const DASHBOARD_HTML = `<!doctype html>
     .prediction-daily-down-4 { background: #ef4444; }
     .prediction-daily-down-5 { background: #b91c1c; }
 
+    :root[data-theme="dark"] .prediction-daily-cell { background: #303741; }
+    :root[data-theme="dark"] .prediction-daily-flat { background: #4a5563; }
+    :root[data-theme="dark"] .prediction-daily-up-1 { background: #17372e; }
+    :root[data-theme="dark"] .prediction-daily-up-2 { background: #1b5140; }
+    :root[data-theme="dark"] .prediction-daily-up-3 { background: #207052; }
+    :root[data-theme="dark"] .prediction-daily-up-4 { background: #269464; }
+    :root[data-theme="dark"] .prediction-daily-up-5 { background: #35bb7b; }
+    :root[data-theme="dark"] .prediction-daily-down-1 { background: #46262a; }
+    :root[data-theme="dark"] .prediction-daily-down-2 { background: #653035; }
+    :root[data-theme="dark"] .prediction-daily-down-3 { background: #8b3c41; }
+    :root[data-theme="dark"] .prediction-daily-down-4 { background: #bd4a4d; }
+    :root[data-theme="dark"] .prediction-daily-down-5 { background: #e45d5d; }
+
     .prediction-daily-empty {
       color: var(--muted);
       font-size: 11px;
@@ -1391,7 +1537,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .prediction-sticky-header thead th {
-      background: #e9edf3;
+      background: var(--sticky-header);
       box-shadow: 0 1px 0 var(--line), 0 4px 8px rgba(16, 24, 40, 0.08);
     }
 
@@ -1497,14 +1643,14 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .heatmap-cell.clickable:hover,
     .heatmap-cell.active-filter {
-      box-shadow: inset 0 0 0 2px #123c69;
+      box-shadow: inset 0 0 0 2px var(--primary);
     }
 
     .heatmap-cell.active-filter {
-      box-shadow: inset 0 0 0 3px #123c69;
+      box-shadow: inset 0 0 0 3px var(--primary);
     }
 
-    .heatmap-empty { background: #f3f4f6; color: #98a2b3; }
+    .heatmap-empty { background: var(--heatmap-empty-bg); color: var(--heatmap-empty-text); }
     .heatmap-scale-wrong { background: #dc2626; }
     .heatmap-scale-neutral { background: #facc15; }
     .heatmap-scale-correct { background: #16a34a; }
@@ -1572,7 +1718,7 @@ const DASHBOARD_HTML = `<!doctype html>
       overflow-y: hidden;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: #fbfcfe;
+      background: var(--chart-bg);
     }
 
     .prediction-trend-chart svg {
@@ -1597,7 +1743,7 @@ const DASHBOARD_HTML = `<!doctype html>
       gap: 10px 14px;
       padding: 12px 14px;
       border-bottom: 1px solid var(--line);
-      background: #fbfcfe;
+      background: var(--surface-alt);
     }
 
     .prediction-filter-group {
@@ -1624,7 +1770,7 @@ const DASHBOARD_HTML = `<!doctype html>
       border: 0;
       border-right: 1px solid var(--line);
       padding: 0 11px;
-      background: #fff;
+      background: var(--surface-input);
       color: var(--muted);
       font-size: 12px;
       font-weight: 700;
@@ -1632,7 +1778,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .prediction-direction-button:last-child { border-right: 0; }
-    .prediction-direction-button.active { background: #e8f1ff; color: #123c69; }
+    .prediction-direction-button.active { background: var(--blue-bg); color: var(--blue); }
 
     .prediction-confidence-select,
     .prediction-sort-select {
@@ -1641,7 +1787,7 @@ const DASHBOARD_HTML = `<!doctype html>
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 0 9px;
-      background: #fff;
+      background: var(--surface-input);
       color: var(--text);
     }
 
@@ -1707,7 +1853,7 @@ const DASHBOARD_HTML = `<!doctype html>
       border: 0;
       border-right: 1px solid var(--line);
       padding: 0 12px;
-      background: #fff;
+      background: var(--surface-input);
       color: var(--muted);
       font-size: 12px;
       font-weight: 700;
@@ -1715,7 +1861,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .source-view-button:last-child { border-right: 0; }
-    .source-view-button.active { background: #e8f1ff; color: #123c69; }
+    .source-view-button.active { background: var(--blue-bg); color: var(--blue); }
 
     .source-period-control { display: flex; align-items: center; gap: 8px; }
     .source-period-label { min-width: 150px; text-align: center; font-size: 12px; font-weight: 700; }
@@ -1740,7 +1886,7 @@ const DASHBOARD_HTML = `<!doctype html>
       height: 330px;
       border: 1px solid var(--line);
       overflow-x: auto;
-      background: #fff;
+      background: var(--chart-bg);
     }
 
     .source-activity-chart svg { display: block; width: 100%; min-width: 780px; height: 100%; }
@@ -1785,6 +1931,11 @@ const DASHBOARD_HTML = `<!doctype html>
         </div>
       </div>
       <div class="actions">
+        <label class="theme-control" title="Use the dark dashboard colour scheme">
+          <span>Dark mode</span>
+          <input id="theme-toggle" type="checkbox" role="switch" aria-label="Dark mode">
+          <span class="theme-switch" aria-hidden="true"></span>
+        </label>
         <button class="btn" id="refresh-btn" type="button">Refresh</button>
         <button class="btn" id="ingest-btn" type="button">Ingest</button>
         <button class="btn primary" id="settings-btn" type="button">Settings</button>
@@ -1904,6 +2055,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
   <script>
     const tokenInput = document.getElementById("token-input");
+    const themeToggle = document.getElementById("theme-toggle");
     const authState = document.getElementById("auth-state");
     const lastUpdated = document.getElementById("last-updated");
     const liveStatusUpdated = document.getElementById("live-status-updated");
@@ -2008,8 +2160,15 @@ const DASHBOARD_HTML = `<!doctype html>
       { key: "1y", label: "1y", hours: 24 * 365 },
     ];
 
+    const THEME_KEY = "newsSignalTheme";
     const TOKEN_KEY = "newsSignalToken";
     const TOKEN_COOKIE = "news_signal_token";
+    themeToggle.checked = document.documentElement.dataset.theme === "dark";
+    themeToggle.addEventListener("change", () => {
+      const theme = themeToggle.checked ? "dark" : "light";
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem(THEME_KEY, theme);
+    });
     tokenInput.value = storedToken();
     persistToken(tokenInput.value);
     syncAuthState();
@@ -2598,9 +2757,9 @@ const DASHBOARD_HTML = `<!doctype html>
         const y = pad.top + ratio * plotHeight;
         const articles = articleMax * (1 - ratio);
         const tickers = tickerMax * (1 - ratio);
-        return '<line x1="' + pad.left + '" y1="' + y.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y.toFixed(2) + '" stroke="#e4e9f0"></line>' +
-          '<text x="' + (pad.left - 8) + '" y="' + (y + 4).toFixed(2) + '" fill="#1457a8" font-size="10" text-anchor="end">' + formatAxisCount(articles) + '</text>' +
-          '<text x="' + (width - pad.right + 8) + '" y="' + (y + 4).toFixed(2) + '" fill="#087a55" font-size="10">' + formatAxisCount(tickers) + '</text>';
+        return '<line x1="' + pad.left + '" y1="' + y.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y.toFixed(2) + '" stroke="var(--chart-grid)"></line>' +
+          '<text x="' + (pad.left - 8) + '" y="' + (y + 4).toFixed(2) + '" fill="var(--blue)" font-size="10" text-anchor="end">' + formatAxisCount(articles) + '</text>' +
+          '<text x="' + (width - pad.right + 8) + '" y="' + (y + 4).toFixed(2) + '" fill="var(--green)" font-size="10">' + formatAxisCount(tickers) + '</text>';
       }).join("");
 
       const separators = Array.isArray(payload.separators) ? payload.separators : [];
@@ -2609,15 +2768,15 @@ const DASHBOARD_HTML = `<!doctype html>
         const end = index + 1 < separators.length ? Number(separators[index + 1].position || domainMax) : domainMax;
         const x = xFor(start);
         const nextX = xFor(Math.min(domainMax, end));
-        return (index % 2 === 0 ? '<rect x="' + x.toFixed(2) + '" y="' + pad.top + '" width="' + Math.max(0, nextX - x).toFixed(2) + '" height="' + plotHeight + '" fill="#f7f9fc"></rect>' : '') +
-          '<line x1="' + x.toFixed(2) + '" y1="' + pad.top + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="#c7d0dc" stroke-dasharray="4 4"></line>' +
-          '<text x="' + (x + 5).toFixed(2) + '" y="' + (pad.top + 12) + '" fill="#667085" font-size="9">' + escapeHtml(separator.label || "") + '</text>';
+        return (index % 2 === 0 ? '<rect x="' + x.toFixed(2) + '" y="' + pad.top + '" width="' + Math.max(0, nextX - x).toFixed(2) + '" height="' + plotHeight + '" fill="var(--chart-band)"></rect>' : '') +
+          '<line x1="' + x.toFixed(2) + '" y1="' + pad.top + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="var(--chart-separator)" stroke-dasharray="4 4"></line>' +
+          '<text x="' + (x + 5).toFixed(2) + '" y="' + (pad.top + 12) + '" fill="var(--muted)" font-size="9">' + escapeHtml(separator.label || "") + '</text>';
       }).join("");
 
       const ticks = (Array.isArray(payload.ticks) ? payload.ticks : []).map((tick) => {
         const x = xFor(tick.position);
-        return '<line x1="' + x.toFixed(2) + '" y1="' + (height - pad.bottom) + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom + 4) + '" stroke="#98a2b3"></line>' +
-          '<text x="' + x.toFixed(2) + '" y="' + (height - 27) + '" fill="#667085" font-size="10" text-anchor="middle">' + escapeHtml(tick.label || "") + '</text>';
+        return '<line x1="' + x.toFixed(2) + '" y1="' + (height - pad.bottom) + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom + 4) + '" stroke="var(--muted)"></line>' +
+          '<text x="' + x.toFixed(2) + '" y="' + (height - 27) + '" fill="var(--muted)" font-size="10" text-anchor="middle">' + escapeHtml(tick.label || "") + '</text>';
       }).join("");
 
       const pathFor = (field, yFor) => {
@@ -2637,19 +2796,19 @@ const DASHBOARD_HTML = `<!doctype html>
       const tickerPath = pathFor("tickers", tickerY);
       const points = populated.map((item) => {
         const tooltip = (item.label || "Period") + ": " + Number(item.articles || 0) + " articles, " + Number(item.tickers || 0) + " ticker calls" + (item.partial ? " (completed hours only)" : "");
-        return '<circle cx="' + xFor(item.position).toFixed(2) + '" cy="' + articleY(item.articles).toFixed(2) + '" r="3" fill="#1457a8"><title>' + escapeHtml(tooltip) + '</title></circle>' +
-          '<circle cx="' + xFor(item.position).toFixed(2) + '" cy="' + tickerY(item.tickers).toFixed(2) + '" r="3" fill="#087a55"><title>' + escapeHtml(tooltip) + '</title></circle>';
+        return '<circle cx="' + xFor(item.position).toFixed(2) + '" cy="' + articleY(item.articles).toFixed(2) + '" r="3" fill="var(--blue)"><title>' + escapeHtml(tooltip) + '</title></circle>' +
+          '<circle cx="' + xFor(item.position).toFixed(2) + '" cy="' + tickerY(item.tickers).toFixed(2) + '" r="3" fill="var(--green)"><title>' + escapeHtml(tooltip) + '</title></circle>';
       }).join("");
 
       sourceActivityChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Articles and ticker calls acquired over time">' +
         separatorBands + grid + ticks +
-        '<text x="8" y="20" fill="#1457a8" font-size="10">Articles</text>' +
-        '<text x="' + (width - 8) + '" y="20" fill="#087a55" font-size="10" text-anchor="end">Ticker calls</text>' +
-        '<line x1="' + pad.left + '" y1="24" x2="' + (pad.left + 22) + '" y2="24" stroke="#1457a8" stroke-width="3"></line><text x="' + (pad.left + 29) + '" y="28" fill="#344054" font-size="11">Articles retrieved</text>' +
-        '<line x1="' + (pad.left + 150) + '" y1="24" x2="' + (pad.left + 172) + '" y2="24" stroke="#087a55" stroke-width="3"></line><text x="' + (pad.left + 179) + '" y="28" fill="#344054" font-size="11">Ticker calls</text>' +
-        (articlePath ? '<path d="' + articlePath + '" fill="none" stroke="#1457a8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' : '') +
-        (tickerPath ? '<path d="' + tickerPath + '" fill="none" stroke="#087a55" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' : '') + points +
-        '<text x="' + (pad.left + plotWidth / 2) + '" y="310" fill="#667085" font-size="10" text-anchor="middle">' + escapeHtml(payload.axis_label || "Brisbane time") + '</text>' +
+        '<text x="8" y="20" fill="var(--blue)" font-size="10">Articles</text>' +
+        '<text x="' + (width - 8) + '" y="20" fill="var(--green)" font-size="10" text-anchor="end">Ticker calls</text>' +
+        '<line x1="' + pad.left + '" y1="24" x2="' + (pad.left + 22) + '" y2="24" stroke="var(--blue)" stroke-width="3"></line><text x="' + (pad.left + 29) + '" y="28" fill="var(--text-secondary)" font-size="11">Articles retrieved</text>' +
+        '<line x1="' + (pad.left + 150) + '" y1="24" x2="' + (pad.left + 172) + '" y2="24" stroke="var(--green)" stroke-width="3"></line><text x="' + (pad.left + 179) + '" y="28" fill="var(--text-secondary)" font-size="11">Ticker calls</text>' +
+        (articlePath ? '<path d="' + articlePath + '" fill="none" stroke="var(--blue)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' : '') +
+        (tickerPath ? '<path d="' + tickerPath + '" fill="none" stroke="var(--green)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' : '') + points +
+        '<text x="' + (pad.left + plotWidth / 2) + '" y="310" fill="var(--muted)" font-size="10" text-anchor="middle">' + escapeHtml(payload.axis_label || "Brisbane time") + '</text>' +
       '</svg>';
     }
 
@@ -3179,26 +3338,26 @@ const DASHBOARD_HTML = `<!doctype html>
       const xFor = (day) => pad.left + (xMax > 0 ? (Number(day) / xMax) * plotWidth : 0);
       const movementY = (movement) => pad.top + ((movementMax - Number(movement)) / movementSpan) * plotHeight;
       const sampleY = (samples) => pad.top + ((sampleMax - Number(samples)) / sampleMax) * plotHeight;
-      const colors = { bullish: "#087a55", bearish: "#b42318" };
+      const colors = { bullish: "var(--green)", bearish: "var(--red)" };
 
       const movementGrid = Array.from({ length: 5 }, (_, index) => {
         const ratio = index / 4;
         const value = movementMax - ratio * movementSpan;
         const y = pad.top + ratio * plotHeight;
-        return '<line x1="' + pad.left + '" y1="' + y.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y.toFixed(2) + '" stroke="#e4e9f0"></line>' +
-          '<text x="' + (pad.left - 9) + '" y="' + (y + 4).toFixed(2) + '" fill="#667085" font-size="10" text-anchor="end">' + escapeHtml(signedPct(value)) + '</text>';
+        return '<line x1="' + pad.left + '" y1="' + y.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y.toFixed(2) + '" stroke="var(--chart-grid)"></line>' +
+          '<text x="' + (pad.left - 9) + '" y="' + (y + 4).toFixed(2) + '" fill="var(--muted)" font-size="10" text-anchor="end">' + escapeHtml(signedPct(value)) + '</text>';
       }).join("");
       const zeroY = movementY(0);
-      const zeroLine = '<line class="prediction-zero-line" x1="' + pad.left + '" y1="' + zeroY.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + zeroY.toFixed(2) + '" stroke="#475467" stroke-width="1.5"></line>' +
-        '<text x="' + (pad.left + 7) + '" y="' + (zeroY - 6).toFixed(2) + '" fill="#344054" font-size="10" font-weight="700">0% movement</text>';
+      const zeroLine = '<line class="prediction-zero-line" x1="' + pad.left + '" y1="' + zeroY.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + zeroY.toFixed(2) + '" stroke="var(--chart-zero)" stroke-width="1.5"></line>' +
+        '<text x="' + (pad.left + 7) + '" y="' + (zeroY - 6).toFixed(2) + '" fill="var(--text-secondary)" font-size="10" font-weight="700">0% movement</text>';
 
       const tickDays = xMax > 0
         ? Array.from(new Set(Array.from({ length: 6 }, (_, index) => Math.round((index / 5) * xMax))))
         : [0];
       const xTicks = tickDays.map((day) => {
         const x = xFor(day);
-        return '<line x1="' + x.toFixed(2) + '" y1="' + pad.top + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="#eef1f5"></line>' +
-          '<text x="' + x.toFixed(2) + '" y="' + (height - 22) + '" fill="#667085" font-size="10" text-anchor="middle">Day ' + day + '</text>';
+        return '<line x1="' + x.toFixed(2) + '" y1="' + pad.top + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="var(--chart-grid-subtle)"></line>' +
+          '<text x="' + x.toFixed(2) + '" y="' + (height - 22) + '" fill="var(--muted)" font-size="10" text-anchor="middle">Day ' + day + '</text>';
       }).join("");
 
       const movementLines = populated.map((item) => {
@@ -3211,21 +3370,21 @@ const DASHBOARD_HTML = `<!doctype html>
         const samplePath = sampleSeries.map((point, index) => (index ? "L" : "M") + xFor(point.day).toFixed(2) + " " + sampleY(point.samples).toFixed(2)).join(" ");
         const sampleTicks = [sampleMax, sampleMax / 2, 0].map((value) => {
           const y = sampleY(value);
-          return '<text x="' + (width - pad.right + 9) + '" y="' + (y + 4).toFixed(2) + '" fill="#7893a8" font-size="10">' + Math.round(value) + '</text>';
+          return '<text x="' + (width - pad.right + 9) + '" y="' + (y + 4).toFixed(2) + '" fill="var(--chart-sample-text)" font-size="10">' + Math.round(value) + '</text>';
         }).join("");
-        const samplePoints = sampleSeries.map((point) => '<circle cx="' + xFor(point.day).toFixed(2) + '" cy="' + sampleY(point.samples).toFixed(2) + '" r="3" fill="#8aaec7"><title>' + escapeHtml("Day " + point.day + ": " + point.samples + " samples") + '</title></circle>').join("");
-        return '<path d="' + samplePath + '" fill="none" stroke="#8aaec7" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' + samplePoints + sampleTicks +
-          '<text x="' + (width - pad.right + 9) + '" y="20" fill="#7893a8" font-size="10">Samples</text>';
+        const samplePoints = sampleSeries.map((point) => '<circle cx="' + xFor(point.day).toFixed(2) + '" cy="' + sampleY(point.samples).toFixed(2) + '" r="3" fill="var(--chart-sample)"><title>' + escapeHtml("Day " + point.day + ": " + point.samples + " samples") + '</title></circle>').join("");
+        return '<path d="' + samplePath + '" fill="none" stroke="var(--chart-sample)" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' + samplePoints + sampleTicks +
+          '<text x="' + (width - pad.right + 9) + '" y="20" fill="var(--chart-sample-text)" font-size="10">Samples</text>';
       })() : "";
 
       const legend = populated.map((item, index) => {
         const x = pad.left + index * 170;
-        return '<line x1="' + x + '" y1="20" x2="' + (x + 22) + '" y2="20" stroke="' + colors[item.direction] + '" stroke-width="3"></line><text x="' + (x + 29) + '" y="24" fill="#344054" font-size="11">' + escapeHtml(item.label) + '</text>';
-      }).join("") + (sampleSeries ? '<line x1="' + (pad.left + 340) + '" y1="20" x2="' + (pad.left + 362) + '" y2="20" stroke="#8aaec7" stroke-width="2" stroke-dasharray="6 5"></line><text x="' + (pad.left + 369) + '" y="24" fill="#667085" font-size="11">Daily samples</text>' : "");
+        return '<line x1="' + x + '" y1="20" x2="' + (x + 22) + '" y2="20" stroke="' + colors[item.direction] + '" stroke-width="3"></line><text x="' + (x + 29) + '" y="24" fill="var(--text-secondary)" font-size="11">' + escapeHtml(item.label) + '</text>';
+      }).join("") + (sampleSeries ? '<line x1="' + (pad.left + 340) + '" y1="20" x2="' + (pad.left + 362) + '" y2="20" stroke="var(--chart-sample)" stroke-width="2" stroke-dasharray="6 5"></line><text x="' + (pad.left + 369) + '" y="24" fill="var(--muted)" font-size="11">Daily samples</text>' : "");
 
       predictionTrendChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Average prediction movement by days since baseline">' +
-        '<text x="8" y="20" fill="#667085" font-size="10">Average movement</text>' + legend + movementGrid + xTicks + zeroLine + movementLines + sampleMarkup +
-        '<text x="' + (pad.left + plotWidth / 2) + '" y="294" fill="#667085" font-size="10" text-anchor="middle">Days since prediction baseline</text>' +
+        '<text x="8" y="20" fill="var(--muted)" font-size="10">Average movement</text>' + legend + movementGrid + xTicks + zeroLine + movementLines + sampleMarkup +
+        '<text x="' + (pad.left + plotWidth / 2) + '" y="294" fill="var(--muted)" font-size="10" text-anchor="middle">Days since prediction baseline</text>' +
       '</svg>';
     }
 
@@ -3555,18 +3714,18 @@ const DASHBOARD_HTML = `<!doctype html>
         const x = pad + (originalIndex / (clean.length - 1)) * (width - pad * 2);
         const labelY = index % 2 === 0 ? height - 8 : height - 20;
         const label = formatShortDate(point.at);
-        return '<line x1="' + x.toFixed(2) + '" y1="' + pad + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad) + '" stroke="#d9e0ea"></line>' +
-          '<text x="' + x.toFixed(2) + '" y="' + labelY + '" fill="#667085" font-size="10" text-anchor="' + (originalIndex === 0 ? "start" : originalIndex === clean.length - 1 ? "end" : "middle") + '">' + escapeHtml(label) + '</text>';
+        return '<line x1="' + x.toFixed(2) + '" y1="' + pad + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad) + '" stroke="var(--line)"></line>' +
+          '<text x="' + x.toFixed(2) + '" y="' + labelY + '" fill="var(--muted)" font-size="10" text-anchor="' + (originalIndex === 0 ? "start" : originalIndex === clean.length - 1 ? "end" : "middle") + '">' + escapeHtml(label) + '</text>';
       }).join(" ");
 
       targetEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Portfolio value movement">' +
         slices +
-        '<path d="' + makePath("value") + '" fill="none" stroke="#123c69" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' +
-        '<path d="' + makePath("cash") + '" fill="none" stroke="#1457a8" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' +
-        '<path d="' + makePath("investments") + '" fill="none" stroke="#097a55" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>' +
-        '<text x="' + (width - 190) + '" y="22" fill="#123c69" font-size="12">Total</text>' +
-        '<text x="' + (width - 135) + '" y="22" fill="#1457a8" font-size="12">Cash</text>' +
-        '<text x="' + (width - 88) + '" y="22" fill="#097a55" font-size="12">Invested</text>' +
+        '<path d="' + makePath("value") + '" fill="none" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        '<path d="' + makePath("cash") + '" fill="none" stroke="var(--blue)" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        '<path d="' + makePath("investments") + '" fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        '<text x="' + (width - 190) + '" y="22" fill="var(--primary)" font-size="12">Total</text>' +
+        '<text x="' + (width - 135) + '" y="22" fill="var(--blue)" font-size="12">Cash</text>' +
+        '<text x="' + (width - 88) + '" y="22" fill="var(--green)" font-size="12">Invested</text>' +
       '</svg>';
     }
 
