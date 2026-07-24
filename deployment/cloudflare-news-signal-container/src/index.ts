@@ -2126,6 +2126,8 @@ const DASHBOARD_HTML = `<!doctype html>
     let latestStatus = null;
     let liveStatusSocket = null;
     let liveStatusReconnectTimer = null;
+    let liveStatusReconnectAttempts = 0;
+    let liveStatusFallbackTimer = null;
     let liveStatusRefreshTimer = null;
     let liveStatusRefreshPending = false;
     let liveStatusLoading = false;
@@ -2309,12 +2311,24 @@ const DASHBOARD_HTML = `<!doctype html>
         ...options,
         headers: { ...(options.headers || {}), ...headers() },
       });
-      const payload = await response.json();
+      const contentType = response.headers.get("content-type") || "";
+      const body = await response.text();
+      let payload = null;
+      if (contentType.includes("application/json") && body) {
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          throw new Error("Dashboard returned invalid JSON (HTTP " + response.status + ").");
+        }
+      }
       if (!response.ok) {
         const message = response.status === 401
           ? "Unauthorized: paste the dashboard token and click Save token."
-          : payload.error || "HTTP " + response.status;
+          : (payload && payload.error) || body.trim().slice(0, 180) || "HTTP " + response.status;
         throw new Error(message);
+      }
+      if (!contentType.includes("application/json")) {
+        throw new Error("Dashboard expected JSON but received " + (contentType || "an unknown response type") + " (HTTP " + response.status + ").");
       }
       return payload;
     }
@@ -2336,30 +2350,37 @@ const DASHBOARD_HTML = `<!doctype html>
       if (!metricsEl.children.length) showInitialSkeletons();
       setBusy(true);
       try {
-        const [status, results, jobs, failedJobs] = await Promise.all([
+        const responses = await Promise.allSettled([
           api("/api/status"),
           api("/api/results?limit=20"),
           api("/api/jobs?limit=12"),
           api("/api/jobs/failures?limit=500"),
         ]);
-        latestStatus = status;
-        renderMetrics(latestStatus);
-        renderResults(results.results || []);
-        renderJobs(jobs.jobs || []);
-        renderFailedJobs(failedJobs.jobs || []);
-        renderArticles(results.results || []);
-        lastUpdated.textContent = "Data refreshed " + new Date().toLocaleTimeString();
-        liveStatusUpdated.textContent = "Live update " + new Date().toLocaleTimeString();
+        const [status, results, jobs, failedJobs] = responses;
+        if (status.status === "fulfilled") {
+          latestStatus = status.value;
+          renderMetrics(latestStatus);
+          liveStatusUpdated.textContent = "Live update " + new Date().toLocaleTimeString();
+        } else {
+          showError(metricsEl, status.reason, false);
+        }
+        if (results.status === "fulfilled") {
+          renderResults(results.value.results || []);
+          renderArticles(results.value.results || []);
+        } else {
+          showError(resultsEl, results.reason, false);
+          showError(articlesEl, results.reason, false);
+        }
+        if (jobs.status === "fulfilled") renderJobs(jobs.value.jobs || []);
+        else showError(jobsEl, jobs.reason, false);
+        if (failedJobs.status === "fulfilled") renderFailedJobs(failedJobs.value.jobs || []);
+        else showError(failedJobsEl, failedJobs.reason, false);
+        const failures = responses.filter((response) => response.status === "rejected").length;
+        lastUpdated.textContent = (failures ? "Data partially refreshed " : "Data refreshed ") + new Date().toLocaleTimeString();
         if (!simulationPanel.classList.contains("hidden")) {
           predictionsLoaded = false;
           await loadPredictions();
         }
-      } catch (error) {
-        showError(metricsEl, error);
-        resultsEl.innerHTML = "";
-        jobsEl.innerHTML = "";
-        failedJobsEl.innerHTML = "";
-        articlesEl.innerHTML = "";
       } finally {
         setBusy(false);
       }
@@ -2372,15 +2393,37 @@ const DASHBOARD_HTML = `<!doctype html>
       showPredictionSkeletons();
       setBusy(true);
       try {
-        const payload = await api(predictionRequestPath("/api/predictions"));
+        const responses = await Promise.allSettled([
+          api(predictionRequestPath("/api/predictions/outcomes")),
+          api("/api/predictions/summary"),
+          api("/api/predictions/daily"),
+        ]);
         if (requestVersion !== predictionRequestVersion) return;
-        predictionSummaryData = payload.summary || [];
-        predictionCoverage = payload.coverage || {};
-        renderPredictions(payload);
+        const [outcomes, summary, daily] = responses;
+        if (summary.status === "fulfilled") {
+          predictionSummaryData = summary.value.summary || [];
+          predictionCoverage = summary.value.coverage || {};
+          renderPredictionSummary(predictionSummaryData, predictionCoverage);
+        } else {
+          predictionSummaryMeta.textContent = "Interval summary unavailable";
+          showError(predictionSummaryEl, summary.reason, false);
+        }
+        if (daily.status === "fulfilled") {
+          predictionDailySeries = daily.value.daily_series || [];
+          predictionDailyCoverage = daily.value.daily_coverage || {};
+          renderPredictionDailyChart();
+        } else {
+          predictionTrendMeta.textContent = "Daily movement history unavailable";
+          showError(predictionTrendChartEl, daily.reason, false);
+        }
+        if (outcomes.status === "fulfilled") {
+          renderPredictionOutcomeShell(false);
+          applyPredictionPage(outcomes.value, true);
+        } else {
+          predictionsMeta.textContent = "Prediction outcomes unavailable";
+          showError(predictionsEl, outcomes.reason, false);
+        }
         predictionsLoaded = true;
-      } catch (error) {
-        if (requestVersion !== predictionRequestVersion) return;
-        showError(predictionsEl, error);
       } finally {
         if (requestVersion === predictionRequestVersion) {
           predictionLoading = false;
@@ -2427,6 +2470,13 @@ const DASHBOARD_HTML = `<!doctype html>
         liveStatusRefreshTimer = null;
         refreshLiveStatus();
       }, delay);
+    }
+
+    function websocketAuthProtocol(token) {
+      const bytes = new TextEncoder().encode(token);
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return "auth." + btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
     }
 
     async function loadSourceStats() {
@@ -2485,11 +2535,15 @@ const DASHBOARD_HTML = `<!doctype html>
         liveStatusReconnectTimer = null;
       }
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const socket = new WebSocket(protocol + "//" + window.location.host + "/api/events");
+      const authProtocol = websocketAuthProtocol(tokenInput.value.trim() || storedToken());
+      const socket = new WebSocket(protocol + "//" + window.location.host + "/api/events", ["news-signal", authProtocol]);
       liveStatusSocket = socket;
       liveStatusUpdated.textContent = "Live updates connecting";
 
       socket.addEventListener("open", () => {
+        liveStatusReconnectAttempts = 0;
+        if (liveStatusFallbackTimer) clearTimeout(liveStatusFallbackTimer);
+        liveStatusFallbackTimer = null;
         liveStatusUpdated.textContent = "Live updates connected";
         scheduleLiveStatusRefresh(0);
       });
@@ -2519,22 +2573,37 @@ const DASHBOARD_HTML = `<!doctype html>
         if (liveStatusSocket !== socket) return;
         liveStatusSocket = null;
         if (!tokenInput.value.trim()) return;
-        liveStatusUpdated.textContent = "Live updates reconnecting";
+        liveStatusReconnectAttempts += 1;
+        const usingFallback = liveStatusReconnectAttempts >= 5;
+        liveStatusUpdated.textContent = usingFallback ? "Live updates using fallback" : "Live updates reconnecting";
+        if (usingFallback) scheduleLiveStatusFallback();
+        const retryDelay = usingFallback
+          ? 5 * 60 * 1000
+          : Math.min(30000, 1000 * Math.pow(2, liveStatusReconnectAttempts - 1));
         liveStatusReconnectTimer = setTimeout(() => {
           liveStatusReconnectTimer = null;
           startLiveStatusStream();
-        }, 2000);
+        }, retryDelay);
       });
       socket.addEventListener("error", () => {
         liveStatusUpdated.textContent = "Live updates unavailable";
       });
     }
 
+    function scheduleLiveStatusFallback() {
+      if (liveStatusFallbackTimer) clearTimeout(liveStatusFallbackTimer);
+      scheduleLiveStatusRefresh(0);
+      liveStatusFallbackTimer = setTimeout(scheduleLiveStatusFallback, 30000);
+    }
+
     function stopLiveStatusStream() {
       if (liveStatusRefreshTimer) clearTimeout(liveStatusRefreshTimer);
       if (liveStatusReconnectTimer) clearTimeout(liveStatusReconnectTimer);
+      if (liveStatusFallbackTimer) clearTimeout(liveStatusFallbackTimer);
       liveStatusRefreshTimer = null;
       liveStatusReconnectTimer = null;
+      liveStatusFallbackTimer = null;
+      liveStatusReconnectAttempts = 0;
       liveStatusRefreshPending = false;
       const socket = liveStatusSocket;
       liveStatusSocket = null;
@@ -3902,9 +3971,9 @@ const DASHBOARD_HTML = `<!doctype html>
       return (number >= 0 ? "+" : "") + number.toFixed(2) + "%";
     }
 
-    function showError(target, error) {
+    function showError(target, error, updateGlobalStatus = true) {
       target.innerHTML = '<div class="error">' + escapeHtml(error.message || String(error)) + '</div>';
-      lastUpdated.textContent = "Load failed";
+      if (updateGlobalStatus) lastUpdated.textContent = "Load failed";
     }
 
     function escapeHtml(value) {
@@ -3960,6 +4029,20 @@ function isAuthorized(request: Request, env: Env): boolean {
   if (!env.CONTAINER_API_TOKEN) return true;
   const header = request.headers.get("authorization") || "";
   if (header === `Bearer ${env.CONTAINER_API_TOKEN}`) return true;
+  const websocketProtocols = (request.headers.get("sec-websocket-protocol") || "")
+    .split(",")
+    .map((value) => value.trim());
+  const authProtocol = websocketProtocols.find((value) => value.startsWith("auth."));
+  if (authProtocol) {
+    try {
+      const encoded = authProtocol.slice("auth.".length).replace(/-/g, "+").replace(/_/g, "/");
+      const binary = atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "="));
+      const decoded = new TextDecoder().decode(Uint8Array.from(binary, (character) => character.charCodeAt(0)));
+      if (decoded === env.CONTAINER_API_TOKEN) return true;
+    } catch {
+      // Continue to cookie authentication.
+    }
+  }
   const cookie = request.headers.get("cookie") || "";
   const token = cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith("news_signal_token="));
   if (!token) return false;
@@ -5623,6 +5706,7 @@ function parsePredictionIntervals(value: string): Record<string, PredictionPoint
 }
 
 type PredictionSummaryRow = {
+  interval: string;
   direction: "bullish" | "bearish";
   confidence_bin: number;
   samples: number;
@@ -5663,6 +5747,19 @@ const PREDICTION_CONFIDENCE_PCT_SQL =
   "CASE WHEN prediction_outcomes.confidence <= 1 THEN prediction_outcomes.confidence * 100 ELSE prediction_outcomes.confidence END";
 const PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL =
   "(SELECT MIN(unixepoch(opposite_outcomes.prediction_at)) FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))";
+const PREDICTION_ACCURACY_CTE_SQL =
+  `accuracy_predictions AS MATERIALIZED (
+    SELECT prediction_outcomes.id, prediction_outcomes.symbol, prediction_outcomes.direction,
+      prediction_outcomes.prediction_at, prediction_outcomes.intervals_json,
+      ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct,
+      ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch
+    FROM prediction_outcomes
+    INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id
+    LEFT JOIN articles ON articles.id = research_results.article_id
+    WHERE prediction_outcomes.direction IN ('bullish', 'bearish')
+      AND prediction_outcomes.confidence IS NOT NULL
+      AND ${PREDICTION_DATE_MATCH_SQL}
+  )`;
 const PREDICTION_HAS_COUNTED_INTERVAL_SQL =
   "EXISTS (SELECT 1 FROM json_each(prediction_outcomes.intervals_json) AS accuracy_interval WHERE json_type(accuracy_interval.value, '$.change_pct') IN ('integer', 'real') AND NOT EXISTS (SELECT 1 FROM prediction_outcomes AS interval_opposite_outcomes INNER JOIN research_results AS interval_opposite_results ON interval_opposite_results.id = interval_opposite_outcomes.result_id LEFT JOIN articles AS interval_opposite_articles ON interval_opposite_articles.id = interval_opposite_results.article_id WHERE interval_opposite_outcomes.symbol = prediction_outcomes.symbol AND interval_opposite_outcomes.direction IN ('bullish', 'bearish') AND interval_opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(interval_opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND unixepoch(interval_opposite_outcomes.prediction_at) <= unixepoch(json_extract(accuracy_interval.value, '$.at')) AND datetime(interval_opposite_outcomes.prediction_at) = datetime(COALESCE(interval_opposite_articles.published_at, interval_opposite_results.created_at))))";
 
@@ -5926,19 +6023,37 @@ async function buildSourceActivity(
 }
 
 async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>[]> {
-  const statements = PREDICTION_INTERVALS.map((interval) => {
-    const path = `$."${interval.label}".change_pct`;
-    const sampledAtPath = `$."${interval.label}".at`;
-    return env.NEWS_DB.prepare(
-      `WITH eligible AS (SELECT prediction_outcomes.direction, ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct, CAST(json_extract(prediction_outcomes.intervals_json, ?) AS REAL) AS movement_pct FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_DATE_MATCH_SQL} AND json_type(prediction_outcomes.intervals_json, ?) IN ('integer', 'real') AND NOT EXISTS (SELECT 1 FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND unixepoch(opposite_outcomes.prediction_at) <= unixepoch(json_extract(prediction_outcomes.intervals_json, ?)) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, COUNT(*) AS samples, SUM(CASE WHEN (direction = 'bullish' AND movement_pct > 0) OR (direction = 'bearish' AND movement_pct < 0) THEN 1 ELSE 0 END) AS accurate, AVG(movement_pct) AS average_movement_pct FROM eligible WHERE confidence_pct >= 0 AND confidence_pct <= 100 GROUP BY direction, confidence_bin ORDER BY direction, confidence_bin`,
-    ).bind(path, path, sampledAtPath);
-  });
-  const results = await env.NEWS_DB.batch<PredictionSummaryRow>(statements);
-  return PREDICTION_INTERVALS.map((interval, index) => {
-    const rows = results[index]?.results || [];
+  const result = await env.NEWS_DB.prepare(
+    `WITH ${PREDICTION_ACCURACY_CTE_SQL},
+    eligible AS (
+      SELECT accuracy_predictions.direction, accuracy_predictions.confidence_pct,
+        interval.key AS interval,
+        CAST(json_extract(interval.value, '$.change_pct') AS REAL) AS movement_pct
+      FROM accuracy_predictions
+      CROSS JOIN json_each(accuracy_predictions.intervals_json) AS interval
+      WHERE accuracy_predictions.confidence_pct >= 0
+        AND accuracy_predictions.confidence_pct <= 100
+        AND json_type(interval.value, '$.change_pct') IN ('integer', 'real')
+        AND (
+          accuracy_predictions.accuracy_cutoff_epoch IS NULL
+          OR unixepoch(json_extract(interval.value, '$.at')) < accuracy_predictions.accuracy_cutoff_epoch
+        )
+    )
+    SELECT interval, direction,
+      CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin,
+      COUNT(*) AS samples,
+      SUM(CASE WHEN (direction = 'bullish' AND movement_pct > 0) OR (direction = 'bearish' AND movement_pct < 0) THEN 1 ELSE 0 END) AS accurate,
+      AVG(movement_pct) AS average_movement_pct
+    FROM eligible
+    GROUP BY interval, direction, confidence_bin
+    ORDER BY interval, direction, confidence_bin`,
+  ).all<PredictionSummaryRow>();
+  const rows = result.results || [];
+  return PREDICTION_INTERVALS.map((interval) => {
+    const intervalRows = rows.filter((row) => row.interval === interval.label);
     const cellsFor = (direction: "bullish" | "bearish") =>
       Array.from({ length: 10 }, (_, confidenceBin) => {
-        const row = rows.find((item) => item.direction === direction && Number(item.confidence_bin) === confidenceBin);
+        const row = intervalRows.find((item) => item.direction === direction && Number(item.confidence_bin) === confidenceBin);
         const samples = Number(row?.samples || 0);
         return {
           confidence_min: confidenceBin * 10,
@@ -5960,14 +6075,61 @@ async function buildPredictionDailySummary(env: Env): Promise<{
   series: PredictionDailySummaryRow[];
   coverage: Record<string, number>;
 }> {
-  const daily = await env.NEWS_DB.prepare(
-    `WITH accuracy_predictions AS (SELECT prediction_outcomes.id, prediction_outcomes.symbol, prediction_outcomes.direction, prediction_outcomes.prediction_at, ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_CONFIDENCE_PCT_SQL} >= 0 AND ${PREDICTION_CONFIDENCE_PCT_SQL} <= 100 AND ${PREDICTION_DATE_MATCH_SQL} AND ${PREDICTION_HAS_COUNTED_INTERVAL_SQL}), eligible AS (SELECT accuracy_predictions.direction, accuracy_predictions.confidence_pct, prediction_daily_points_v2.day_index, prediction_daily_points_v2.change_pct FROM accuracy_predictions INNER JOIN prediction_daily_points_v2 ON prediction_daily_points_v2.outcome_id = accuracy_predictions.id WHERE NOT EXISTS (SELECT 1 FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = accuracy_predictions.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != accuracy_predictions.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(accuracy_predictions.prediction_at) AND unixepoch(opposite_outcomes.prediction_at) <= unixepoch(prediction_daily_points_v2.sampled_at) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))) SELECT direction, CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin, day_index, COUNT(*) AS samples, AVG(change_pct) AS average_movement_pct FROM eligible GROUP BY direction, confidence_bin, day_index ORDER BY day_index, direction, confidence_bin`,
-  ).all<PredictionDailySummaryRow>();
-  const coverage = await env.NEWS_DB.prepare(
-    `SELECT MAX(MAX(0, CAST((unixepoch('now') - unixepoch(prediction_outcomes.prediction_at)) / 86400 AS INTEGER))) AS oldest_age_days, COUNT(DISTINCT prediction_outcomes.id) AS eligible_predictions, COUNT(DISTINCT prediction_daily_points_v2.outcome_id) AS daily_predictions FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id LEFT JOIN prediction_daily_points_v2 ON prediction_daily_points_v2.outcome_id = prediction_outcomes.id WHERE prediction_outcomes.direction IN ('bullish', 'bearish') AND prediction_outcomes.confidence IS NOT NULL AND ${PREDICTION_CONFIDENCE_PCT_SQL} >= 0 AND ${PREDICTION_CONFIDENCE_PCT_SQL} <= 100 AND ${PREDICTION_DATE_MATCH_SQL} AND ${PREDICTION_HAS_COUNTED_INTERVAL_SQL}`,
-  ).first<{ oldest_age_days: number | null; eligible_predictions: number; daily_predictions: number }>();
+  type DailyQueryRow = PredictionDailySummaryRow & {
+    row_type: "series" | "coverage";
+    oldest_age_days: number | null;
+    eligible_predictions: number | null;
+    daily_predictions: number | null;
+  };
+  const result = await env.NEWS_DB.prepare(
+    `WITH ${PREDICTION_ACCURACY_CTE_SQL},
+    chart_predictions AS MATERIALIZED (
+      SELECT *
+      FROM accuracy_predictions
+      WHERE confidence_pct >= 0
+        AND confidence_pct <= 100
+        AND EXISTS (
+          SELECT 1
+          FROM json_each(accuracy_predictions.intervals_json) AS interval
+          WHERE json_type(interval.value, '$.change_pct') IN ('integer', 'real')
+            AND (
+              accuracy_predictions.accuracy_cutoff_epoch IS NULL
+              OR unixepoch(json_extract(interval.value, '$.at')) < accuracy_predictions.accuracy_cutoff_epoch
+            )
+        )
+    ),
+    series AS (
+      SELECT chart_predictions.direction,
+        CASE WHEN chart_predictions.confidence_pct >= 100 THEN 9 ELSE CAST(chart_predictions.confidence_pct / 10 AS INTEGER) END AS confidence_bin,
+        prediction_daily_points_v2.day_index,
+        COUNT(*) AS samples,
+        AVG(prediction_daily_points_v2.change_pct) AS average_movement_pct
+      FROM chart_predictions
+      INNER JOIN prediction_daily_points_v2 ON prediction_daily_points_v2.outcome_id = chart_predictions.id
+      WHERE chart_predictions.accuracy_cutoff_epoch IS NULL
+        OR unixepoch(prediction_daily_points_v2.sampled_at) < chart_predictions.accuracy_cutoff_epoch
+      GROUP BY chart_predictions.direction, confidence_bin, prediction_daily_points_v2.day_index
+    ),
+    coverage AS (
+      SELECT MAX(MAX(0, CAST((unixepoch('now') - unixepoch(chart_predictions.prediction_at)) / 86400 AS INTEGER))) AS oldest_age_days,
+        COUNT(DISTINCT chart_predictions.id) AS eligible_predictions,
+        COUNT(DISTINCT prediction_daily_points_v2.outcome_id) AS daily_predictions
+      FROM chart_predictions
+      LEFT JOIN prediction_daily_points_v2 ON prediction_daily_points_v2.outcome_id = chart_predictions.id
+    )
+    SELECT 'series' AS row_type, direction, confidence_bin, day_index, samples, average_movement_pct,
+      NULL AS oldest_age_days, NULL AS eligible_predictions, NULL AS daily_predictions
+    FROM series
+    UNION ALL
+    SELECT 'coverage' AS row_type, NULL AS direction, NULL AS confidence_bin, NULL AS day_index, NULL AS samples,
+      NULL AS average_movement_pct, oldest_age_days, eligible_predictions, daily_predictions
+    FROM coverage
+    ORDER BY row_type DESC, day_index, direction, confidence_bin`,
+  ).all<DailyQueryRow>();
+  const rows = result.results || [];
+  const coverage = rows.find((row) => row.row_type === "coverage");
   return {
-    series: (daily.results || []).map((row) => ({
+    series: rows.filter((row) => row.row_type === "series").map((row) => ({
       direction: row.direction,
       confidence_bin: Number(row.confidence_bin),
       day_index: Number(row.day_index),
@@ -6163,6 +6325,22 @@ async function buildPredictionPage(
   };
 }
 
+async function buildPredictionCoverage(env: Env): Promise<Record<string, number>> {
+  const [coverage, dateRepair] = await Promise.all([
+    env.NEWS_DB.prepare(
+      `SELECT COUNT(*) AS predictions, COUNT(DISTINCT prediction_outcomes.article_id) AS articles FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE ${PREDICTION_DATE_MATCH_SQL}`,
+    ).first<{ predictions: number; articles: number }>(),
+    env.NEWS_DB.prepare(
+      "SELECT COUNT(DISTINCT prediction_outcomes.result_id) AS count FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE datetime(prediction_outcomes.prediction_at) != datetime(COALESCE(articles.published_at, research_results.created_at))",
+    ).first<{ count: number }>(),
+  ]);
+  return {
+    predictions: Number(coverage?.predictions || 0),
+    articles: Number(coverage?.articles || 0),
+    date_repair_pending: Number(dateRepair?.count || 0),
+  };
+}
+
 async function buildPredictionOutcomes(
   env: Env,
   limit: number,
@@ -6181,16 +6359,11 @@ async function buildPredictionOutcomes(
   await processPredictionOutcomes(env, Math.min(Math.max(limit, 5), 10)).catch((error) =>
     console.error("Inline prediction outcome refresh failed", error),
   );
-  const [page, summary, dailySummary, coverage, dateRepair] = await Promise.all([
+  const [page, summary, dailySummary, coverage] = await Promise.all([
     buildPredictionPage(env, limit, filters),
     buildPredictionSummary(env),
     buildPredictionDailySummary(env),
-    env.NEWS_DB.prepare(
-      `SELECT COUNT(*) AS predictions, COUNT(DISTINCT prediction_outcomes.article_id) AS articles FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE ${PREDICTION_DATE_MATCH_SQL}`,
-    ).first<{ predictions: number; articles: number }>(),
-    env.NEWS_DB.prepare(
-      "SELECT COUNT(DISTINCT prediction_outcomes.result_id) AS count FROM prediction_outcomes INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id LEFT JOIN articles ON articles.id = research_results.article_id WHERE datetime(prediction_outcomes.prediction_at) != datetime(COALESCE(articles.published_at, research_results.created_at))",
-    ).first<{ count: number }>(),
+    buildPredictionCoverage(env),
   ]);
 
   return {
@@ -6198,11 +6371,7 @@ async function buildPredictionOutcomes(
     summary,
     daily_series: dailySummary.series,
     daily_coverage: dailySummary.coverage,
-    coverage: {
-      predictions: Number(coverage?.predictions || 0),
-      articles: Number(coverage?.articles || 0),
-      date_repair_pending: Number(dateRepair?.count || 0),
-    },
+    coverage,
   };
 }
 
@@ -6955,6 +7124,19 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, tickers: await buildTickerSignals(env, limit) });
   }
 
+  if (url.pathname === "/api/predictions/summary") {
+    const [summary, coverage] = await Promise.all([
+      buildPredictionSummary(env),
+      buildPredictionCoverage(env),
+    ]);
+    return json({ ok: true, summary, coverage });
+  }
+
+  if (url.pathname === "/api/predictions/daily") {
+    const daily = await buildPredictionDailySummary(env);
+    return json({ ok: true, daily_series: daily.series, daily_coverage: daily.coverage });
+  }
+
   if (url.pathname === "/api/predictions") {
     return json({ ok: true, ...(await buildPredictionOutcomes(env, limit, predictionFiltersFromUrl(url))) });
   }
@@ -7069,7 +7251,11 @@ export class DashboardEventHub extends DurableObject<Env> {
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
     server.send(JSON.stringify({ type: "connected", at: new Date().toISOString() } satisfies DashboardEvent));
-    return new Response(null, { status: 101, webSocket: client });
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: { "sec-websocket-protocol": "news-signal" },
+    });
   }
 
   webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
@@ -7143,6 +7329,8 @@ export default {
           "/api/results",
           "/api/ticker-signals",
           "/api/predictions",
+          "/api/predictions/summary",
+          "/api/predictions/daily",
           "/api/predictions/outcomes",
           "/api/predictions/process",
           "/api/process-batch",
