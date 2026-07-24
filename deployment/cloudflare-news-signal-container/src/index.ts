@@ -2322,9 +2322,12 @@ const DASHBOARD_HTML = `<!doctype html>
         }
       }
       if (!response.ok) {
+        const htmlError = contentType.includes("text/html") || body.trimStart().startsWith("<!DOCTYPE");
         const message = response.status === 401
           ? "Unauthorized: paste the dashboard token and click Save token."
-          : (payload && payload.error) || body.trim().slice(0, 180) || "HTTP " + response.status;
+          : htmlError
+            ? "Cloudflare returned an error page (HTTP " + response.status + ")."
+            : (payload && payload.error) || body.trim().slice(0, 180) || "HTTP " + response.status;
         throw new Error(message);
       }
       if (!contentType.includes("application/json")) {
@@ -2492,17 +2495,21 @@ const DASHBOARD_HTML = `<!doctype html>
       sourceHourlyWidgetEl.innerHTML = predictionLoadingRows();
       sourceActivityChartEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
       try {
-        const [statsPayload, activityPayload] = await Promise.all([
-          api("/api/source-stats"),
-          api("/api/source-activity?mode=" + encodeURIComponent(sourceActivityMode) + "&anchor=" + encodeURIComponent(sourceActivityAnchor)),
-        ]);
-        renderSourceStats(statsPayload.sources || []);
-        renderSourceActivity(activityPayload);
-      } catch (error) {
-        sourceStatsMeta.textContent = "Update unavailable";
-        showError(sourceStatsEl, error);
-        sourceHourlyWidgetEl.innerHTML = "";
-        showError(sourceActivityChartEl, error);
+        try {
+          const activityPayload = await api("/api/source-activity?mode=" + encodeURIComponent(sourceActivityMode) + "&anchor=" + encodeURIComponent(sourceActivityAnchor));
+          renderSourceActivity(activityPayload);
+        } catch (error) {
+          sourceHourlyWidgetEl.innerHTML = "";
+          showError(sourceActivityChartEl, error, false);
+        }
+
+        try {
+          const statsPayload = await api("/api/source-stats");
+          renderSourceStats(statsPayload.sources || []);
+        } catch (error) {
+          sourceStatsMeta.textContent = "Source table unavailable";
+          showError(sourceStatsEl, error, false);
+        }
       } finally {
         sourceStatsLoading = false;
       }
@@ -5785,7 +5792,7 @@ async function buildSourceStats(env: Env): Promise<SourceStatsRow[]> {
       SELECT source_id, COUNT(*) AS acquired_article_count
       FROM articles
       GROUP BY source_id
-    ), eligible_outcomes AS (
+    ), eligible_outcomes AS MATERIALIZED (
       SELECT articles.source_id, prediction_outcomes.direction, prediction_outcomes.intervals_json,
         ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch
       FROM prediction_outcomes
