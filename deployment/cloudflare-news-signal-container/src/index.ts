@@ -2393,13 +2393,22 @@ const DASHBOARD_HTML = `<!doctype html>
       showPredictionSkeletons();
       setBusy(true);
       try {
-        const responses = await Promise.allSettled([
-          api(predictionRequestPath("/api/predictions/outcomes")),
-          api("/api/predictions/summary"),
-          api("/api/predictions/daily"),
-        ]);
+        const settle = (promise) => promise.then(
+          (value) => ({ status: "fulfilled", value }),
+          (reason) => ({ status: "rejected", reason }),
+        );
+        const outcomes = await settle(api(predictionRequestPath("/api/predictions/outcomes")));
         if (requestVersion !== predictionRequestVersion) return;
-        const [outcomes, summary, daily] = responses;
+        if (outcomes.status === "fulfilled") {
+          renderPredictionOutcomeShell(false);
+          applyPredictionPage(outcomes.value, true);
+        } else {
+          predictionsMeta.textContent = "Prediction outcomes unavailable";
+          showError(predictionsEl, outcomes.reason, false);
+        }
+
+        const summary = await settle(api("/api/predictions/summary"));
+        if (requestVersion !== predictionRequestVersion) return;
         if (summary.status === "fulfilled") {
           predictionSummaryData = summary.value.summary || [];
           predictionCoverage = summary.value.coverage || {};
@@ -2408,6 +2417,9 @@ const DASHBOARD_HTML = `<!doctype html>
           predictionSummaryMeta.textContent = "Interval summary unavailable";
           showError(predictionSummaryEl, summary.reason, false);
         }
+
+        const daily = await settle(api("/api/predictions/daily"));
+        if (requestVersion !== predictionRequestVersion) return;
         if (daily.status === "fulfilled") {
           predictionDailySeries = daily.value.daily_series || [];
           predictionDailyCoverage = daily.value.daily_coverage || {};
@@ -2415,13 +2427,6 @@ const DASHBOARD_HTML = `<!doctype html>
         } else {
           predictionTrendMeta.textContent = "Daily movement history unavailable";
           showError(predictionTrendChartEl, daily.reason, false);
-        }
-        if (outcomes.status === "fulfilled") {
-          renderPredictionOutcomeShell(false);
-          applyPredictionPage(outcomes.value, true);
-        } else {
-          predictionsMeta.textContent = "Prediction outcomes unavailable";
-          showError(predictionsEl, outcomes.reason, false);
         }
         predictionsLoaded = true;
       } finally {
