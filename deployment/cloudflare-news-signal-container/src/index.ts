@@ -643,7 +643,7 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
         "UPDATE research_jobs SET synthesis_duration_seconds = MAX(0, unixepoch(finished_at) - unixepoch(started_at)) WHERE synthesis_duration_seconds IS NULL AND started_at IS NOT NULL AND finished_at IS NOT NULL AND status IN ('succeeded', 'failed')",
       ).run();
       await db.prepare(
-        "UPDATE research_jobs SET prediction_delay_seconds = (SELECT MAX(0, unixepoch(research_results.created_at) - unixepoch(articles.published_at)) FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE research_results.job_id = research_jobs.id AND articles.published_at IS NOT NULL AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]')) WHERE prediction_delay_seconds IS NULL AND prediction_delay_eligible = 1 AND status = 'succeeded'",
+        "UPDATE research_jobs SET prediction_delay_seconds = (SELECT MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.published_at)) FROM articles WHERE articles.id = research_jobs.article_id AND articles.published_at IS NOT NULL AND research_jobs.finished_at IS NOT NULL) WHERE prediction_delay_seconds IS NULL AND prediction_delay_eligible = 1 AND status = 'succeeded'",
       ).run();
       await db.prepare(
         `UPDATE research_jobs
@@ -2693,20 +2693,16 @@ const DASHBOARD_HTML = `<!doctype html>
             }),
           ) + '</div>' +
           (Number(predictionDelay.samples || 0)
-            ? '<div class="summary"><strong>Prediction delay:</strong> ' +
-                escapeHtml(formatDuration(predictionDelay.average_total_seconds)) + ' average = ' +
-                escapeHtml(formatDuration(predictionDelay.average_acquisition_seconds)) + ' publication-to-acquisition + ' +
-                escapeHtml(formatDuration(predictionDelay.average_post_acquisition_seconds)) + ' acquisition-to-prediction across ' +
-                escapeHtml(String(predictionDelay.samples)) + ' eligible first-pass jobs. ' +
+            ? '<div class="summary"><strong>Pipeline delay:</strong> ' +
+                escapeHtml(formatDuration(predictionDelay.average_total_seconds)) + ' average publication-to-synthesis time across ' +
+                escapeHtml(String(predictionDelay.samples)) + ' completed first-pass articles with publication timestamps. ' +
                 escapeHtml(String(predictionDelay.excluded_recovery_jobs || 0)) + ' recovery jobs are excluded.</div>' +
               '<div class="impact-wrap">' + table(
-                ["Delay source", "Samples", "Avg total", "Acquisition", "After acquisition", "Share of delay"],
+                ["Source", "Samples", "Avg publication to synthesis", "Share of total delay"],
                 predictionDelaySources.map((row) => [
                   escapeHtml(row.source || "unknown"),
                   Number(row.samples || 0),
                   escapeHtml(formatDuration(row.average_total_seconds)),
-                  escapeHtml(formatDuration(row.average_acquisition_seconds)),
-                  escapeHtml(formatDuration(row.average_post_acquisition_seconds)),
                   cumulativeDelay ? (Number(row.cumulative_delay_seconds || 0) / cumulativeDelay * 100).toFixed(1) + "%" : "0.0%",
                 ]),
               ) + '</div>'
@@ -2943,7 +2939,9 @@ const DASHBOARD_HTML = `<!doctype html>
       const capacity = Number(timing.parallel_capacity || 8);
       const synthesisSamples = Number(timing.synthesis_samples || 0);
       const delaySamples = Number(timing.prediction_delay_samples || 0);
+      const missingDelaySamples = Number(timing.prediction_delay_missing_publication_samples || 0);
       const yahooDelaySamples = Number(timing.yahoo_prediction_delay_samples || 0);
+      const yahooMissingDelaySamples = Number(timing.yahoo_prediction_delay_missing_publication_samples || 0);
       const sourceCheck = status.latest_source_check || null;
       const sourceCheckDate = sourceCheck ? new Date(sourceCheck.checked_at) : null;
       const configuredSources = Number(status.configured_source_count || (sourceCheck && sourceCheck.source_count) || 0);
@@ -2956,14 +2954,16 @@ const DASHBOARD_HTML = `<!doctype html>
         metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers"),
         metric("Avg synthesis", formatDuration(timing.average_synthesis_seconds), synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s")),
         metric(
-          "Avg prediction delay (non-Yahoo)",
+          "Avg pipeline delay (non-Yahoo)",
           formatDuration(timing.average_prediction_delay_seconds),
-          delaySamples + " eligible first-pass sample" + (delaySamples === 1 ? "" : "s") + " | publication to prediction",
+          delaySamples + " completed first-pass article" + (delaySamples === 1 ? "" : "s") + " | publication to synthesis" +
+            (missingDelaySamples ? " | " + missingDelaySamples + " missing publication time" : ""),
         ),
         metric(
-          "Yahoo Finance avg delay",
+          "Yahoo Finance pipeline delay",
           formatDuration(timing.average_yahoo_prediction_delay_seconds),
-          yahooDelaySamples + " eligible first-pass sample" + (yahooDelaySamples === 1 ? "" : "s") + " | publication to prediction",
+          yahooDelaySamples + " completed first-pass article" + (yahooDelaySamples === 1 ? "" : "s") + " | publication to synthesis" +
+            (yahooMissingDelaySamples ? " | " + yahooMissingDelaySamples + " missing publication time" : ""),
         ),
         metric(
           "Last source check",
@@ -3204,7 +3204,7 @@ const DASHBOARD_HTML = `<!doctype html>
         pill(job.status || "unknown", statusClass(job.status), "Current durable research job state in D1 and Cloudflare Queues."),
         escapeHtml(job.status === "running" && Number.isInteger(Number(job.research_slot)) ? "#" + (Number(job.research_slot) + 1) : "n/a"),
         durationHtml,
-        '<span class="job-timing" title="Elapsed time from the article publication timestamp to entry of its actionable ticker prediction.">' + escapeHtml(formatDuration(job.prediction_delay_seconds)) + '</span>',
+        '<span class="job-timing" title="Elapsed time from the article publication timestamp to completion of its first-pass synthesis.">' + escapeHtml(formatDuration(job.prediction_delay_seconds)) + '</span>',
         escapeHtml(String(job.attempts || 0)),
         '<a class="truncate" href="' + escapeAttr(job.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(job.title || job.article_id || "Article") + '</a>',
         ];
@@ -5174,7 +5174,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
       ),
       env.NEWS_DB.prepare(
         "UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)), prediction_delay_seconds = CASE WHEN ? > 0 THEN (SELECT CASE WHEN published_at IS NULL THEN NULL ELSE MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(published_at)) END FROM articles WHERE id = research_jobs.article_id) ELSE NULL END, research_slot = NULL WHERE id = ?",
-      ).bind(symbols.length && existing.prediction_delay_eligible === 1 ? 1 : 0, jobId),
+      ).bind(existing.prediction_delay_eligible === 1 ? 1 : 0, jobId),
       env.NEWS_DB.prepare("UPDATE articles SET status = ? WHERE id = ?").bind(symbols.length ? "analyzed" : "archived", article.id),
     ]);
     await ensurePredictionOutcomeTables(env);
@@ -7205,10 +7205,12 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
     average_acquisition_delay_seconds: number | null;
     average_post_acquisition_delay_seconds: number | null;
     prediction_delay_samples: number;
+    prediction_delay_missing_publication_samples: number;
     average_yahoo_prediction_delay_seconds: number | null;
     average_yahoo_acquisition_delay_seconds: number | null;
     average_yahoo_post_acquisition_delay_seconds: number | null;
     yahoo_prediction_delay_samples: number;
+    yahoo_prediction_delay_missing_publication_samples: number;
     estimated_queue_seconds: number | null;
     parallel_capacity: number;
   };
@@ -7224,10 +7226,12 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
       AVG(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND COALESCE(articles.source_id, '') != 'yahoo-finance' AND articles.published_at IS NOT NULL THEN MAX(0, unixepoch(articles.discovered_at) - unixepoch(articles.published_at)) END) AS average_acquisition_delay_seconds,
       AVG(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND COALESCE(articles.source_id, '') != 'yahoo-finance' AND research_jobs.finished_at IS NOT NULL THEN MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.discovered_at)) END) AS average_post_acquisition_delay_seconds,
       SUM(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND COALESCE(articles.source_id, '') != 'yahoo-finance' AND research_jobs.prediction_delay_seconds IS NOT NULL THEN 1 ELSE 0 END) AS prediction_delay_samples,
+      SUM(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND COALESCE(articles.source_id, '') != 'yahoo-finance' AND unixepoch(articles.published_at) IS NULL THEN 1 ELSE 0 END) AS prediction_delay_missing_publication_samples,
       AVG(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND articles.source_id = 'yahoo-finance' THEN research_jobs.prediction_delay_seconds END) AS average_yahoo_prediction_delay_seconds,
       AVG(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND articles.source_id = 'yahoo-finance' AND articles.published_at IS NOT NULL THEN MAX(0, unixepoch(articles.discovered_at) - unixepoch(articles.published_at)) END) AS average_yahoo_acquisition_delay_seconds,
       AVG(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND articles.source_id = 'yahoo-finance' AND research_jobs.finished_at IS NOT NULL THEN MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.discovered_at)) END) AS average_yahoo_post_acquisition_delay_seconds,
-      SUM(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND articles.source_id = 'yahoo-finance' AND research_jobs.prediction_delay_seconds IS NOT NULL THEN 1 ELSE 0 END) AS yahoo_prediction_delay_samples
+      SUM(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND articles.source_id = 'yahoo-finance' AND research_jobs.prediction_delay_seconds IS NOT NULL THEN 1 ELSE 0 END) AS yahoo_prediction_delay_samples,
+      SUM(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND articles.source_id = 'yahoo-finance' AND unixepoch(articles.published_at) IS NULL THEN 1 ELSE 0 END) AS yahoo_prediction_delay_missing_publication_samples
     FROM research_jobs
     INNER JOIN articles ON articles.id = research_jobs.article_id`,
   ).first<{
@@ -7240,10 +7244,12 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
     average_acquisition_delay_seconds: number | null;
     average_post_acquisition_delay_seconds: number | null;
     prediction_delay_samples: number | null;
+    prediction_delay_missing_publication_samples: number | null;
     average_yahoo_prediction_delay_seconds: number | null;
     average_yahoo_acquisition_delay_seconds: number | null;
     average_yahoo_post_acquisition_delay_seconds: number | null;
     yahoo_prediction_delay_samples: number | null;
+    yahoo_prediction_delay_missing_publication_samples: number | null;
   }>(), db.prepare(
     "SELECT id, research_slot, MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)) AS elapsed_synthesis_seconds FROM research_jobs WHERE status = 'running' ORDER BY research_slot ASC",
   ).all<{ id: string; research_slot: number | null; elapsed_synthesis_seconds: number }>()]);
@@ -7273,6 +7279,7 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
         ? null
         : Number(row.average_post_acquisition_delay_seconds),
       prediction_delay_samples: Number(row?.prediction_delay_samples || 0),
+      prediction_delay_missing_publication_samples: Number(row?.prediction_delay_missing_publication_samples || 0),
       average_yahoo_prediction_delay_seconds: row?.average_yahoo_prediction_delay_seconds === null || row?.average_yahoo_prediction_delay_seconds === undefined
         ? null
         : Number(row.average_yahoo_prediction_delay_seconds),
@@ -7283,6 +7290,7 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
         ? null
         : Number(row.average_yahoo_post_acquisition_delay_seconds),
       yahoo_prediction_delay_samples: Number(row?.yahoo_prediction_delay_samples || 0),
+      yahoo_prediction_delay_missing_publication_samples: Number(row?.yahoo_prediction_delay_missing_publication_samples || 0),
       estimated_queue_seconds: averageSynthesisSeconds === null
         ? null
         : Math.ceil(((pending + running) * averageSynthesisSeconds) / RESEARCH_CONTAINER_COUNT),
@@ -7393,8 +7401,6 @@ async function buildTickerPipelineDiagnostics(env: Env, requestedSince: string |
     env.NEWS_DB.prepare(
       `SELECT COUNT(*) AS samples,
         AVG(research_jobs.prediction_delay_seconds) AS average_total_seconds,
-        AVG(MAX(0, unixepoch(articles.discovered_at) - unixepoch(articles.published_at))) AS average_acquisition_seconds,
-        AVG(MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.discovered_at))) AS average_post_acquisition_seconds,
         SUM(CASE WHEN research_jobs.prediction_delay_seconds >= 3600 THEN 1 ELSE 0 END) AS over_one_hour,
         SUM(CASE WHEN research_jobs.prediction_delay_seconds >= 21600 THEN 1 ELSE 0 END) AS over_six_hours,
         SUM(CASE WHEN research_jobs.prediction_delay_seconds >= 86400 THEN 1 ELSE 0 END) AS over_one_day,
@@ -7409,8 +7415,6 @@ async function buildTickerPipelineDiagnostics(env: Env, requestedSince: string |
       `SELECT COALESCE(sources.name, articles.source_id, 'unknown') AS source,
         COUNT(*) AS samples,
         AVG(research_jobs.prediction_delay_seconds) AS average_total_seconds,
-        AVG(MAX(0, unixepoch(articles.discovered_at) - unixepoch(articles.published_at))) AS average_acquisition_seconds,
-        AVG(MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.discovered_at))) AS average_post_acquisition_seconds,
         SUM(research_jobs.prediction_delay_seconds) AS cumulative_delay_seconds
       FROM research_jobs
       INNER JOIN articles ON articles.id = research_jobs.article_id
