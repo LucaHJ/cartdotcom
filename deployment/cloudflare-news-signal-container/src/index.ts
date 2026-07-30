@@ -2002,6 +2002,15 @@ const DASHBOARD_HTML = `<!doctype html>
           <div class="panel-title">Source Coverage and Prediction Movement</div>
           <div class="panel-meta" id="source-stats-meta">0 sources</div>
         </div>
+        <section class="source-activity-section" aria-labelledby="ticker-pipeline-title">
+          <div class="source-activity-heading">
+            <div>
+              <div class="source-activity-title" id="ticker-pipeline-title">Ticker Pipeline Health</div>
+              <div class="source-activity-meta" id="ticker-pipeline-meta">Loading recent pipeline activity</div>
+            </div>
+          </div>
+          <div id="ticker-pipeline-health"></div>
+        </section>
         <section class="source-activity-section" aria-labelledby="source-activity-title">
           <div class="source-activity-heading">
             <div>
@@ -2071,6 +2080,8 @@ const DASHBOARD_HTML = `<!doctype html>
     const sourceActivityMeta = document.getElementById("source-activity-meta");
     const sourceHourlyWidgetEl = document.getElementById("source-hourly-widget");
     const sourcePeriodLabelEl = document.getElementById("source-period-label");
+    const tickerPipelineHealthEl = document.getElementById("ticker-pipeline-health");
+    const tickerPipelineMetaEl = document.getElementById("ticker-pipeline-meta");
     const resultsMeta = document.getElementById("results-meta");
     const jobsMeta = document.getElementById("jobs-meta");
     const articlesMeta = document.getElementById("articles-meta");
@@ -2494,7 +2505,16 @@ const DASHBOARD_HTML = `<!doctype html>
       sourceStatsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
       sourceHourlyWidgetEl.innerHTML = predictionLoadingRows();
       sourceActivityChartEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+      tickerPipelineMetaEl.textContent = "Loading recent pipeline activity";
+      tickerPipelineHealthEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
       try {
+        try {
+          renderTickerPipelineHealth(await api("/api/diagnostics/ticker-pipeline"));
+        } catch (error) {
+          tickerPipelineMetaEl.textContent = "Pipeline diagnostic unavailable";
+          showError(tickerPipelineHealthEl, error, false);
+        }
+
         try {
           const activityPayload = await api("/api/source-activity?mode=" + encodeURIComponent(sourceActivityMode) + "&anchor=" + encodeURIComponent(sourceActivityAnchor));
           renderSourceActivity(activityPayload);
@@ -2513,6 +2533,56 @@ const DASHBOARD_HTML = `<!doctype html>
       } finally {
         sourceStatsLoading = false;
       }
+    }
+
+    function renderTickerPipelineHealth(payload) {
+      const articleRows = Array.isArray(payload.article_cohorts) ? payload.article_cohorts : [];
+      const resultRows = Array.isArray(payload.results_by_article_cohort) ? payload.results_by_article_cohort : [];
+      const scanRows = Array.isArray(payload.outcome_scans_by_day) ? payload.outcome_scans_by_day : [];
+      const outcomeRows = Array.isArray(payload.outcomes_by_update_day) ? payload.outcomes_by_update_day : [];
+      const metricRows = Array.isArray(payload.source_metrics_by_day) ? payload.source_metrics_by_day : [];
+      const byDay = (rows) => new Map(rows.map((row) => [row.day, row]));
+      const articlesByDay = byDay(articleRows);
+      const resultsByDay = byDay(resultRows);
+      const scansByDay = byDay(scanRows);
+      const outcomesByDay = byDay(outcomeRows);
+      const metricsByDay = byDay(metricRows);
+      const days = [...new Set([
+        ...articleRows.map((row) => row.day),
+        ...resultRows.map((row) => row.day),
+        ...scanRows.map((row) => row.day),
+        ...outcomeRows.map((row) => row.day),
+        ...metricRows.map((row) => row.day),
+      ].filter(Boolean))].sort().reverse();
+      const latest = payload.latest || {};
+      tickerPipelineMetaEl.textContent =
+        "Latest symbol result " + formatDate(latest.latest_symbol_result_at) +
+        " | latest tracked call " + formatDate(latest.latest_outcome_prediction_at) +
+        " | " + Number(latest.total_outcomes || 0) + " total outcomes";
+      tickerPipelineHealthEl.innerHTML = days.length
+        ? '<div class="impact-wrap">' + table(
+            ["Brisbane day", "Acquired", "Analyzed", "Results", "With tickers", "Ticker calls", "Scanned", "Outcomes", "Skipped", "Metric calls"],
+            days.map((day) => {
+              const articles = articlesByDay.get(day) || {};
+              const results = resultsByDay.get(day) || {};
+              const scans = scansByDay.get(day) || {};
+              const outcomes = outcomesByDay.get(day) || {};
+              const metrics = metricsByDay.get(day) || {};
+              return [
+                escapeHtml(day),
+                Number(articles.articles || 0),
+                Number(articles.analyzed || 0),
+                Number(results.results || 0),
+                Number(results.results_with_symbols || 0),
+                Number(results.ticker_calls || 0),
+                Number(scans.scanned_results || 0),
+                Number(outcomes.outcomes || 0),
+                Number(scans.symbols_skipped || 0),
+                Number(metrics.ticker_calls || 0),
+              ];
+            }),
+          ) + '</div>'
+        : '<div class="empty">No recent ticker pipeline activity is recorded.</div>';
     }
 
     function brisbaneDateKey(date = new Date()) {
