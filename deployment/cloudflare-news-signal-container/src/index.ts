@@ -2541,33 +2541,44 @@ const DASHBOARD_HTML = `<!doctype html>
       const scanRows = Array.isArray(payload.outcome_scans_by_day) ? payload.outcome_scans_by_day : [];
       const outcomeRows = Array.isArray(payload.outcomes_by_update_day) ? payload.outcomes_by_update_day : [];
       const metricRows = Array.isArray(payload.source_metrics_by_day) ? payload.source_metrics_by_day : [];
+      const jobRows = Array.isArray(payload.jobs_by_completion_day) ? payload.jobs_by_completion_day : [];
+      const failureReasons = Array.isArray(payload.recent_failure_reasons) ? payload.recent_failure_reasons : [];
       const byDay = (rows) => new Map(rows.map((row) => [row.day, row]));
       const articlesByDay = byDay(articleRows);
       const resultsByDay = byDay(resultRows);
       const scansByDay = byDay(scanRows);
       const outcomesByDay = byDay(outcomeRows);
       const metricsByDay = byDay(metricRows);
+      const jobsByDay = new Map();
+      for (const row of jobRows) {
+        const statuses = jobsByDay.get(row.day) || {};
+        statuses[row.status] = Number(row.jobs || 0);
+        jobsByDay.set(row.day, statuses);
+      }
       const days = [...new Set([
         ...articleRows.map((row) => row.day),
         ...resultRows.map((row) => row.day),
         ...scanRows.map((row) => row.day),
         ...outcomeRows.map((row) => row.day),
         ...metricRows.map((row) => row.day),
+        ...jobRows.map((row) => row.day),
       ].filter(Boolean))].sort().reverse();
       const latest = payload.latest || {};
       tickerPipelineMetaEl.textContent =
-        "Latest symbol result " + formatDate(latest.latest_symbol_result_at) +
+        "Latest result " + formatDate(latest.latest_result_at) +
+        " | latest symbol result " + formatDate(latest.latest_symbol_result_at) +
         " | latest tracked call " + formatDate(latest.latest_outcome_prediction_at) +
         " | " + Number(latest.total_outcomes || 0) + " total outcomes";
       tickerPipelineHealthEl.innerHTML = days.length
         ? '<div class="impact-wrap">' + table(
-            ["Brisbane day", "Acquired", "Analyzed", "Results", "With tickers", "Ticker calls", "Scanned", "Outcomes", "Skipped", "Metric calls"],
+            ["Brisbane day", "Acquired", "Analyzed", "Results", "With tickers", "Ticker calls", "Succeeded", "Failed", "Cancelled", "Scanned", "Outcomes", "Skipped", "Metric calls"],
             days.map((day) => {
               const articles = articlesByDay.get(day) || {};
               const results = resultsByDay.get(day) || {};
               const scans = scansByDay.get(day) || {};
               const outcomes = outcomesByDay.get(day) || {};
               const metrics = metricsByDay.get(day) || {};
+              const jobs = jobsByDay.get(day) || {};
               return [
                 escapeHtml(day),
                 Number(articles.articles || 0),
@@ -2575,13 +2586,21 @@ const DASHBOARD_HTML = `<!doctype html>
                 Number(results.results || 0),
                 Number(results.results_with_symbols || 0),
                 Number(results.ticker_calls || 0),
+                Number(jobs.succeeded || 0),
+                Number(jobs.failed || 0),
+                Number(jobs.cancelled || 0),
                 Number(scans.scanned_results || 0),
                 Number(outcomes.outcomes || 0),
                 Number(scans.symbols_skipped || 0),
                 Number(metrics.ticker_calls || 0),
               ];
             }),
-          ) + '</div>'
+          ) + '</div>' +
+          (failureReasons.length
+            ? '<div class="summary"><strong>Recent failure reasons:</strong> ' + failureReasons.map((item) =>
+                escapeHtml(String(item.failures || 0)) + ' x ' + escapeHtml(item.reason || "unknown")
+              ).join(" | ") + '</div>'
+            : '')
         : '<div class="empty">No recent ticker pipeline activity is recorded.</div>';
     }
 
