@@ -2621,6 +2621,9 @@ const DASHBOARD_HTML = `<!doctype html>
       const metricRows = Array.isArray(payload.source_metrics_by_day) ? payload.source_metrics_by_day : [];
       const jobRows = Array.isArray(payload.jobs_by_completion_day) ? payload.jobs_by_completion_day : [];
       const failureReasons = Array.isArray(payload.recent_failure_reasons) ? payload.recent_failure_reasons : [];
+      const predictionDelay = payload.prediction_delay || {};
+      const predictionDelaySources = Array.isArray(payload.prediction_delay_by_source) ? payload.prediction_delay_by_source : [];
+      const cumulativeDelay = predictionDelaySources.reduce((sum, row) => sum + Number(row.cumulative_delay_seconds || 0), 0);
       const byDay = (rows) => new Map(rows.map((row) => [row.day, row]));
       const articlesByDay = byDay(articleRows);
       const resultsByDay = byDay(resultRows);
@@ -2674,6 +2677,25 @@ const DASHBOARD_HTML = `<!doctype html>
               ];
             }),
           ) + '</div>' +
+          (Number(predictionDelay.samples || 0)
+            ? '<div class="summary"><strong>Prediction delay:</strong> ' +
+                escapeHtml(formatDuration(predictionDelay.average_total_seconds)) + ' average = ' +
+                escapeHtml(formatDuration(predictionDelay.average_acquisition_seconds)) + ' publication-to-acquisition + ' +
+                escapeHtml(formatDuration(predictionDelay.average_post_acquisition_seconds)) + ' acquisition-to-prediction across ' +
+                escapeHtml(String(predictionDelay.samples)) + ' eligible first-pass jobs. ' +
+                escapeHtml(String(predictionDelay.excluded_recovery_jobs || 0)) + ' recovery jobs are excluded.</div>' +
+              '<div class="impact-wrap">' + table(
+                ["Delay source", "Samples", "Avg total", "Acquisition", "After acquisition", "Share of delay"],
+                predictionDelaySources.map((row) => [
+                  escapeHtml(row.source || "unknown"),
+                  Number(row.samples || 0),
+                  escapeHtml(formatDuration(row.average_total_seconds)),
+                  escapeHtml(formatDuration(row.average_acquisition_seconds)),
+                  escapeHtml(formatDuration(row.average_post_acquisition_seconds)),
+                  cumulativeDelay ? (Number(row.cumulative_delay_seconds || 0) / cumulativeDelay * 100).toFixed(1) + "%" : "0.0%",
+                ]),
+              ) + '</div>'
+            : '') +
           (failureReasons.length
             ? '<div class="summary"><strong>Recent failure reasons:</strong> ' + failureReasons.map((item) =>
                 escapeHtml(String(item.failures || 0)) + ' x ' + escapeHtml(item.reason || "unknown")
@@ -2906,6 +2928,8 @@ const DASHBOARD_HTML = `<!doctype html>
       const capacity = Number(timing.parallel_capacity || 8);
       const synthesisSamples = Number(timing.synthesis_samples || 0);
       const delaySamples = Number(timing.prediction_delay_samples || 0);
+      const acquisitionDelay = timing.average_acquisition_delay_seconds;
+      const postAcquisitionDelay = timing.average_post_acquisition_delay_seconds;
       const sourceCheck = status.latest_source_check || null;
       const sourceCheckDate = sourceCheck ? new Date(sourceCheck.checked_at) : null;
       const configuredSources = Number(status.configured_source_count || (sourceCheck && sourceCheck.source_count) || 0);
@@ -2917,7 +2941,13 @@ const DASHBOARD_HTML = `<!doctype html>
         metric("Running", running, running + " of " + capacity + " parallel Codex workers active"),
         metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers"),
         metric("Avg synthesis", formatDuration(timing.average_synthesis_seconds), synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s")),
-        metric("Avg prediction delay", formatDuration(timing.average_prediction_delay_seconds), delaySamples + " new first-pass prediction sample" + (delaySamples === 1 ? "" : "s")),
+        metric(
+          "Avg prediction delay",
+          formatDuration(timing.average_prediction_delay_seconds),
+          delaySamples + " new first-pass sample" + (delaySamples === 1 ? "" : "s") +
+            " | " + formatDuration(acquisitionDelay) + " publication to acquisition" +
+            " + " + formatDuration(postAcquisitionDelay) + " acquisition to prediction",
+        ),
         metric(
           "Last source check",
           sourceCheck ? attemptedSources + " / " + configuredSources : "n/a",
@@ -4112,9 +4142,17 @@ const DASHBOARD_HTML = `<!doctype html>
       return Number.isFinite(number) ? number.toFixed(2) : "n/a";
     }
 
+    function dashboardDate(value) {
+      const text = String(value || "");
+      const normalized = /^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$/.test(text)
+        ? text.replace(" ", "T") + "Z"
+        : text;
+      return new Date(normalized);
+    }
+
     function formatDate(value) {
       if (!value) return "unknown";
-      const date = new Date(value);
+      const date = dashboardDate(value);
       return Number.isFinite(date.getTime()) ? date.toLocaleString() : String(value);
     }
 
@@ -4134,7 +4172,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     function formatShortDate(value) {
       if (!value) return "";
-      const date = new Date(value);
+      const date = dashboardDate(value);
       if (!Number.isFinite(date.getTime())) return String(value);
       return date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
     }
@@ -5115,7 +5153,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
       ),
       env.NEWS_DB.prepare(
         "UPDATE research_jobs SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)), prediction_delay_seconds = CASE WHEN ? > 0 THEN (SELECT CASE WHEN published_at IS NULL THEN NULL ELSE MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(published_at)) END FROM articles WHERE id = research_jobs.article_id) ELSE NULL END, research_slot = NULL WHERE id = ?",
-      ).bind(symbols.length, jobId),
+      ).bind(symbols.length && existing.prediction_delay_eligible === 1 ? 1 : 0, jobId),
       env.NEWS_DB.prepare("UPDATE articles SET status = ? WHERE id = ?").bind(symbols.length ? "analyzed" : "archived", article.id),
     ]);
     await ensurePredictionOutcomeTables(env);
@@ -7143,13 +7181,15 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
     average_synthesis_seconds: number | null;
     synthesis_samples: number;
     average_prediction_delay_seconds: number | null;
+    average_acquisition_delay_seconds: number | null;
+    average_post_acquisition_delay_seconds: number | null;
     prediction_delay_samples: number;
     estimated_queue_seconds: number | null;
     parallel_capacity: number;
   };
 }> {
   const [row, activeJobs] = await Promise.all([db.prepare(
-    "SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, AVG(CASE WHEN status = 'succeeded' THEN synthesis_duration_seconds END) AS average_synthesis_seconds, SUM(CASE WHEN status = 'succeeded' AND synthesis_duration_seconds IS NOT NULL THEN 1 ELSE 0 END) AS synthesis_samples, AVG(CASE WHEN status = 'succeeded' AND prediction_delay_eligible = 1 THEN prediction_delay_seconds END) AS average_prediction_delay_seconds, SUM(CASE WHEN status = 'succeeded' AND prediction_delay_eligible = 1 AND prediction_delay_seconds IS NOT NULL THEN 1 ELSE 0 END) AS prediction_delay_samples FROM research_jobs",
+    "SELECT SUM(CASE WHEN research_jobs.status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN research_jobs.status = 'running' THEN 1 ELSE 0 END) AS running, SUM(CASE WHEN research_jobs.status = 'failed' THEN 1 ELSE 0 END) AS failed, AVG(CASE WHEN research_jobs.status = 'succeeded' THEN research_jobs.synthesis_duration_seconds END) AS average_synthesis_seconds, SUM(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.synthesis_duration_seconds IS NOT NULL THEN 1 ELSE 0 END) AS synthesis_samples, AVG(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 THEN research_jobs.prediction_delay_seconds END) AS average_prediction_delay_seconds, AVG(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND articles.published_at IS NOT NULL THEN MAX(0, unixepoch(articles.discovered_at) - unixepoch(articles.published_at)) END) AS average_acquisition_delay_seconds, AVG(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND research_jobs.finished_at IS NOT NULL THEN MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.discovered_at)) END) AS average_post_acquisition_delay_seconds, SUM(CASE WHEN research_jobs.status = 'succeeded' AND research_jobs.prediction_delay_eligible = 1 AND research_jobs.prediction_delay_seconds IS NOT NULL THEN 1 ELSE 0 END) AS prediction_delay_samples FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id",
   ).first<{
     pending: number | null;
     running: number | null;
@@ -7157,6 +7197,8 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
     average_synthesis_seconds: number | null;
     synthesis_samples: number | null;
     average_prediction_delay_seconds: number | null;
+    average_acquisition_delay_seconds: number | null;
+    average_post_acquisition_delay_seconds: number | null;
     prediction_delay_samples: number | null;
   }>(), db.prepare(
     "SELECT id, research_slot, MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)) AS elapsed_synthesis_seconds FROM research_jobs WHERE status = 'running' ORDER BY research_slot ASC",
@@ -7180,6 +7222,12 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
       average_prediction_delay_seconds: row?.average_prediction_delay_seconds === null || row?.average_prediction_delay_seconds === undefined
         ? null
         : Number(row.average_prediction_delay_seconds),
+      average_acquisition_delay_seconds: row?.average_acquisition_delay_seconds === null || row?.average_acquisition_delay_seconds === undefined
+        ? null
+        : Number(row.average_acquisition_delay_seconds),
+      average_post_acquisition_delay_seconds: row?.average_post_acquisition_delay_seconds === null || row?.average_post_acquisition_delay_seconds === undefined
+        ? null
+        : Number(row.average_post_acquisition_delay_seconds),
       prediction_delay_samples: Number(row?.prediction_delay_samples || 0),
       estimated_queue_seconds: averageSynthesisSeconds === null
         ? null
@@ -7288,6 +7336,38 @@ async function buildTickerPipelineDiagnostics(env: Env, requestedSince: string |
       ORDER BY failures DESC
       LIMIT 10`,
     ).bind(since),
+    env.NEWS_DB.prepare(
+      `SELECT COUNT(*) AS samples,
+        AVG(research_jobs.prediction_delay_seconds) AS average_total_seconds,
+        AVG(MAX(0, unixepoch(articles.discovered_at) - unixepoch(articles.published_at))) AS average_acquisition_seconds,
+        AVG(MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.discovered_at))) AS average_post_acquisition_seconds,
+        SUM(CASE WHEN research_jobs.prediction_delay_seconds >= 3600 THEN 1 ELSE 0 END) AS over_one_hour,
+        SUM(CASE WHEN research_jobs.prediction_delay_seconds >= 21600 THEN 1 ELSE 0 END) AS over_six_hours,
+        SUM(CASE WHEN research_jobs.prediction_delay_seconds >= 86400 THEN 1 ELSE 0 END) AS over_one_day,
+        (SELECT COUNT(*) FROM research_jobs WHERE prediction_delay_eligible = 2) AS excluded_recovery_jobs
+      FROM research_jobs
+      INNER JOIN articles ON articles.id = research_jobs.article_id
+      WHERE research_jobs.status = 'succeeded'
+        AND research_jobs.prediction_delay_eligible = 1
+        AND research_jobs.prediction_delay_seconds IS NOT NULL`,
+    ),
+    env.NEWS_DB.prepare(
+      `SELECT COALESCE(sources.name, articles.source_id, 'unknown') AS source,
+        COUNT(*) AS samples,
+        AVG(research_jobs.prediction_delay_seconds) AS average_total_seconds,
+        AVG(MAX(0, unixepoch(articles.discovered_at) - unixepoch(articles.published_at))) AS average_acquisition_seconds,
+        AVG(MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.discovered_at))) AS average_post_acquisition_seconds,
+        SUM(research_jobs.prediction_delay_seconds) AS cumulative_delay_seconds
+      FROM research_jobs
+      INNER JOIN articles ON articles.id = research_jobs.article_id
+      LEFT JOIN sources ON sources.id = articles.source_id
+      WHERE research_jobs.status = 'succeeded'
+        AND research_jobs.prediction_delay_eligible = 1
+        AND research_jobs.prediction_delay_seconds IS NOT NULL
+      GROUP BY articles.source_id, sources.name
+      ORDER BY cumulative_delay_seconds DESC
+      LIMIT 12`,
+    ),
   ];
   const results = await env.NEWS_DB.batch<Record<string, unknown>>(statements);
   const rows = (index: number) => results[index]?.results || [];
@@ -7307,6 +7387,8 @@ async function buildTickerPipelineDiagnostics(env: Env, requestedSince: string |
       ...(rows(8)[0] || {}),
     },
     recent_failure_reasons: rows(9),
+    prediction_delay: rows(10)[0] || {},
+    prediction_delay_by_source: rows(11),
   };
 }
 
@@ -7755,7 +7837,7 @@ export default {
         await Promise.all([
           drainResearchBacklogConcurrently(env).catch((error) => console.error("Scheduled research backlog drain failed", error)),
           backfillArticleContents(env, 20).catch((error) => console.error("Scheduled article content backfill failed", error)),
-          processPredictionOutcomes(env, 50).catch((error) => console.error("Scheduled prediction outcome processing failed", error)),
+          processPredictionOutcomes(env, 100).catch((error) => console.error("Scheduled prediction outcome processing failed", error)),
         ]);
       }),
     );
