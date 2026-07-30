@@ -267,6 +267,13 @@ class ResearchBusyError extends Error {
   }
 }
 
+class CodexAuthRefreshError extends Error {}
+
+function isCodexAuthRefreshFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /access token could not be refreshed|refresh token was already used|please log out and sign in again/i.test(message);
+}
+
 function isTransientContainerCapacityError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /maximum number of running container instances exceeded|there is no container instance that can be provided|no container instance.*provided/i.test(
@@ -1076,6 +1083,27 @@ const DASHBOARD_HTML = `<!doctype html>
       gap: 7px;
       margin-top: 10px;
       align-items: center;
+    }
+
+    .auth-repair {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 14px;
+      align-items: center;
+    }
+
+    .auth-repair input[type="file"] {
+      min-width: 0;
+      color: var(--text-secondary);
+      font: inherit;
+    }
+
+    .auth-repair-status {
+      grid-column: 1 / -1;
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
     }
 
     .pill {
@@ -1971,6 +1999,18 @@ const DASHBOARD_HTML = `<!doctype html>
     <section id="settings-panel" class="hidden">
       <section class="panel" style="margin-top:14px">
         <div class="panel-header">
+          <div class="panel-title">Codex Authentication</div>
+          <div class="panel-meta">Local auth.json</div>
+        </div>
+        <div class="auth-repair">
+          <input id="codex-auth-file" type="file" accept=".json,application/json" aria-label="Codex auth.json file">
+          <button class="btn primary" id="rotate-codex-auth-btn" type="button">Repair Login</button>
+          <div class="auth-repair-status" id="codex-auth-status">Select the current <code>auth.json</code> file to restore research workers.</div>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
           <div class="panel-title">Recent Jobs</div>
           <div class="panel-meta" id="jobs-meta">0 rows</div>
         </div>
@@ -2100,6 +2140,9 @@ const DASHBOARD_HTML = `<!doctype html>
     const predictionTrendMeta = document.getElementById("prediction-trend-meta");
     const predictionsEl = document.getElementById("predictions");
     const predictionsMeta = document.getElementById("predictions-meta");
+    const codexAuthFileEl = document.getElementById("codex-auth-file");
+    const rotateCodexAuthBtn = document.getElementById("rotate-codex-auth-btn");
+    const codexAuthStatusEl = document.getElementById("codex-auth-status");
     const liveModelTab = null;
     const eodModelTab = null;
     const liveModelPanel = null;
@@ -2212,6 +2255,7 @@ const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("refresh-btn").addEventListener("click", loadAll);
     document.getElementById("ingest-btn").addEventListener("click", () => runAction("/api/ingest"));
     document.getElementById("requeue-btn").addEventListener("click", () => runAction("/api/requeue-pending?limit=10"));
+    rotateCodexAuthBtn.addEventListener("click", rotateCodexAuth);
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
     sourcesTab.addEventListener("click", () => setTab("sources"));
@@ -2285,6 +2329,40 @@ const DASHBOARD_HTML = `<!doctype html>
 
     function syncAuthState() {
       authState.textContent = tokenInput.value.trim() ? "Token set" : "Token not set";
+    }
+
+    async function rotateCodexAuth() {
+      const file = codexAuthFileEl.files && codexAuthFileEl.files[0];
+      if (!file) {
+        codexAuthStatusEl.textContent = "Select auth.json first.";
+        return;
+      }
+      if (!window.confirm("Replace the research-worker Codex login, restart all workers, and recover authentication-failed jobs?")) return;
+
+      rotateCodexAuthBtn.disabled = true;
+      codexAuthStatusEl.textContent = "Replacing authentication and restarting workers...";
+      try {
+        const authJson = await file.text();
+        const parsed = JSON.parse(authJson);
+        if (!parsed || typeof parsed !== "object" || !(parsed.tokens || parsed.OPENAI_API_KEY || parsed.auth_mode)) {
+          throw new Error("The selected file is not a valid Codex auth.json file.");
+        }
+        const result = await api("/api/research/auth/rotate", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ auth_json: authJson }),
+        });
+        codexAuthFileEl.value = "";
+        codexAuthStatusEl.textContent =
+          "Login repaired. " + Number(result.recycled || 0) + " workers restarted; " +
+          Number(result.recovered || 0) + " failed jobs recovered; " +
+          Number(result.requeued || 0) + " jobs dispatched.";
+        await loadAll();
+      } catch (error) {
+        codexAuthStatusEl.textContent = error.message || String(error);
+      } finally {
+        rotateCodexAuthBtn.disabled = false;
+      }
     }
 
     function storedToken() {
@@ -4257,6 +4335,14 @@ async function persistCodexAuth(env: Env, authJson: string | null | undefined): 
     .run();
 }
 
+async function replacePersistedCodexAuth(env: Env, authJson: string): Promise<void> {
+  if (!isCodexAuthJson(authJson)) throw new Error("The selected file is not a valid Codex auth.json file.");
+  if (!env.CODEX_AUTH_STATE_KEY) throw new Error("CODEX_AUTH_STATE_KEY is not configured.");
+  await persistCodexAuth(env, authJson);
+  const persisted = await loadPersistedCodexAuth(env);
+  if (!persisted) throw new Error("The replacement Codex authentication could not be verified.");
+}
+
 async function startWithSecrets(container: any, env: Env): Promise<void> {
   const persistedAuth = await loadPersistedCodexAuth(env).catch((error) => {
     console.error("Failed to load persisted Codex auth", error);
@@ -4894,10 +4980,15 @@ async function runContainerResearch(env: Env, prompt: string, researchSlot: numb
     }),
   );
   const payload = (await response.json()) as { ok?: boolean; memo?: string; error?: string; auth_json?: string };
-  await persistCodexAuth(env, payload.auth_json).catch((error) => console.error("Failed to persist refreshed Codex auth", error));
   if (!response.ok || !payload.ok || !payload.memo) {
-    throw new Error(payload.error || `Container research failed with HTTP ${response.status}`);
+    const message = payload.error || `Container research failed with HTTP ${response.status}`;
+    if (isCodexAuthRefreshFailure(message)) {
+      await container.destroy().catch((error: unknown) => console.error(`Failed to recycle research container ${researchSlot}`, error));
+      throw new CodexAuthRefreshError(message);
+    }
+    throw new Error(message);
   }
+  await persistCodexAuth(env, payload.auth_json).catch((error) => console.error("Failed to persist refreshed Codex auth", error));
   return payload.memo;
 }
 
@@ -5042,6 +5133,20 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     return { ok: true, jobId };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof CodexAuthRefreshError || isCodexAuthRefreshFailure(error)) {
+      await env.NEWS_DB.prepare(
+        "UPDATE research_jobs SET status = 'pending', attempts = MAX(0, attempts - 1), last_error = ?, started_at = NULL, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
+      )
+        .bind(`Deferred until Codex authentication is refreshed: ${message}`.slice(0, 1000), jobId)
+        .run();
+      await publishDashboardEvent(env, {
+        type: "research_deferred",
+        at: new Date().toISOString(),
+        job_id: jobId,
+        article_id: article.id,
+      });
+      throw new ResearchBusyError("Codex authentication refresh is pending");
+    }
     if (isTransientContainerCapacityError(error)) {
       await env.NEWS_DB.prepare(
         "UPDATE research_jobs SET status = 'pending', attempts = MAX(0, attempts - 1), last_error = ?, started_at = NULL, finished_at = CURRENT_TIMESTAMP, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = NULL WHERE id = ?",
@@ -5076,7 +5181,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
 
 async function processNextJob(env: Env): Promise<{ ok: boolean; jobId?: string; skipped?: string }> {
   const job = await env.NEWS_DB.prepare(
-    "SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) ASC, queued_at ASC LIMIT 1",
+    "SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY CASE WHEN prediction_delay_eligible = 1 AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) THEN 0 WHEN prediction_delay_eligible = 2 AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) THEN 1 ELSE 2 END, queued_at ASC LIMIT 1",
   ).first<{ id: string }>();
   if (!job) return { ok: true, skipped: "no_pending_jobs" };
   return processJob(env, job.id);
@@ -5126,7 +5231,7 @@ async function drainResearchBacklogConcurrently(env: Env): Promise<{
     if (!available) break;
 
     const jobs = await env.NEWS_DB.prepare(
-      "SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) ASC, queued_at ASC LIMIT ?",
+      "SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY CASE WHEN prediction_delay_eligible = 1 AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) THEN 0 WHEN prediction_delay_eligible = 2 AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) THEN 1 ELSE 2 END, queued_at ASC LIMIT ?",
     )
       .bind(available)
       .all<{ id: string }>();
@@ -5155,7 +5260,7 @@ async function drainResearchBacklogConcurrently(env: Env): Promise<{
 async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: number }> {
   const clamped = Math.min(Math.max(limit, 1), 100);
   const pending = await env.NEWS_DB.prepare(
-    "SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) ASC, queued_at ASC LIMIT ?",
+    "SELECT id FROM research_jobs WHERE status = 'pending' ORDER BY CASE WHEN prediction_delay_eligible = 1 AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) THEN 0 WHEN prediction_delay_eligible = 2 AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) THEN 1 ELSE 2 END, queued_at ASC LIMIT ?",
   )
     .bind(clamped)
     .all<{ id: string }>();
@@ -5165,6 +5270,37 @@ async function requeuePendingJobs(env: Env, limit = 25): Promise<{ requeued: num
   }
 
   return { requeued: pending.results?.length || 0 };
+}
+
+async function recycleResearchContainers(env: Env): Promise<{ recycled: number; recycle_failures: number }> {
+  const results = await Promise.allSettled(
+    Array.from({ length: RESEARCH_CONTAINER_COUNT }, (_, slot) =>
+      getContainer(env.CODEX_CONTAINER, `instance-${slot}`).destroy(),
+    ),
+  );
+  return {
+    recycled: results.filter((result) => result.status === "fulfilled").length,
+    recycle_failures: results.filter((result) => result.status === "rejected").length,
+  };
+}
+
+async function recoverCodexAuthFailedResearchJobs(env: Env): Promise<{ recovered: number }> {
+  const marker = "Recovered after Codex authentication repair";
+  const failed = await env.NEWS_DB.prepare(
+    "SELECT COUNT(*) AS count FROM research_jobs WHERE status = 'failed' AND (last_error LIKE '%access token could not be refreshed%' OR last_error LIKE '%refresh token was already used%' OR last_error LIKE '%Please log out and sign in again%')",
+  ).first<{ count: number }>();
+  const recovered = Number(failed?.count || 0);
+  if (!recovered) return { recovered: 0 };
+
+  await env.NEWS_DB.batch([
+    env.NEWS_DB.prepare(
+      "UPDATE research_jobs SET status = 'pending', attempts = 0, last_error = ?, queued_at = CURRENT_TIMESTAMP, started_at = NULL, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, prediction_delay_eligible = 2, research_slot = NULL WHERE status = 'failed' AND (last_error LIKE '%access token could not be refreshed%' OR last_error LIKE '%refresh token was already used%' OR last_error LIKE '%Please log out and sign in again%')",
+    ).bind(marker),
+    env.NEWS_DB.prepare(
+      "UPDATE articles SET status = 'queued' WHERE EXISTS (SELECT 1 FROM research_jobs WHERE research_jobs.article_id = articles.id AND research_jobs.status = 'pending' AND research_jobs.last_error = ?)",
+    ).bind(marker),
+  ]);
+  return { recovered };
 }
 
 async function remediateFailedResearchJobs(env: Env): Promise<{
@@ -7412,6 +7548,24 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...(await remediateFailedResearchJobs(env)) });
   }
 
+  if (url.pathname === "/api/research/auth/rotate" && request.method === "POST") {
+    const body = (await request.json().catch(() => ({}))) as { auth_json?: unknown };
+    const authJson = typeof body.auth_json === "string" ? body.auth_json.trim() : "";
+    if (!authJson) return json({ error: "Select a Codex auth.json file." }, { status: 400 });
+    if (authJson.length > 100_000) return json({ error: "The selected auth file is unexpectedly large." }, { status: 413 });
+    try {
+      await replacePersistedCodexAuth(env, authJson);
+      const containers = await recycleResearchContainers(env);
+      const normalized = await normalizeResearchJobConcurrency(env, true);
+      const recovery = await recoverCodexAuthFailedResearchJobs(env);
+      const queue = await requeuePendingJobs(env, 100);
+      await publishDashboardEvent(env, { type: "research_deferred", at: new Date().toISOString() });
+      return json({ ok: true, ...containers, ...normalized, ...recovery, ...queue });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+    }
+  }
+
   if (url.pathname === "/api/reanalyze-recent" && request.method === "POST") {
     return json({ ok: true, ...(await reanalyzeRecentJobs(env, limit)) });
   }
@@ -7562,6 +7716,7 @@ export default {
           "/api/predictions/process",
           "/api/process-batch",
           "/api/research/recover",
+          "/api/research/auth/rotate",
           "/api/research/remediate-failed",
           "/api/research/reset-first-pass-queue",
           "/api/reanalyze-recent",
@@ -7614,8 +7769,9 @@ export default {
         await drainResearchBacklog(env);
       } catch (error) {
         if (error instanceof ResearchBusyError) {
-          message.retry({ delaySeconds: 5 });
-          await drainResearchBacklog(env);
+          const authPending = /authentication/i.test(error.message);
+          message.retry({ delaySeconds: authPending ? 30 : 5 });
+          if (!authPending) await drainResearchBacklog(env);
           continue;
         }
         throw error;
