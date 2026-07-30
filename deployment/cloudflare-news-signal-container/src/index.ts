@@ -2910,7 +2910,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function showInitialSkeletons() {
-      metricsEl.innerHTML = Array.from({ length: 7 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
+      metricsEl.innerHTML = Array.from({ length: 8 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
       resultsEl.innerHTML = Array.from({ length: 5 }, () => '<div class="skeleton-result"><span class="skeleton-block skeleton-line long"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
       jobsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
       failedJobsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
@@ -2943,11 +2943,7 @@ const DASHBOARD_HTML = `<!doctype html>
       const capacity = Number(timing.parallel_capacity || 8);
       const synthesisSamples = Number(timing.synthesis_samples || 0);
       const delaySamples = Number(timing.prediction_delay_samples || 0);
-      const acquisitionDelay = timing.average_acquisition_delay_seconds;
-      const postAcquisitionDelay = timing.average_post_acquisition_delay_seconds;
       const yahooDelaySamples = Number(timing.yahoo_prediction_delay_samples || 0);
-      const yahooAcquisitionDelay = timing.average_yahoo_acquisition_delay_seconds;
-      const yahooPostAcquisitionDelay = timing.average_yahoo_post_acquisition_delay_seconds;
       const sourceCheck = status.latest_source_check || null;
       const sourceCheckDate = sourceCheck ? new Date(sourceCheck.checked_at) : null;
       const configuredSources = Number(status.configured_source_count || (sourceCheck && sourceCheck.source_count) || 0);
@@ -2962,16 +2958,12 @@ const DASHBOARD_HTML = `<!doctype html>
         metric(
           "Avg prediction delay (non-Yahoo)",
           formatDuration(timing.average_prediction_delay_seconds),
-          delaySamples + " new first-pass sample" + (delaySamples === 1 ? "" : "s") +
-            " | " + formatDuration(acquisitionDelay) + " publication to acquisition" +
-            " + " + formatDuration(postAcquisitionDelay) + " acquisition to prediction",
+          delaySamples + " eligible first-pass sample" + (delaySamples === 1 ? "" : "s") + " | publication to prediction",
         ),
         metric(
           "Yahoo Finance avg delay",
           formatDuration(timing.average_yahoo_prediction_delay_seconds),
-          yahooDelaySamples + " new first-pass sample" + (yahooDelaySamples === 1 ? "" : "s") +
-            " | " + formatDuration(yahooAcquisitionDelay) + " publication to acquisition" +
-            " + " + formatDuration(yahooPostAcquisitionDelay) + " acquisition to prediction",
+          yahooDelaySamples + " eligible first-pass sample" + (yahooDelaySamples === 1 ? "" : "s") + " | publication to prediction",
         ),
         metric(
           "Last source check",
