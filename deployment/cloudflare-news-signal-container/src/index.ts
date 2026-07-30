@@ -6964,6 +6964,127 @@ async function researchOperationsTelemetry(db: D1Database): Promise<{
   };
 }
 
+async function buildTickerPipelineDiagnostics(env: Env, requestedSince: string | null): Promise<Record<string, unknown>> {
+  const parsedSince = requestedSince ? Date.parse(requestedSince) : Number.NaN;
+  const since = new Date(Number.isFinite(parsedSince) ? parsedSince : Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const statements = [
+    env.NEWS_DB.prepare(
+      `SELECT date(datetime(discovered_at, '+10 hours')) AS day,
+        COUNT(*) AS articles,
+        SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
+        SUM(CASE WHEN status = 'analyzed' THEN 1 ELSE 0 END) AS analyzed,
+        SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) AS archived
+      FROM articles
+      WHERE datetime(discovered_at) >= datetime(?)
+      GROUP BY day
+      ORDER BY day`,
+    ).bind(since),
+    env.NEWS_DB.prepare(
+      `SELECT date(datetime(articles.discovered_at, '+10 hours')) AS day,
+        COUNT(*) AS results,
+        SUM(CASE WHEN research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]') THEN 1 ELSE 0 END) AS results_with_symbols,
+        SUM(CASE WHEN json_valid(research_results.symbols) THEN json_array_length(research_results.symbols) ELSE 0 END) AS ticker_calls,
+        SUM(CASE WHEN research_results.symbols IS NULL OR trim(research_results.symbols) IN ('', '[]') THEN 1 ELSE 0 END) AS tickerless_results
+      FROM research_results
+      INNER JOIN articles ON articles.id = research_results.article_id
+      WHERE datetime(articles.discovered_at) >= datetime(?)
+      GROUP BY day
+      ORDER BY day`,
+    ).bind(since),
+    env.NEWS_DB.prepare(
+      `SELECT date(datetime(research_results.created_at, '+10 hours')) AS day,
+        COUNT(*) AS results,
+        SUM(CASE WHEN research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]') THEN 1 ELSE 0 END) AS results_with_symbols,
+        SUM(CASE WHEN json_valid(research_results.symbols) THEN json_array_length(research_results.symbols) ELSE 0 END) AS ticker_calls,
+        SUM(CASE WHEN research_results.symbols IS NULL OR trim(research_results.symbols) IN ('', '[]') THEN 1 ELSE 0 END) AS tickerless_results
+      FROM research_results
+      WHERE datetime(research_results.created_at) >= datetime(?)
+      GROUP BY day
+      ORDER BY day`,
+    ).bind(since),
+    env.NEWS_DB.prepare(
+      `SELECT date(datetime(COALESCE(finished_at, queued_at), '+10 hours')) AS day, status, COUNT(*) AS jobs
+      FROM research_jobs
+      WHERE datetime(COALESCE(finished_at, queued_at)) >= datetime(?)
+      GROUP BY day, status
+      ORDER BY day, status`,
+    ).bind(since),
+    env.NEWS_DB.prepare(
+      `SELECT date(datetime(updated_at, '+10 hours')) AS day,
+        COUNT(*) AS outcomes,
+        COUNT(DISTINCT article_id) AS articles,
+        MIN(prediction_at) AS earliest_prediction_at,
+        MAX(prediction_at) AS latest_prediction_at
+      FROM prediction_outcomes
+      WHERE datetime(updated_at) >= datetime(?)
+      GROUP BY day
+      ORDER BY day`,
+    ).bind(since),
+    env.NEWS_DB.prepare(
+      `SELECT date(datetime(scanned_at, '+10 hours')) AS day,
+        COUNT(*) AS scanned_results,
+        SUM(outcome_count) AS outcomes_recorded,
+        SUM(skipped_count) AS symbols_skipped
+      FROM prediction_outcome_scans
+      WHERE datetime(scanned_at) >= datetime(?)
+      GROUP BY day
+      ORDER BY day`,
+    ).bind(since),
+    env.NEWS_DB.prepare(
+      `SELECT date(datetime(hour_start, '+10 hours')) AS day,
+        SUM(article_count) AS articles,
+        SUM(ticker_count) AS ticker_calls
+      FROM source_hourly_metrics
+      WHERE datetime(hour_start) >= datetime(?)
+      GROUP BY day
+      ORDER BY day`,
+    ).bind(since),
+    env.NEWS_DB.prepare(
+      `SELECT
+        MAX(research_results.created_at) AS latest_result_at,
+        MAX(CASE WHEN research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]') THEN research_results.created_at END) AS latest_symbol_result_at,
+        MAX(CASE WHEN research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]') THEN articles.discovered_at END) AS latest_symbol_article_discovered_at,
+        MAX(CASE WHEN research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]') THEN articles.published_at END) AS latest_symbol_article_published_at
+      FROM research_results
+      LEFT JOIN articles ON articles.id = research_results.article_id`,
+    ),
+    env.NEWS_DB.prepare(
+      `SELECT
+        MAX(updated_at) AS latest_outcome_update_at,
+        MAX(prediction_at) AS latest_outcome_prediction_at,
+        COUNT(*) AS total_outcomes
+      FROM prediction_outcomes`,
+    ),
+    env.NEWS_DB.prepare(
+      `SELECT substr(COALESCE(last_error, 'unknown'), 1, 180) AS reason, COUNT(*) AS failures
+      FROM research_jobs
+      WHERE status = 'failed' AND datetime(finished_at) >= datetime(?)
+      GROUP BY reason
+      ORDER BY failures DESC
+      LIMIT 10`,
+    ).bind(since),
+  ];
+  const results = await env.NEWS_DB.batch<Record<string, unknown>>(statements);
+  const rows = (index: number) => results[index]?.results || [];
+  return {
+    ok: true,
+    since,
+    timezone: "Australia/Brisbane",
+    article_cohorts: rows(0),
+    results_by_article_cohort: rows(1),
+    results_by_completion_day: rows(2),
+    jobs_by_completion_day: rows(3),
+    outcomes_by_update_day: rows(4),
+    outcome_scans_by_day: rows(5),
+    source_metrics_by_day: rows(6),
+    latest: {
+      ...(rows(7)[0] || {}),
+      ...(rows(8)[0] || {}),
+    },
+    recent_failure_reasons: rows(9),
+  };
+}
+
 function predictionFiltersFromUrl(url: URL): PredictionOutcomeFilters {
   const directionValue = url.searchParams.get("direction");
   const direction = directionValue === "bullish" || directionValue === "bearish" ? directionValue : null;
@@ -7015,6 +7136,10 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       env.NEWS_DB.prepare("SELECT * FROM source_checks ORDER BY datetime(checked_at) DESC LIMIT 1").first<SourceCheckRow>(),
     ]);
     return json({ ok: true, ...operations, latest_source_check: latestSourceCheck, configured_source_count: SOURCES.length });
+  }
+
+  if (url.pathname === "/api/diagnostics/ticker-pipeline") {
+    return json(await buildTickerPipelineDiagnostics(env, url.searchParams.get("since")));
   }
 
   if (url.pathname === "/api/source-checks") {
@@ -7325,6 +7450,7 @@ export default {
           "/health",
           "/api/status",
           "/api/status/live",
+          "/api/diagnostics/ticker-pipeline?since=ISO_TIMESTAMP",
           "/api/events",
           "/api/source-checks",
           "/api/source-check-details?check_id=CHECK_ID",
