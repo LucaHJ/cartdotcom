@@ -4215,6 +4215,10 @@ const DASHBOARD_HTML = `<!doctype html>
 
     setInterval(updateRunningJobTimers, 1000);
     if (tokenInput.value.trim()) {
+      const requestedTab = new URLSearchParams(window.location.search).get("tab");
+      if (requestedTab === "sources" || requestedTab === "overview" || requestedTab === "settings") {
+        setTab(requestedTab);
+      }
       startLiveStatusStream();
       loadAll();
     }
