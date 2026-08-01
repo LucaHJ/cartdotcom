@@ -20,6 +20,12 @@
       "database_id": "8a3a5b15-c56a-4212-b8fe-38de91878b6a"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "ARTICLE_CORPUS",
+      "bucket_name": "cartdotcom-news-article-corpus"
+    }
+  ],
   "queues": {
     "producers": [
       {

@@ -55,6 +55,39 @@ type Article = {
   source_weight?: number;
 };
 
+type ArticleCorpusRow = Article & {
+  source_category: string | null;
+  research_job_id: string | null;
+  research_job_finished_at: string | null;
+  research_result_id: string | null;
+  research_result_created_at: string | null;
+  event_type: string | null;
+  companies: string | null;
+  industries: string | null;
+  symbols: string | null;
+  sentiment_score: number | null;
+  impact_horizon: string | null;
+  confidence: number | null;
+  analysis_summary: string | null;
+  memo: string | null;
+};
+
+type ArticleCorpusIndexRow = {
+  article_id: string;
+  object_key: string | null;
+  content_sha256: string | null;
+  content_chars: number;
+  object_bytes: number;
+  storage_status: string;
+  storage_attempts: number;
+  schema_version: number;
+  extraction_version: string;
+  stored_at: string | null;
+  last_attempt_at: string | null;
+  last_error: string | null;
+  updated_at: string;
+};
+
 type ResearchJobMessage = {
   jobId: string;
 };
@@ -285,6 +318,7 @@ export interface Env {
   CODEX_CONTAINER: DurableObjectNamespace<CodexResearchContainer>;
   DASHBOARD_EVENTS: DurableObjectNamespace<DashboardEventHub>;
   NEWS_DB: D1Database;
+  ARTICLE_CORPUS: R2Bucket;
   RESEARCH_QUEUE: Queue<ResearchJobMessage>;
   CONTAINER_API_TOKEN?: string;
   OPENAI_API_KEY?: string;
@@ -395,6 +429,11 @@ const SOURCES: Source[] = [
 ];
 
 const ARTICLE_CONTENT_MAX_CHARS = 120_000;
+const ARTICLE_CORPUS_MAX_CHARS = 3_000_000;
+const ARTICLE_CORPUS_SCHEMA_VERSION = 1;
+const ARTICLE_EXTRACTION_VERSION = "2026-08-01.1";
+const ARTICLE_CORPUS_BACKFILL_BATCH = 50;
+const ARTICLE_CORPUS_MAX_ATTEMPTS = 5;
 const ARTICLE_FETCH_TIMEOUT_MS = 15_000;
 const SOURCE_CHECK_INTERVAL_MINUTES = 5;
 const SOURCE_CHECK_INTERVAL_MS = SOURCE_CHECK_INTERVAL_MINUTES * 60 * 1000;
@@ -595,6 +634,12 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
       await addColumnIfMissing(db, "research_jobs", "prediction_delay_eligible", "INTEGER NOT NULL DEFAULT 0");
       await db.prepare(
         "CREATE INDEX IF NOT EXISTS idx_articles_content_backfill ON articles(content_status, content_fetch_attempts, discovered_at)",
+      ).run();
+      await db.prepare(
+        "CREATE TABLE IF NOT EXISTS article_corpus_objects (article_id TEXT PRIMARY KEY, object_key TEXT, content_sha256 TEXT, content_chars INTEGER NOT NULL DEFAULT 0, object_bytes INTEGER NOT NULL DEFAULT 0, storage_status TEXT NOT NULL DEFAULT 'pending', storage_attempts INTEGER NOT NULL DEFAULT 0, schema_version INTEGER NOT NULL DEFAULT 1, extraction_version TEXT NOT NULL DEFAULT 'unknown', stored_at TEXT, last_attempt_at TEXT, last_error TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(article_id) REFERENCES articles(id))",
+      ).run();
+      await db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_article_corpus_objects_status ON article_corpus_objects(storage_status, storage_attempts, updated_at)",
       ).run();
       await db.prepare(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_research_jobs_running_slot ON research_jobs(research_slot) WHERE status = 'running' AND research_slot IS NOT NULL",
@@ -4797,14 +4842,22 @@ async function ingestFeeds(env: Env, scheduledAt?: number): Promise<{
   };
 }
 
-function normalizePlaintext(value: string): string {
+function normalizePlaintextWithLimit(value: string, maxChars: number): string {
   return value
     .replace(/\r\n?/g, "\n")
     .replace(/[\t\f\v ]+/g, " ")
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-    .slice(0, ARTICLE_CONTENT_MAX_CHARS);
+    .slice(0, maxChars);
+}
+
+function normalizePlaintext(value: string): string {
+  return normalizePlaintextWithLimit(value, ARTICLE_CONTENT_MAX_CHARS);
+}
+
+function normalizeCorpusPlaintext(value: string): string {
+  return normalizePlaintextWithLimit(value, ARTICLE_CORPUS_MAX_CHARS);
 }
 
 function stripHtmlToPlaintext(value: string): string {
@@ -4814,7 +4867,7 @@ function stripHtmlToPlaintext(value: string): string {
     .replace(/<\/(p|div|section|article|main|li|h[1-6]|tr)>/gi, "\n")
     .replace(/<li\b[^>]*>/gi, "- ")
     .replace(/<[^>]+>/g, " ");
-  return normalizePlaintext(decodeHtmlEntities(withoutNonContent));
+  return normalizeCorpusPlaintext(decodeHtmlEntities(withoutNonContent));
 }
 
 function articleBodyFromStructuredData(value: unknown): string | null {
@@ -4827,7 +4880,7 @@ function articleBodyFromStructuredData(value: unknown): string | null {
   }
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  if (typeof record.articleBody === "string" && record.articleBody.trim().length >= 120) return normalizePlaintext(record.articleBody);
+  if (typeof record.articleBody === "string" && record.articleBody.trim().length >= 120) return normalizeCorpusPlaintext(record.articleBody);
   for (const child of Object.values(record)) {
     const result = articleBodyFromStructuredData(child);
     if (result) return result;
@@ -4855,7 +4908,7 @@ function extractArticlePlaintext(htmlText: string): string | null {
   const paragraphs = [...cleaned.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
     .map((match) => stripHtmlToPlaintext(match[1]))
     .filter((text) => text.length >= 30);
-  const paragraphText = normalizePlaintext(paragraphs.join("\n\n"));
+  const paragraphText = normalizeCorpusPlaintext(paragraphs.join("\n\n"));
   return paragraphText.length >= 200 ? paragraphText : null;
 }
 
@@ -4872,11 +4925,12 @@ async function fetchArticlePlaintext(url: string): Promise<string> {
   const contentLength = Number(response.headers.get("content-length") || 0);
   if (contentLength > 3_000_000) throw new Error("Article response exceeded the 3 MB extraction limit");
   const body = await response.text();
+  if (body.length > 3_000_000) throw new Error("Article response exceeded the 3 MB extraction limit");
   if (/just a moment|verify you are human|enable javascript and cookies|access denied/i.test(body.slice(0, 8_000))) {
     throw new Error("Article page returned an access or browser-verification screen");
   }
   const contentType = response.headers.get("content-type") || "";
-  const plaintext = contentType.includes("text/plain") ? normalizePlaintext(body) : extractArticlePlaintext(body);
+  const plaintext = contentType.includes("text/plain") ? normalizeCorpusPlaintext(body) : extractArticlePlaintext(body);
   if (!plaintext || plaintext.length < 120) throw new Error("No article body could be extracted from the page");
   if (plaintext.length < 500 && /subscribe|sign in to continue|already a subscriber|register to continue/i.test(plaintext)) {
     throw new Error("Article page exposed only a subscription prompt");
@@ -4890,7 +4944,7 @@ async function captureArticleContent(env: Env, article: Article): Promise<Articl
     const fetchedText = await fetchArticlePlaintext(article.url);
     const existingText = normalizePlaintext(article.content_plaintext || article.summary || "");
     const useFetchedText = fetchedText.length >= existingText.length;
-    const content = useFetchedText ? fetchedText : existingText;
+    const content = normalizePlaintext(useFetchedText ? fetchedText : existingText);
     const contentSource = useFetchedText ? "webpage" : article.content_source || "feed";
     await env.NEWS_DB.prepare(
       "UPDATE articles SET content_plaintext = ?, content_source = ?, content_status = 'fetched', content_fetched_at = CURRENT_TIMESTAMP, content_fetch_attempts = content_fetch_attempts + 1, content_error = NULL WHERE id = ?",
@@ -4940,6 +4994,247 @@ async function backfillArticleContents(env: Env, limit = 20): Promise<{ attempte
     fetched: captured.filter((article) => article.content_status === "fetched").length,
     feedOnly: captured.filter((article) => article.content_status === "feed_only").length,
     failed: captured.filter((article) => article.content_status === "failed").length,
+  };
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function corpusDatePath(value: string | null | undefined): string {
+  const date = new Date(value || "");
+  if (!Number.isFinite(date.getTime())) return "undated";
+  return [date.getUTCFullYear(), String(date.getUTCMonth() + 1).padStart(2, "0"), String(date.getUTCDate()).padStart(2, "0")].join("/");
+}
+
+function corpusArticleId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "article";
+}
+
+async function markArticleCorpusPending(db: D1Database, articleId: string): Promise<void> {
+  await db.prepare(
+    `INSERT INTO article_corpus_objects (article_id, storage_status, schema_version, extraction_version)
+    VALUES (?, 'pending', ?, ?)
+    ON CONFLICT(article_id) DO UPDATE SET
+      storage_status = 'pending', schema_version = excluded.schema_version,
+      extraction_version = excluded.extraction_version, last_error = NULL, updated_at = CURRENT_TIMESTAMP`,
+  ).bind(articleId, ARTICLE_CORPUS_SCHEMA_VERSION, ARTICLE_EXTRACTION_VERSION).run();
+}
+
+async function corpusArticleRow(db: D1Database, articleId: string): Promise<ArticleCorpusRow | null> {
+  return db.prepare(
+    `SELECT articles.id, articles.source_id, articles.title, articles.url, articles.summary,
+      articles.published_at, articles.discovered_at, articles.content_plaintext, articles.content_source,
+      articles.content_status, articles.content_fetched_at, articles.content_fetch_attempts, articles.content_error,
+      sources.name AS source_name, sources.source_type, sources.category AS source_category,
+      sources.weight AS source_weight, research_jobs.id AS research_job_id,
+      research_jobs.finished_at AS research_job_finished_at, research_results.id AS research_result_id,
+      research_results.created_at AS research_result_created_at, research_results.event_type,
+      research_results.companies, research_results.industries, research_results.symbols,
+      research_results.sentiment_score, research_results.impact_horizon, research_results.confidence,
+      research_results.summary AS analysis_summary, research_results.memo
+    FROM articles
+    LEFT JOIN sources ON sources.id = articles.source_id
+    INNER JOIN research_jobs ON research_jobs.article_id = articles.id AND research_jobs.status = 'succeeded'
+    LEFT JOIN research_results ON research_results.job_id = research_jobs.id
+    WHERE articles.id = ?
+    ORDER BY datetime(research_results.created_at) DESC
+    LIMIT 1`,
+  ).bind(articleId).first<ArticleCorpusRow>();
+}
+
+async function recordArticleCorpusFailure(db: D1Database, articleId: string, error: unknown): Promise<void> {
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+  await db.prepare(
+    `INSERT INTO article_corpus_objects (article_id, storage_status, storage_attempts, schema_version, extraction_version, last_attempt_at, last_error)
+    VALUES (?, 'failed', 1, ?, ?, CURRENT_TIMESTAMP, ?)
+    ON CONFLICT(article_id) DO UPDATE SET storage_status = 'failed',
+      storage_attempts = article_corpus_objects.storage_attempts + 1,
+      schema_version = excluded.schema_version, extraction_version = excluded.extraction_version,
+      last_attempt_at = CURRENT_TIMESTAMP, last_error = excluded.last_error, updated_at = CURRENT_TIMESTAMP`,
+  ).bind(articleId, ARTICLE_CORPUS_SCHEMA_VERSION, ARTICLE_EXTRACTION_VERSION, message).run();
+}
+
+async function archiveArticleCorpus(env: Env, articleId: string): Promise<{ article_id: string; status: "stored" | "failed"; object_key?: string; error?: string }> {
+  try {
+    const article = await corpusArticleRow(env.NEWS_DB, articleId);
+    if (!article) throw new Error("Completed article or research result was not found");
+
+    let plaintext = normalizeCorpusPlaintext(article.content_plaintext || article.summary || "");
+    let corpusContentSource = article.content_source || (plaintext ? "feed" : "missing");
+    let corpusContentError = article.content_error;
+    let refetchedFullText = false;
+    if (plaintext.length >= ARTICLE_CONTENT_MAX_CHARS && article.content_source === "webpage") {
+      try {
+        const fetched = await fetchArticlePlaintext(article.url);
+        if (fetched.length >= plaintext.length) {
+          plaintext = fetched;
+          corpusContentSource = "webpage_refetch";
+          corpusContentError = null;
+          refetchedFullText = true;
+        }
+      } catch (error) {
+        corpusContentError = `Full-text corpus refetch failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1000);
+      }
+    }
+
+    const contentSha256 = await sha256Hex(plaintext);
+    const storedAt = new Date().toISOString();
+    const contentTruncated = plaintext.length >= ARTICLE_CORPUS_MAX_CHARS || (plaintext.length >= ARTICLE_CONTENT_MAX_CHARS && !refetchedFullText);
+    const document = {
+      schema_version: ARTICLE_CORPUS_SCHEMA_VERSION,
+      extraction_version: ARTICLE_EXTRACTION_VERSION,
+      stored_at: storedAt,
+      article: {
+        id: article.id,
+        title: article.title,
+        url: article.url,
+        summary: article.summary,
+        published_at: article.published_at,
+        discovered_at: article.discovered_at,
+      },
+      source: {
+        id: article.source_id,
+        name: article.source_name || article.source_id,
+        type: article.source_type || "editorial",
+        category: article.source_category,
+        weight: article.source_weight ?? null,
+      },
+      content: {
+        plaintext: plaintext || null,
+        sha256: contentSha256,
+        characters: plaintext.length,
+        source: corpusContentSource,
+        status: article.content_status,
+        fetched_at: article.content_fetched_at,
+        fetch_attempts: Number(article.content_fetch_attempts || 0),
+        error: corpusContentError,
+        truncated: contentTruncated,
+      },
+      analysis: article.research_result_id ? {
+        research_job_id: article.research_job_id,
+        research_result_id: article.research_result_id,
+        synthesized_at: article.research_result_created_at || article.research_job_finished_at,
+        event_type: article.event_type,
+        companies: parseJsonArray(article.companies),
+        industries: parseJsonArray(article.industries),
+        symbols: parseJsonArray(article.symbols),
+        sentiment_score: article.sentiment_score,
+        impact_horizon: article.impact_horizon,
+        confidence: article.confidence,
+        summary: article.analysis_summary,
+        memo: article.memo,
+      } : null,
+    };
+    const encoded = new TextEncoder().encode(JSON.stringify(document));
+    const objectKey = `articles/${corpusDatePath(article.published_at || article.discovered_at)}/${corpusArticleId(article.id)}/${contentSha256}.json`;
+    await env.ARTICLE_CORPUS.put(objectKey, encoded, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+      customMetadata: {
+        article_id: article.id,
+        source_id: article.source_id,
+        content_sha256: contentSha256,
+        schema_version: String(ARTICLE_CORPUS_SCHEMA_VERSION),
+        extraction_version: ARTICLE_EXTRACTION_VERSION,
+      },
+    });
+    await env.NEWS_DB.prepare(
+      `INSERT INTO article_corpus_objects (article_id, object_key, content_sha256, content_chars, object_bytes,
+        storage_status, storage_attempts, schema_version, extraction_version, stored_at, last_attempt_at, last_error, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'stored', 1, ?, ?, ?, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP)
+      ON CONFLICT(article_id) DO UPDATE SET object_key = excluded.object_key,
+        content_sha256 = excluded.content_sha256, content_chars = excluded.content_chars,
+        object_bytes = excluded.object_bytes, storage_status = 'stored',
+        storage_attempts = article_corpus_objects.storage_attempts + 1,
+        schema_version = excluded.schema_version, extraction_version = excluded.extraction_version,
+        stored_at = excluded.stored_at, last_attempt_at = CURRENT_TIMESTAMP,
+        last_error = NULL, updated_at = CURRENT_TIMESTAMP`,
+    ).bind(
+      article.id,
+      objectKey,
+      contentSha256,
+      plaintext.length,
+      encoded.byteLength,
+      ARTICLE_CORPUS_SCHEMA_VERSION,
+      ARTICLE_EXTRACTION_VERSION,
+      storedAt,
+    ).run();
+    return { article_id: article.id, status: "stored", object_key: objectKey };
+  } catch (error) {
+    await recordArticleCorpusFailure(env.NEWS_DB, articleId, error).catch(() => undefined);
+    return { article_id: articleId, status: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function archiveArticleCorpusBatch(env: Env, limit = ARTICLE_CORPUS_BACKFILL_BATCH): Promise<{
+  attempted: number;
+  stored: number;
+  failed: number;
+  remaining: number;
+  exhausted: number;
+}> {
+  const clamped = Math.min(Math.max(limit, 1), 100);
+  const rows = await env.NEWS_DB.prepare(
+    `SELECT articles.id
+    FROM articles
+    LEFT JOIN article_corpus_objects ON article_corpus_objects.article_id = articles.id
+    WHERE EXISTS (SELECT 1 FROM research_jobs WHERE research_jobs.article_id = articles.id AND research_jobs.status = 'succeeded')
+      AND (article_corpus_objects.article_id IS NULL
+        OR article_corpus_objects.storage_status = 'pending'
+        OR (article_corpus_objects.storage_status = 'failed' AND article_corpus_objects.storage_attempts < ?)
+        OR (article_corpus_objects.storage_status = 'stored' AND (
+          article_corpus_objects.schema_version < ? OR article_corpus_objects.extraction_version != ?
+        )))
+    ORDER BY CASE WHEN article_corpus_objects.storage_status = 'pending' THEN 0
+      WHEN article_corpus_objects.article_id IS NULL THEN 1 ELSE 2 END,
+      datetime((SELECT MAX(research_jobs.finished_at) FROM research_jobs WHERE research_jobs.article_id = articles.id AND research_jobs.status = 'succeeded')) DESC
+    LIMIT ?`,
+  ).bind(ARTICLE_CORPUS_MAX_ATTEMPTS, ARTICLE_CORPUS_SCHEMA_VERSION, ARTICLE_EXTRACTION_VERSION, clamped).all<{ id: string }>();
+  const archived = await mapWithConcurrency(rows.results || [], 6, (row) => archiveArticleCorpus(env, row.id));
+  const [remaining, exhausted] = await Promise.all([
+    env.NEWS_DB.prepare(
+      `SELECT COUNT(*) AS count
+      FROM articles
+      LEFT JOIN article_corpus_objects ON article_corpus_objects.article_id = articles.id
+      WHERE EXISTS (SELECT 1 FROM research_jobs WHERE research_jobs.article_id = articles.id AND research_jobs.status = 'succeeded')
+        AND (article_corpus_objects.article_id IS NULL
+          OR article_corpus_objects.storage_status != 'stored'
+          OR article_corpus_objects.schema_version < ?
+          OR article_corpus_objects.extraction_version != ?)`,
+    ).bind(ARTICLE_CORPUS_SCHEMA_VERSION, ARTICLE_EXTRACTION_VERSION).first<{ count: number }>(),
+    env.NEWS_DB.prepare(
+      `SELECT COUNT(*) AS count
+    FROM articles
+      INNER JOIN article_corpus_objects ON article_corpus_objects.article_id = articles.id
+      WHERE EXISTS (SELECT 1 FROM research_jobs WHERE research_jobs.article_id = articles.id AND research_jobs.status = 'succeeded')
+        AND article_corpus_objects.storage_status = 'failed'
+        AND article_corpus_objects.storage_attempts >= ?`,
+    ).bind(ARTICLE_CORPUS_MAX_ATTEMPTS).first<{ count: number }>(),
+  ]);
+  return {
+    attempted: archived.length,
+    stored: archived.filter((item) => item.status === "stored").length,
+    failed: archived.filter((item) => item.status === "failed").length,
+    remaining: Number(remaining?.count || 0),
+    exhausted: Number(exhausted?.count || 0),
+  };
+}
+
+async function articleCorpusStatus(db: D1Database): Promise<Record<string, unknown>> {
+  const [processed, statuses, totals, latest] = await Promise.all([
+    db.prepare("SELECT COUNT(DISTINCT article_id) AS count FROM research_jobs WHERE status = 'succeeded'").first<{ count: number }>(),
+    db.prepare("SELECT storage_status AS status, COUNT(*) AS count FROM article_corpus_objects GROUP BY storage_status").all(),
+    db.prepare("SELECT COUNT(*) AS objects, COALESCE(SUM(content_chars), 0) AS content_chars, COALESCE(SUM(object_bytes), 0) AS object_bytes FROM article_corpus_objects WHERE storage_status = 'stored'").first(),
+    db.prepare("SELECT article_corpus_objects.*, articles.title, articles.url FROM article_corpus_objects INNER JOIN articles ON articles.id = article_corpus_objects.article_id WHERE article_corpus_objects.storage_status = 'stored' ORDER BY datetime(article_corpus_objects.stored_at) DESC LIMIT 1").first(),
+  ]);
+  return {
+    processed_articles: Number(processed?.count || 0),
+    statuses: statuses.results || [],
+    totals: totals || { objects: 0, content_chars: 0, object_bytes: 0 },
+    latest: latest || null,
+    schema_version: ARTICLE_CORPUS_SCHEMA_VERSION,
+    extraction_version: ARTICLE_EXTRACTION_VERSION,
   };
 }
 
@@ -5188,6 +5483,9 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
       ).bind(existing.prediction_delay_eligible === 1 ? 1 : 0, jobId),
       env.NEWS_DB.prepare("UPDATE articles SET status = ? WHERE id = ?").bind(symbols.length ? "analyzed" : "archived", article.id),
     ]);
+    await markArticleCorpusPending(env.NEWS_DB, article.id).catch((error) =>
+      console.error("Failed to mark completed article for corpus storage", error),
+    );
     await ensurePredictionOutcomeTables(env);
     await env.NEWS_DB.batch([
       env.NEWS_DB.prepare("DELETE FROM prediction_outcome_scans WHERE result_id = (SELECT id FROM research_results WHERE job_id = ?)").bind(jobId),
@@ -7607,6 +7905,54 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return article ? json({ ok: true, article }) : json({ error: "Article not found" }, { status: 404 });
   }
 
+  if (url.pathname === "/api/corpus/status") {
+    return json({ ok: true, ...(await articleCorpusStatus(env.NEWS_DB)) });
+  }
+
+  if (url.pathname === "/api/corpus/objects") {
+    const status = url.searchParams.get("status");
+    const statusFilter = status ? " AND article_corpus_objects.storage_status = ?" : "";
+    const query = `SELECT article_corpus_objects.*, articles.title, articles.url, articles.published_at,
+      articles.source_id, sources.name AS source_name
+      FROM article_corpus_objects
+      INNER JOIN articles ON articles.id = article_corpus_objects.article_id
+      LEFT JOIN sources ON sources.id = articles.source_id
+      WHERE 1 = 1${statusFilter}
+      ORDER BY datetime(article_corpus_objects.updated_at) DESC LIMIT ?`;
+    const statement = status
+      ? env.NEWS_DB.prepare(query).bind(status, Math.min(Math.max(limit, 1), 500))
+      : env.NEWS_DB.prepare(query).bind(Math.min(Math.max(limit, 1), 500));
+    const objects = await statement.all<ArticleCorpusIndexRow & { title: string; url: string; published_at: string | null; source_id: string; source_name: string | null }>();
+    return json({ ok: true, objects: objects.results || [] });
+  }
+
+  if (url.pathname === "/api/corpus/article") {
+    const articleId = url.searchParams.get("id");
+    if (!articleId) return json({ error: "Missing article id" }, { status: 400 });
+    const corpus = await env.NEWS_DB.prepare(
+      "SELECT * FROM article_corpus_objects WHERE article_id = ?",
+    ).bind(articleId).first<ArticleCorpusIndexRow>();
+    if (!corpus || corpus.storage_status !== "stored" || !corpus.object_key) {
+      return json({ error: "Article corpus object is not available", corpus: corpus || null }, { status: 404 });
+    }
+    const object = await env.ARTICLE_CORPUS.get(corpus.object_key);
+    if (!object) return json({ error: "Article corpus object is missing from R2", corpus }, { status: 404 });
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set("etag", object.httpEtag);
+    headers.set("cache-control", "private, no-store");
+    return new Response(object.body, { headers });
+  }
+
+  if (url.pathname === "/api/corpus/backfill" && request.method === "POST") {
+    if (url.searchParams.get("retry_failed") === "1") {
+      await env.NEWS_DB.prepare(
+        "UPDATE article_corpus_objects SET storage_status = 'pending', storage_attempts = 0, last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE storage_status = 'failed'",
+      ).run();
+    }
+    return json({ ok: true, ...(await archiveArticleCorpusBatch(env, limit)) });
+  }
+
   if (url.pathname === "/api/articles/backfill" && request.method === "POST") {
     return json({ ok: true, ...(await backfillArticleContents(env, limit)) });
   }
@@ -7891,6 +8237,10 @@ export default {
           "/api/articles",
           "/api/articles/content?id=ARTICLE_ID",
           "/api/articles/backfill",
+          "/api/corpus/status",
+          "/api/corpus/objects?status=stored&limit=100",
+          "/api/corpus/article?id=ARTICLE_ID",
+          "/api/corpus/backfill?limit=50",
           "/api/articles/purge-stale-backfill",
           "/api/articles/archive",
           "/api/jobs",
@@ -7943,6 +8293,7 @@ export default {
         await Promise.all([
           drainResearchBacklogConcurrently(env).catch((error) => console.error("Scheduled research backlog drain failed", error)),
           backfillArticleContents(env, 20).catch((error) => console.error("Scheduled article content backfill failed", error)),
+          archiveArticleCorpusBatch(env, ARTICLE_CORPUS_BACKFILL_BATCH).catch((error) => console.error("Scheduled article corpus backfill failed", error)),
           processPredictionOutcomes(env, 100).catch((error) => console.error("Scheduled prediction outcome processing failed", error)),
         ]);
       }),
