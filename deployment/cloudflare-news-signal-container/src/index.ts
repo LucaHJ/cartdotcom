@@ -1041,10 +1041,14 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .metric .value sup {
       margin-left: 5px;
-      color: var(--red);
+      color: var(--text);
       font-size: 12px;
       font-weight: 750;
       vertical-align: super;
+    }
+
+    .metric .value sup.active {
+      color: var(--green);
     }
 
     #simulation-panel > .panel {
@@ -2935,6 +2939,8 @@ const DASHBOARD_HTML = `<!doctype html>
       const running = count(status.jobs, "running");
       const succeeded = count(status.jobs, "succeeded");
       const results = Number((status.results && status.results.count) || 0);
+      const predictions = Number((status.predictions && status.predictions.count) || 0);
+      const activePredictions = Number((status.predictions && status.predictions.active_count) || 0);
       const timing = status.timing || {};
       const capacity = Number(timing.parallel_capacity || 8);
       const synthesisSamples = Number(timing.synthesis_samples || 0);
@@ -2949,7 +2955,10 @@ const DASHBOARD_HTML = `<!doctype html>
       const failedSources = Number((sourceCheck && sourceCheck.failed_source_count) || 0);
       metricsEl.innerHTML = [
         metric("Articles", analyzed + queued, analyzed + " actionable analyzed, " + queued + " queued"),
-        metric("Results", results, succeeded + " succeeded"),
+        metric("Results", results, succeeded + " succeeded", [
+          { text: predictions.toLocaleString() + " predictions" },
+          { text: activePredictions.toLocaleString() + " active", active: true },
+        ]),
         metric("Running", running, running + " of " + capacity + " parallel Codex workers active"),
         metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers"),
         metric("Avg synthesis", formatDuration(timing.average_synthesis_seconds), synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s")),
@@ -2980,7 +2989,9 @@ const DASHBOARD_HTML = `<!doctype html>
     function metric(label, value, note, supertext = "", openTab = "") {
       const tag = openTab ? "button" : "div";
       const attributes = openTab ? ' type="button" data-open-tab="' + escapeAttr(openTab) + '"' : "";
-      return '<' + tag + ' class="metric' + (openTab ? ' metric-button' : '') + '"' + attributes + '><div class="label">' + escapeHtml(label) + '</div><div class="value">' + escapeHtml(String(value)) + (supertext ? '<sup>' + escapeHtml(supertext) + '</sup>' : '') + '</div><div class="note">' + escapeHtml(note) + '</div></' + tag + '>';
+      const supertexts = Array.isArray(supertext) ? supertext : (supertext ? [{ text: supertext }] : []);
+      const supertextHtml = supertexts.map((item) => '<sup' + (item && item.active ? ' class="active"' : '') + '>' + escapeHtml(item && item.text !== undefined ? item.text : item) + '</sup>').join("");
+      return '<' + tag + ' class="metric' + (openTab ? ' metric-button' : '') + '"' + attributes + '><div class="label">' + escapeHtml(label) + '</div><div class="value">' + escapeHtml(String(value)) + supertextHtml + '</div><div class="note">' + escapeHtml(note) + '</div></' + tag + '>';
     }
 
     function renderSourceStats(sources) {
@@ -6660,6 +6671,19 @@ async function buildPredictionCoverage(env: Env): Promise<Record<string, number>
   };
 }
 
+async function buildPredictionStatusCounts(db: D1Database): Promise<{ count: number; active_count: number }> {
+  const row = await db.prepare(
+    `WITH ${PREDICTION_ACCURACY_CTE_SQL}
+    SELECT COUNT(*) AS count,
+      SUM(CASE WHEN accuracy_cutoff_epoch IS NULL THEN 1 ELSE 0 END) AS active_count
+    FROM accuracy_predictions`,
+  ).first<{ count: number; active_count: number }>();
+  return {
+    count: Number(row?.count || 0),
+    active_count: Number(row?.active_count || 0),
+  };
+}
+
 async function buildPredictionOutcomes(
   env: Env,
   limit: number,
@@ -7507,15 +7531,16 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 
   if (url.pathname === "/api/status") {
     await archiveTickerlessArticles(env);
-    const [articles, jobs, results, content, operations, latestSourceCheck] = await Promise.all([
+    const [articles, jobs, results, predictions, content, operations, latestSourceCheck] = await Promise.all([
       env.NEWS_DB.prepare("SELECT status, COUNT(*) AS count FROM articles WHERE status != 'archived' GROUP BY status").all(),
       env.NEWS_DB.prepare("SELECT research_jobs.status, COUNT(*) AS count FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE articles.status != 'archived' AND (research_jobs.status != 'succeeded' OR EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]'))) GROUP BY research_jobs.status").all(),
       env.NEWS_DB.prepare("SELECT COUNT(*) AS count FROM research_results INNER JOIN articles ON articles.id = research_results.article_id WHERE articles.status != 'archived' AND research_results.symbols IS NOT NULL AND trim(research_results.symbols) NOT IN ('', '[]')").first(),
+      buildPredictionStatusCounts(env.NEWS_DB),
       env.NEWS_DB.prepare("SELECT content_status AS status, COUNT(*) AS count FROM articles GROUP BY content_status").all(),
       researchOperationsTelemetry(env.NEWS_DB),
       env.NEWS_DB.prepare("SELECT * FROM source_checks ORDER BY datetime(checked_at) DESC LIMIT 1").first<SourceCheckRow>(),
     ]);
-    return json({ ok: true, articles: articles.results, jobs: jobs.results, results, content: content.results, timing: operations.timing, latest_source_check: latestSourceCheck, configured_source_count: SOURCES.length });
+    return json({ ok: true, articles: articles.results, jobs: jobs.results, results, predictions, content: content.results, timing: operations.timing, latest_source_check: latestSourceCheck, configured_source_count: SOURCES.length });
   }
 
   if (url.pathname === "/api/status/live") {
