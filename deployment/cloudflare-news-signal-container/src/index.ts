@@ -6044,17 +6044,29 @@ const PREDICTION_CONFIDENCE_PCT_SQL =
 const PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL =
   "(SELECT MIN(unixepoch(opposite_outcomes.prediction_at)) FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))";
 const PREDICTION_ACCURACY_CTE_SQL =
-  `accuracy_predictions AS MATERIALIZED (
+  `valid_accuracy_predictions AS MATERIALIZED (
     SELECT prediction_outcomes.id, prediction_outcomes.symbol, prediction_outcomes.direction,
       prediction_outcomes.prediction_at, prediction_outcomes.intervals_json,
-      ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct,
-      ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch
+      unixepoch(prediction_outcomes.prediction_at) AS prediction_epoch,
+      ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct
     FROM prediction_outcomes
     INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id
     LEFT JOIN articles ON articles.id = research_results.article_id
     WHERE prediction_outcomes.direction IN ('bullish', 'bearish')
       AND prediction_outcomes.confidence IS NOT NULL
       AND ${PREDICTION_DATE_MATCH_SQL}
+  ),
+  accuracy_predictions AS MATERIALIZED (
+    SELECT id, symbol, direction, prediction_at, intervals_json, confidence_pct,
+      CASE direction
+        WHEN 'bullish' THEN MIN(CASE WHEN direction = 'bearish' THEN prediction_epoch END) OVER (
+          PARTITION BY symbol ORDER BY prediction_epoch RANGE BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
+        )
+        WHEN 'bearish' THEN MIN(CASE WHEN direction = 'bullish' THEN prediction_epoch END) OVER (
+          PARTITION BY symbol ORDER BY prediction_epoch RANGE BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
+        )
+      END AS accuracy_cutoff_epoch
+    FROM valid_accuracy_predictions
   )`;
 const PREDICTION_HAS_COUNTED_INTERVAL_SQL =
   "EXISTS (SELECT 1 FROM json_each(prediction_outcomes.intervals_json) AS accuracy_interval WHERE json_type(accuracy_interval.value, '$.change_pct') IN ('integer', 'real') AND NOT EXISTS (SELECT 1 FROM prediction_outcomes AS interval_opposite_outcomes INNER JOIN research_results AS interval_opposite_results ON interval_opposite_results.id = interval_opposite_outcomes.result_id LEFT JOIN articles AS interval_opposite_articles ON interval_opposite_articles.id = interval_opposite_results.article_id WHERE interval_opposite_outcomes.symbol = prediction_outcomes.symbol AND interval_opposite_outcomes.direction IN ('bullish', 'bearish') AND interval_opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(interval_opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND unixepoch(interval_opposite_outcomes.prediction_at) <= unixepoch(json_extract(accuracy_interval.value, '$.at')) AND datetime(interval_opposite_outcomes.prediction_at) = datetime(COALESCE(interval_opposite_articles.published_at, interval_opposite_results.created_at))))";
@@ -6076,14 +6088,25 @@ async function buildSourceStats(env: Env): Promise<SourceStatsRow[]> {
       SELECT source_id, COUNT(*) AS acquired_article_count
       FROM articles
       GROUP BY source_id
-    ), eligible_outcomes AS MATERIALIZED (
-      SELECT articles.source_id, prediction_outcomes.direction, prediction_outcomes.intervals_json,
-        ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch
+    ), valid_source_outcomes AS MATERIALIZED (
+      SELECT articles.source_id, prediction_outcomes.symbol, prediction_outcomes.direction,
+        prediction_outcomes.intervals_json, unixepoch(prediction_outcomes.prediction_at) AS prediction_epoch
       FROM prediction_outcomes
       INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id
       INNER JOIN articles ON articles.id = research_results.article_id
       WHERE prediction_outcomes.direction IN ('bullish', 'bearish')
         AND ${PREDICTION_DATE_MATCH_SQL}
+    ), eligible_outcomes AS MATERIALIZED (
+      SELECT source_id, direction, intervals_json,
+        CASE direction
+          WHEN 'bullish' THEN MIN(CASE WHEN direction = 'bearish' THEN prediction_epoch END) OVER (
+            PARTITION BY symbol ORDER BY prediction_epoch RANGE BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
+          )
+          WHEN 'bearish' THEN MIN(CASE WHEN direction = 'bullish' THEN prediction_epoch END) OVER (
+            PARTITION BY symbol ORDER BY prediction_epoch RANGE BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
+          )
+        END AS accuracy_cutoff_epoch
+      FROM valid_source_outcomes
     ), eligible_movements AS (
       SELECT eligible_outcomes.source_id, eligible_outcomes.direction,
         CAST(json_extract(interval.value, '$.change_pct') AS REAL) AS movement_pct
