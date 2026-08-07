@@ -26,6 +26,7 @@ Routes:
 - `POST /api/model-experiments/start` - Freeze 1,000 matured articles and start the sequential Luna-medium then Terra-low comparison.
 - `POST /api/model-experiments/dispatch` - Resume or nudge an interrupted experiment.
 - `POST /api/model-experiments/email` - Set the report recipient and retry delivery after completion.
+- `POST /api/model-experiments/email/test` - Save the recipient and send an immediate delivery test.
 - `GET /api/simulation` - Paper portfolio built from stored article sentiment and confidence.
 - `POST /api/ingest` - Fetch RSS feeds, dedupe articles, and enqueue research jobs.
 - `POST /api/process-next` - Manually process one pending job.
@@ -103,7 +104,7 @@ For Resend, also configure:
 npx wrangler secret put RESEND_API_KEY
 ```
 
-For Cloudflare Email Service, onboard the sender domain and add a `send_email` binding named `EXPERIMENT_EMAIL` to `wrangler.jsonc`. A recipient entered in the dashboard overrides the default recipient. Failure to configure email does not block the experiment or its stored report.
+The production configuration uses a Cloudflare Email Service binding named `EXPERIMENT_EMAIL` and the isolated sender domain `alerts.cartdotcom.com`. A recipient entered in the dashboard overrides the default recipient. Failure to configure email does not block the experiment or its stored report.
 
 ## Local Checks
 

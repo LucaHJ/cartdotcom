@@ -2155,6 +2155,7 @@ const DASHBOARD_HTML = `<!doctype html>
           <input id="model-experiment-email" type="email" autocomplete="email" placeholder="Report email address" aria-label="Experiment report email address">
           <button class="btn primary" id="start-model-experiment-btn" type="button">Start Experiment</button>
           <button class="btn" id="save-model-experiment-email-btn" type="button">Save Email</button>
+          <button class="btn" id="test-model-experiment-email-btn" type="button">Send Test</button>
           <button class="btn" id="dispatch-model-experiment-btn" type="button">Resume</button>
           <div class="auth-repair-status" id="model-experiment-status">No experiment has been created.</div>
         </div>
@@ -2287,6 +2288,7 @@ const DASHBOARD_HTML = `<!doctype html>
     const modelExperimentEmailEl = document.getElementById("model-experiment-email");
     const startModelExperimentBtn = document.getElementById("start-model-experiment-btn");
     const saveModelExperimentEmailBtn = document.getElementById("save-model-experiment-email-btn");
+    const testModelExperimentEmailBtn = document.getElementById("test-model-experiment-email-btn");
     const dispatchModelExperimentBtn = document.getElementById("dispatch-model-experiment-btn");
     const sourceStatsEl = document.getElementById("source-stats");
     const sourceActivityChartEl = document.getElementById("source-activity-chart");
@@ -2431,6 +2433,7 @@ const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("requeue-btn").addEventListener("click", () => runAction("/api/requeue-pending?limit=10"));
     startModelExperimentBtn.addEventListener("click", startModelExperiment);
     saveModelExperimentEmailBtn.addEventListener("click", saveModelExperimentEmail);
+    testModelExperimentEmailBtn.addEventListener("click", testModelExperimentEmail);
     dispatchModelExperimentBtn.addEventListener("click", () => runAction("/api/model-experiments/dispatch"));
     rotateCodexAuthBtn.addEventListener("click", rotateCodexAuth);
     overviewTab.addEventListener("click", () => setTab("overview"));
@@ -3387,6 +3390,27 @@ const DASHBOARD_HTML = `<!doctype html>
           body: JSON.stringify({ experiment_id: modelExperimentId, email_to: modelExperimentEmailEl.value.trim() }),
         });
         renderModelExperiment(payload);
+      } catch (error) {
+        modelExperimentStatusEl.textContent = error.message || String(error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function testModelExperimentEmail() {
+      if (!modelExperimentId) {
+        modelExperimentStatusEl.textContent = "Start an experiment before testing report delivery.";
+        return;
+      }
+      setBusy(true);
+      modelExperimentStatusEl.textContent = "Sending a test email...";
+      try {
+        const payload = await api("/api/model-experiments/email/test", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ experiment_id: modelExperimentId, email_to: modelExperimentEmailEl.value.trim() }),
+        });
+        modelExperimentStatusEl.textContent = "Test email accepted by " + payload.provider + (payload.message_id ? " (" + payload.message_id + ")" : "") + ".";
       } catch (error) {
         modelExperimentStatusEl.textContent = error.message || String(error);
       } finally {
@@ -6232,40 +6256,42 @@ async function buildModelExperimentReport(env: Env, experimentId: string): Promi
   return { json: reportJson, text: lines.join("\n") };
 }
 
+async function sendExperimentEmail(
+  env: Env,
+  recipient: string,
+  subject: string,
+  text: string,
+): Promise<{ provider: "cloudflare" | "resend"; messageId: string | null }> {
+  const sender = env.EXPERIMENT_REPORT_EMAIL_FROM;
+  if (!sender) throw new Error("The experiment report sender is not configured");
+  if (!env.EXPERIMENT_EMAIL && !env.RESEND_API_KEY) throw new Error("No Cloudflare Email binding or Resend API key is configured");
+  if (env.EXPERIMENT_EMAIL) {
+    const sent = await env.EXPERIMENT_EMAIL.send({ to: recipient, from: sender, subject, text });
+    return { provider: "cloudflare", messageId: sent.messageId };
+  }
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({ from: sender, to: [recipient], subject, text }),
+  });
+  const payload = await response.json() as { id?: string; message?: string };
+  if (!response.ok) throw new Error(payload.message || `Email provider returned HTTP ${response.status}`);
+  return { provider: "resend", messageId: payload.id || null };
+}
+
 async function sendModelExperimentReport(env: Env, experiment: ModelExperimentRow): Promise<void> {
   const recipient = experiment.email_to || env.EXPERIMENT_REPORT_EMAIL_TO;
-  const sender = env.EXPERIMENT_REPORT_EMAIL_FROM;
-  if (!recipient || !sender || !experiment.report_text) {
+  if (!recipient || !experiment.report_text) {
     await env.NEWS_DB.prepare(
-      "UPDATE model_experiments SET email_status = 'not_configured', email_error = 'Recipient, sender, or email provider is not configured', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      "UPDATE model_experiments SET email_status = 'not_configured', email_error = 'Recipient or completed report is not configured', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
     ).bind(experiment.id).run();
     return;
   }
   try {
-    let messageId: string | null = null;
-    if (env.EXPERIMENT_EMAIL) {
-      const sent = await env.EXPERIMENT_EMAIL.send({
-        to: recipient,
-        from: sender,
-        subject: "Cartdotcom Luna vs Terra experiment results",
-        text: experiment.report_text,
-      });
-      messageId = sent.messageId;
-    } else if (env.RESEND_API_KEY) {
-      const response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({ from: sender, to: [recipient], subject: "Cartdotcom Luna vs Terra experiment results", text: experiment.report_text }),
-      });
-      const payload = await response.json() as { id?: string; message?: string };
-      if (!response.ok) throw new Error(payload.message || `Email provider returned HTTP ${response.status}`);
-      messageId = payload.id || null;
-    } else {
-      throw new Error("No Cloudflare Email binding or Resend API key is configured");
-    }
+    const sent = await sendExperimentEmail(env, recipient, "Cartdotcom Luna vs Terra experiment results", experiment.report_text);
     await env.NEWS_DB.prepare(
       "UPDATE model_experiments SET email_status = 'sent', email_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    ).bind(messageId, experiment.id).run();
+    ).bind(sent.messageId, experiment.id).run();
   } catch (error) {
     await env.NEWS_DB.prepare(
       "UPDATE model_experiments SET email_status = 'failed', email_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -8905,6 +8931,31 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...(await modelExperimentStatus(env, experimentId)) });
   }
 
+  if (url.pathname === "/api/model-experiments/email/test" && request.method === "POST") {
+    const body = await request.json().catch(() => ({})) as { experiment_id?: unknown; email_to?: unknown };
+    const experimentId = typeof body.experiment_id === "string" ? body.experiment_id.trim() : "";
+    const emailTo = typeof body.email_to === "string" ? body.email_to.trim() : "";
+    if (!experimentId || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTo)) {
+      return json({ error: "A valid experiment_id and email_to are required" }, { status: 400 });
+    }
+    await ensureModelExperimentSchema(env.NEWS_DB);
+    const updated = await env.NEWS_DB.prepare(
+      "UPDATE model_experiments SET email_to = ?, email_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind(emailTo, experimentId).run();
+    if (!updated.meta?.changes) return json({ error: "Experiment not found" }, { status: 404 });
+    try {
+      const sent = await sendExperimentEmail(
+        env,
+        emailTo,
+        "Cartdotcom email delivery test",
+        "This is a test from the Cartdotcom news-signal model experiment. Email delivery is configured correctly.",
+      );
+      return json({ ok: true, provider: sent.provider, message_id: sent.messageId });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, { status: 502 });
+    }
+  }
+
   if (url.pathname.startsWith("/api/simulation")) {
     return json({ error: "Paper trading simulation has been decommissioned. Use /api/predictions for prediction outcome measurement." }, { status: 410 });
   }
@@ -9116,6 +9167,7 @@ export default {
           "/api/model-experiments/start",
           "/api/model-experiments/dispatch",
           "/api/model-experiments/email",
+          "/api/model-experiments/email/test",
           "/api/process-batch",
           "/api/research/recover",
           "/api/research/auth/rotate",

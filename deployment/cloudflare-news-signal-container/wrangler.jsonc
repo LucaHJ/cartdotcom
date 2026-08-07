@@ -11,8 +11,14 @@
     "crons": ["*/5 * * * *"]
   },
   "vars": {
-    "CODEX_RESEARCH_MODEL": "gpt-5.6-sol"
+    "CODEX_RESEARCH_MODEL": "gpt-5.6-sol",
+    "EXPERIMENT_REPORT_EMAIL_FROM": "news@alerts.cartdotcom.com"
   },
+  "send_email": [
+    {
+      "name": "EXPERIMENT_EMAIL"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "NEWS_DB",
