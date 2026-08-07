@@ -2578,6 +2578,7 @@ const DASHBOARD_HTML = `<!doctype html>
     async function api(path, options = {}) {
       const response = await fetch(path, {
         ...options,
+        signal: options.signal || AbortSignal.timeout(20000),
         headers: { ...(options.headers || {}), ...headers() },
       });
       const contentType = response.headers.get("content-type") || "";
