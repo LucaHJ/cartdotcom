@@ -88,8 +88,47 @@ type ArticleCorpusIndexRow = {
   updated_at: string;
 };
 
-type ResearchJobMessage = {
-  jobId: string;
+type ResearchJobMessage =
+  | { kind?: "production"; jobId: string }
+  | { kind: "model_experiment"; jobId: string };
+
+type ModelExperimentCall = {
+  symbol: string;
+  direction: "bullish" | "bearish";
+  confidence: number | null;
+  reason: string | null;
+};
+
+type ModelExperimentRow = {
+  id: string;
+  status: string;
+  sample_size: number;
+  phase: number;
+  phase_1_model: string;
+  phase_1_effort: string;
+  phase_2_model: string;
+  phase_2_effort: string;
+  email_to: string | null;
+  report_json: string | null;
+  report_text: string | null;
+  email_status: string | null;
+  email_error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+};
+
+type ModelExperimentJobRow = {
+  id: string;
+  experiment_id: string;
+  article_id: string;
+  sample_ordinal: number;
+  phase: number;
+  model: string;
+  reasoning_effort: string;
+  status: string;
+  attempts: number;
+  research_slot: number | null;
 };
 
 type DashboardEvent = {
@@ -326,6 +365,10 @@ export interface Env {
   CODEX_AUTH_JSON?: string;
   CODEX_AUTH_STATE_KEY?: string;
   CODEX_RESEARCH_MODEL?: string;
+  EXPERIMENT_EMAIL?: SendEmail;
+  EXPERIMENT_REPORT_EMAIL_FROM?: string;
+  EXPERIMENT_REPORT_EMAIL_TO?: string;
+  RESEND_API_KEY?: string;
 }
 
 function source(
@@ -444,7 +487,16 @@ const HOUR_MS = 60 * 60 * 1000;
 const RESEARCH_CONTAINER_COUNT = 8;
 const QUEUE_DRAIN_MAX_JOBS = 8;
 const QUEUE_DRAIN_MAX_MS = 4 * 60 * 1000;
+const MODEL_EXPERIMENT_SAMPLE_SIZE = 1000;
+const MODEL_EXPERIMENT_MAX_ATTEMPTS = 3;
+const MODEL_EXPERIMENT_MAX_CONCURRENCY = 4;
+const MODEL_EXPERIMENT_INTERVALS = ["12h", "24h", "48h", "1w"] as const;
+const MODEL_EXPERIMENT_PHASES = [
+  { phase: 1, model: "gpt-5.6-luna", reasoningEffort: "medium" },
+  { phase: 2, model: "gpt-5.6-terra", reasoningEffort: "low" },
+] as const;
 let articleStorageSchemaReady: Promise<void> | null = null;
+let modelExperimentSchemaReady: Promise<void> | null = null;
 
 async function addColumnIfMissing(db: D1Database, table: string, column: string, definition: string): Promise<void> {
   const info = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
@@ -713,6 +765,38 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
     });
   }
   await articleStorageSchemaReady;
+}
+
+async function ensureModelExperimentSchema(db: D1Database): Promise<void> {
+  if (!modelExperimentSchemaReady) {
+    modelExperimentSchemaReady = db.batch([
+      db.prepare(
+        "CREATE TABLE IF NOT EXISTS model_experiments (id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'preparing', sample_size INTEGER NOT NULL, phase INTEGER NOT NULL DEFAULT 1, phase_1_model TEXT NOT NULL, phase_1_effort TEXT NOT NULL, phase_2_model TEXT NOT NULL, phase_2_effort TEXT NOT NULL, email_to TEXT, report_json TEXT, report_text TEXT, email_status TEXT, email_error TEXT, started_at TEXT, completed_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+      ),
+      db.prepare(
+        "CREATE TABLE IF NOT EXISTS model_experiment_samples (experiment_id TEXT NOT NULL, article_id TEXT NOT NULL, sample_ordinal INTEGER NOT NULL, input_hash TEXT NOT NULL, reference_result_id TEXT, reference_calls_json TEXT NOT NULL DEFAULT '[]', PRIMARY KEY (experiment_id, article_id), UNIQUE (experiment_id, sample_ordinal))",
+      ),
+      db.prepare(
+        "CREATE TABLE IF NOT EXISTS model_experiment_jobs (id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, article_id TEXT NOT NULL, sample_ordinal INTEGER NOT NULL, phase INTEGER NOT NULL, model TEXT NOT NULL, reasoning_effort TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, research_slot INTEGER, queued_at TEXT, started_at TEXT, finished_at TEXT, duration_seconds INTEGER, last_error TEXT, memo TEXT, fields_json TEXT, calls_json TEXT NOT NULL DEFAULT '[]', input_hash TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE (experiment_id, article_id, phase))",
+      ),
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_model_experiment_jobs_dispatch ON model_experiment_jobs(experiment_id, phase, status, sample_ordinal)",
+      ),
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_model_experiment_jobs_slot ON model_experiment_jobs(research_slot, status)",
+      ),
+      db.prepare(
+        "CREATE TABLE IF NOT EXISTS model_experiment_prices (experiment_id TEXT NOT NULL, article_id TEXT NOT NULL, symbol TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', baseline_price REAL, baseline_at TEXT, intervals_json TEXT NOT NULL DEFAULT '{}', last_error TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (experiment_id, article_id, symbol))",
+      ),
+      db.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_model_experiment_prices_status ON model_experiment_prices(experiment_id, status)",
+      ),
+    ]).then(() => undefined).catch((error) => {
+      modelExperimentSchemaReady = null;
+      throw error;
+    });
+  }
+  await modelExperimentSchemaReady;
 }
 
 function floorUtcHourIso(value: number | string | Date): string {
@@ -2063,6 +2147,23 @@ const DASHBOARD_HTML = `<!doctype html>
     <section id="settings-panel" class="hidden">
       <section class="panel" style="margin-top:14px">
         <div class="panel-header">
+          <div class="panel-title">Luna vs Terra Model Experiment</div>
+          <div class="panel-meta" id="model-experiment-meta">Not started</div>
+        </div>
+        <div class="model-blurb">Runs the same frozen cohort of 1,000 matured articles through Luna medium first and Terra low second. Experiment results are isolated from production predictions and validated against 12h, 24h, 48h, and 1w market movement.</div>
+        <div class="auth-repair">
+          <input id="model-experiment-email" type="email" autocomplete="email" placeholder="Report email address" aria-label="Experiment report email address">
+          <button class="btn primary" id="start-model-experiment-btn" type="button">Start Experiment</button>
+          <button class="btn" id="save-model-experiment-email-btn" type="button">Save Email</button>
+          <button class="btn" id="dispatch-model-experiment-btn" type="button">Resume</button>
+          <div class="auth-repair-status" id="model-experiment-status">No experiment has been created.</div>
+        </div>
+        <div id="model-experiment-progress"></div>
+        <pre id="model-experiment-report" class="hidden"></pre>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
           <div class="panel-title">Codex Authentication</div>
           <div class="panel-meta">Local auth.json</div>
         </div>
@@ -2179,6 +2280,14 @@ const DASHBOARD_HTML = `<!doctype html>
     const jobsEl = document.getElementById("jobs");
     const failedJobsEl = document.getElementById("failed-jobs");
     const articlesEl = document.getElementById("articles");
+    const modelExperimentMetaEl = document.getElementById("model-experiment-meta");
+    const modelExperimentStatusEl = document.getElementById("model-experiment-status");
+    const modelExperimentProgressEl = document.getElementById("model-experiment-progress");
+    const modelExperimentReportEl = document.getElementById("model-experiment-report");
+    const modelExperimentEmailEl = document.getElementById("model-experiment-email");
+    const startModelExperimentBtn = document.getElementById("start-model-experiment-btn");
+    const saveModelExperimentEmailBtn = document.getElementById("save-model-experiment-email-btn");
+    const dispatchModelExperimentBtn = document.getElementById("dispatch-model-experiment-btn");
     const sourceStatsEl = document.getElementById("source-stats");
     const sourceActivityChartEl = document.getElementById("source-activity-chart");
     const sourceActivityMeta = document.getElementById("source-activity-meta");
@@ -2242,6 +2351,7 @@ const DASHBOARD_HTML = `<!doctype html>
     let predictionLastArticleKey = null;
     let predictionObserver = null;
     let latestStatus = null;
+    let modelExperimentId = null;
     let liveStatusSocket = null;
     let liveStatusReconnectTimer = null;
     let liveStatusReconnectAttempts = 0;
@@ -2319,6 +2429,9 @@ const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("refresh-btn").addEventListener("click", loadAll);
     document.getElementById("ingest-btn").addEventListener("click", () => runAction("/api/ingest"));
     document.getElementById("requeue-btn").addEventListener("click", () => runAction("/api/requeue-pending?limit=10"));
+    startModelExperimentBtn.addEventListener("click", startModelExperiment);
+    saveModelExperimentEmailBtn.addEventListener("click", saveModelExperimentEmail);
+    dispatchModelExperimentBtn.addEventListener("click", () => runAction("/api/model-experiments/dispatch"));
     rotateCodexAuthBtn.addEventListener("click", rotateCodexAuth);
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
@@ -2511,8 +2624,9 @@ const DASHBOARD_HTML = `<!doctype html>
           api("/api/results?limit=20"),
           api("/api/jobs?limit=12"),
           api("/api/jobs/failures?limit=500"),
+          api("/api/model-experiments"),
         ]);
-        const [status, results, jobs, failedJobs] = responses;
+        const [status, results, jobs, failedJobs, modelExperiment] = responses;
         if (status.status === "fulfilled") {
           latestStatus = status.value;
           renderMetrics(latestStatus);
@@ -2531,6 +2645,8 @@ const DASHBOARD_HTML = `<!doctype html>
         else showError(jobsEl, jobs.reason, false);
         if (failedJobs.status === "fulfilled") renderFailedJobs(failedJobs.value.jobs || []);
         else showError(failedJobsEl, failedJobs.reason, false);
+        if (modelExperiment.status === "fulfilled") renderModelExperiment(modelExperiment.value);
+        else showError(modelExperimentProgressEl, modelExperiment.reason, false);
         const failures = responses.filter((response) => response.status === "rejected").length;
         lastUpdated.textContent = (failures ? "Data partially refreshed " : "Data refreshed ") + new Date().toLocaleTimeString();
         if (!simulationPanel.classList.contains("hidden")) {
@@ -3239,6 +3355,89 @@ const DASHBOARD_HTML = `<!doctype html>
           '<details><summary>Memo</summary><pre>' + escapeHtml(item.memo || "") + '</pre></details>' +
         '</article>';
       }).join("");
+    }
+
+    async function startModelExperiment() {
+      setBusy(true);
+      modelExperimentStatusEl.textContent = "Creating the frozen 1,000-article cohort...";
+      try {
+        await api("/api/model-experiments/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email_to: modelExperimentEmailEl.value.trim() || null }),
+        });
+        await loadAll();
+      } catch (error) {
+        modelExperimentStatusEl.textContent = error.message || String(error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function saveModelExperimentEmail() {
+      if (!modelExperimentId) {
+        modelExperimentStatusEl.textContent = "Start an experiment before saving its report email.";
+        return;
+      }
+      setBusy(true);
+      try {
+        const payload = await api("/api/model-experiments/email", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ experiment_id: modelExperimentId, email_to: modelExperimentEmailEl.value.trim() }),
+        });
+        renderModelExperiment(payload);
+      } catch (error) {
+        modelExperimentStatusEl.textContent = error.message || String(error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function renderModelExperiment(payload) {
+      const experiment = payload.experiment;
+      if (!experiment) {
+        modelExperimentId = null;
+        modelExperimentMetaEl.textContent = "Not started";
+        modelExperimentStatusEl.textContent = "No experiment has been created.";
+        modelExperimentProgressEl.innerHTML = "";
+        modelExperimentReportEl.classList.add("hidden");
+        startModelExperimentBtn.disabled = false;
+        return;
+      }
+      modelExperimentId = experiment.id;
+      if (experiment.email_to && !modelExperimentEmailEl.value) modelExperimentEmailEl.value = experiment.email_to;
+      modelExperimentMetaEl.textContent = String(experiment.status || "unknown") + " - phase " + String(experiment.phase || 1);
+      modelExperimentStatusEl.textContent = experiment.status === "completed"
+        ? "Completed " + formatDate(experiment.completed_at) + ". Email: " + String(experiment.email_status || "not configured") + (experiment.email_error ? " (" + experiment.email_error + ")" : "")
+        : "Experiment " + experiment.id + " is processing " + (Number(experiment.phase) === 1 ? "Luna medium" : "Terra low") + ". Production articles retain queue priority.";
+      const grouped = new Map();
+      for (const row of payload.progress || []) {
+        const key = String(row.phase) + ":" + row.model + ":" + row.reasoning_effort;
+        if (!grouped.has(key)) grouped.set(key, { phase: row.phase, model: row.model, effort: row.reasoning_effort, statuses: {}, duration: null });
+        const group = grouped.get(key);
+        group.statuses[row.status] = Number(row.count || 0);
+        if (row.average_duration_seconds !== null) group.duration = Number(row.average_duration_seconds);
+      }
+      modelExperimentProgressEl.innerHTML = grouped.size ? table(
+        ["Phase", "Model", "Pending", "Active", "Succeeded", "Failed", "Avg time"],
+        [...grouped.values()].map((group) => [
+          escapeHtml(String(group.phase)),
+          escapeHtml(group.model + " / " + group.effort),
+          escapeHtml(String(group.statuses.pending || 0)),
+          escapeHtml(String((group.statuses.queued || 0) + (group.statuses.running || 0))),
+          escapeHtml(String(group.statuses.succeeded || 0)),
+          escapeHtml(String(group.statuses.failed || 0)),
+          escapeHtml(formatDuration(group.duration)),
+        ]),
+      ) : '<div class="empty">Preparing experiment jobs.</div>';
+      if (experiment.report_text) {
+        modelExperimentReportEl.textContent = experiment.report_text;
+        modelExperimentReportEl.classList.remove("hidden");
+      } else {
+        modelExperimentReportEl.classList.add("hidden");
+      }
+      startModelExperimentBtn.disabled = ["preparing", "running", "reporting"].includes(experiment.status);
     }
 
     function renderJobs(jobs) {
@@ -5334,14 +5533,24 @@ function extractFirstJsonObject(value: string): string | null {
   return null;
 }
 
-async function runContainerResearch(env: Env, prompt: string, researchSlot: number): Promise<string> {
+async function runContainerResearch(
+  env: Env,
+  prompt: string,
+  researchSlot: number,
+  options: { model?: string; reasoningEffort?: string } = {},
+): Promise<string> {
   const container = getContainer(env.CODEX_CONTAINER, `instance-${researchSlot}`);
   await startWithSecrets(container, env);
   const response = await container.fetch(
     new Request("https://container.local/research-internal", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt, timeout_seconds: 300 }),
+      body: JSON.stringify({
+        prompt,
+        timeout_seconds: 300,
+        model: options.model || undefined,
+        reasoning_effort: options.reasoningEffort || undefined,
+      }),
     }),
   );
   const payload = (await response.json()) as { ok?: boolean; memo?: string; error?: string; auth_json?: string };
@@ -5373,6 +5582,7 @@ async function normalizeResearchJobConcurrency(env: Env, force = false): Promise
 
 async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId: string; skipped?: string }> {
   await ensureArticleStorageSchema(env.NEWS_DB);
+  await ensureModelExperimentSchema(env.NEWS_DB);
   await normalizeResearchJobConcurrency(env);
 
   const existing = await env.NEWS_DB.prepare(
@@ -5394,10 +5604,18 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     return { ok: true, jobId, skipped: "legacy_first_pass" };
   }
 
+  const activeExperiment = await env.NEWS_DB.prepare(
+    "SELECT COUNT(*) AS count FROM model_experiments WHERE status = 'running'",
+  ).first<{ count: number }>();
+  const isNewFirstPass = existing.prediction_delay_eligible === 1 && !existing.has_result;
+  const productionConcurrency = Number(activeExperiment?.count || 0) > 0 && !isNewFirstPass
+    ? RESEARCH_CONTAINER_COUNT - MODEL_EXPERIMENT_MAX_CONCURRENCY
+    : RESEARCH_CONTAINER_COUNT;
+
   const acquired = await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT CAST(value AS INTEGER) FROM json_each('[0,1,2,3,4,5,6,7]') AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = CAST(slots.value AS INTEGER)) ORDER BY CAST(value AS INTEGER) LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ? AND (? = 0 OR NOT EXISTS (SELECT 1 FROM research_jobs AS first_pass_jobs WHERE first_pass_jobs.status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = first_pass_jobs.id)))",
+    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT CAST(value AS INTEGER) FROM json_each('[0,1,2,3,4,5,6,7]') AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = CAST(slots.value AS INTEGER)) AND NOT EXISTS (SELECT 1 FROM model_experiment_jobs AS experiment_slots WHERE experiment_slots.status = 'running' AND experiment_slots.research_slot = CAST(slots.value AS INTEGER)) ORDER BY CAST(value AS INTEGER) LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ? AND ((SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') + (SELECT COUNT(*) FROM model_experiment_jobs AS active_experiments WHERE active_experiments.status = 'running')) < ? AND (? = 0 OR NOT EXISTS (SELECT 1 FROM research_jobs AS first_pass_jobs WHERE first_pass_jobs.status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = first_pass_jobs.id)))",
   )
-    .bind(jobId, RESEARCH_CONTAINER_COUNT, existing.has_result ? 1 : 0)
+    .bind(jobId, productionConcurrency, RESEARCH_CONTAINER_COUNT, existing.has_result ? 1 : 0)
     .run();
   if (!acquired.meta?.changes) throw new ResearchBusyError();
 
@@ -5545,6 +5763,612 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     });
     throw error;
   }
+}
+
+function modelExperimentCalls(
+  fields: ResearchResultFields,
+  fallbackSymbols: string[] = [],
+): ModelExperimentCall[] {
+  const bySymbol = new Map<string, ModelExperimentCall>();
+  for (const detail of normalizeImpactDetails(fields.impact_details)) {
+    const symbol = normalizeTicker(detail.symbol || "");
+    if (!symbol || (detail.direction !== "bullish" && detail.direction !== "bearish")) continue;
+    const confidence = typeof detail.confidence === "number"
+      ? Math.max(0, Math.min(1, detail.confidence))
+      : typeof fields.confidence === "number"
+        ? Math.max(0, Math.min(1, fields.confidence))
+        : null;
+    const call = { symbol, direction: detail.direction, confidence, reason: detail.reason || null } satisfies ModelExperimentCall;
+    const existing = bySymbol.get(symbol);
+    if (!existing || (call.confidence ?? -1) > (existing.confidence ?? -1)) bySymbol.set(symbol, call);
+  }
+  if (!bySymbol.size && typeof fields.sentiment_score === "number" && Math.abs(fields.sentiment_score) >= 0.05) {
+    const direction = fields.sentiment_score > 0 ? "bullish" : "bearish";
+    for (const value of fallbackSymbols) {
+      const symbol = normalizeTicker(value);
+      if (symbol) bySymbol.set(symbol, {
+        symbol,
+        direction,
+        confidence: typeof fields.confidence === "number" ? Math.max(0, Math.min(1, fields.confidence)) : null,
+        reason: null,
+      });
+    }
+  }
+  return [...bySymbol.values()].sort((left, right) => left.symbol.localeCompare(right.symbol));
+}
+
+function modelExperimentReferenceCalls(row: ResearchResultRow): ModelExperimentCall[] {
+  const fields = parseResearchFields(row.memo || "");
+  if (typeof fields.sentiment_score !== "number" && typeof row.sentiment_score === "number") fields.sentiment_score = row.sentiment_score;
+  if (typeof fields.confidence !== "number" && typeof row.confidence === "number") fields.confidence = row.confidence;
+  return modelExperimentCalls(fields, parseJsonArray(row.symbols));
+}
+
+async function startModelExperiment(env: Env, emailTo: string | null): Promise<Record<string, unknown>> {
+  await ensureModelExperimentSchema(env.NEWS_DB);
+  const active = await env.NEWS_DB.prepare(
+    "SELECT id, status FROM model_experiments WHERE status IN ('preparing', 'running', 'reporting') ORDER BY datetime(created_at) DESC LIMIT 1",
+  ).first<{ id: string; status: string }>();
+  if (active) throw new Error(`Experiment ${active.id} is already ${active.status}.`);
+
+  const candidates = await env.NEWS_DB.prepare(
+    `SELECT articles.id, articles.source_id, articles.title, articles.url, articles.summary, articles.published_at,
+      articles.discovered_at, articles.content_plaintext, articles.content_source, articles.content_status,
+      articles.content_fetched_at, articles.content_fetch_attempts, articles.content_error,
+      sources.name AS source_name, sources.source_type, sources.weight AS source_weight,
+      research_results.id AS reference_result_id, research_results.symbols AS reference_symbols,
+      research_results.sentiment_score AS reference_sentiment_score,
+      research_results.confidence AS reference_confidence, research_results.memo AS reference_memo,
+      research_results.created_at AS reference_created_at
+    FROM articles
+    LEFT JOIN sources ON sources.id = articles.source_id
+    INNER JOIN research_results ON research_results.id = (
+      SELECT latest.id FROM research_results AS latest
+      WHERE latest.article_id = articles.id ORDER BY datetime(latest.created_at) DESC LIMIT 1
+    )
+    WHERE articles.published_at IS NOT NULL
+      AND datetime(articles.published_at) <= datetime('now', '-10 days')
+      AND length(COALESCE(articles.content_plaintext, articles.summary, '')) >= 500
+      AND EXISTS (SELECT 1 FROM research_jobs WHERE research_jobs.article_id = articles.id AND research_jobs.status = 'succeeded')
+    ORDER BY articles.id
+    LIMIT ?`,
+  ).bind(MODEL_EXPERIMENT_SAMPLE_SIZE).all<Article & {
+    reference_result_id: string;
+    reference_symbols: string | null;
+    reference_sentiment_score: number | null;
+    reference_confidence: number | null;
+    reference_memo: string;
+    reference_created_at: string;
+  }>();
+  const rows = candidates.results || [];
+  if (rows.length !== MODEL_EXPERIMENT_SAMPLE_SIZE) {
+    throw new Error(`Only ${rows.length} eligible matured articles are available; ${MODEL_EXPERIMENT_SAMPLE_SIZE} are required.`);
+  }
+
+  const experimentId = crypto.randomUUID();
+  const recipient = emailTo && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTo) ? emailTo : null;
+  await env.NEWS_DB.prepare(
+    "INSERT INTO model_experiments (id, status, sample_size, phase, phase_1_model, phase_1_effort, phase_2_model, phase_2_effort, email_to, started_at) VALUES (?, 'preparing', ?, 1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+  ).bind(
+    experimentId,
+    MODEL_EXPERIMENT_SAMPLE_SIZE,
+    MODEL_EXPERIMENT_PHASES[0].model,
+    MODEL_EXPERIMENT_PHASES[0].reasoningEffort,
+    MODEL_EXPERIMENT_PHASES[1].model,
+    MODEL_EXPERIMENT_PHASES[1].reasoningEffort,
+    recipient || env.EXPERIMENT_REPORT_EMAIL_TO || null,
+  ).run();
+
+  for (let offset = 0; offset < rows.length; offset += 25) {
+    const group = rows.slice(offset, offset + 25);
+    const promptHashes = await Promise.all(group.map((row) => hashText(researchPrompt(row))));
+    const statements: D1PreparedStatement[] = [];
+    for (let index = 0; index < group.length; index += 1) {
+      const row = group[index];
+      const ordinal = offset + index + 1;
+      const promptHash = promptHashes[index];
+      const referenceRow: ResearchResultRow = {
+        id: row.reference_result_id,
+        article_id: row.id,
+        title: row.title,
+        url: row.url,
+        published_at: row.published_at,
+        created_at: row.reference_created_at,
+        symbols: row.reference_symbols,
+        sentiment_score: row.reference_sentiment_score,
+        confidence: row.reference_confidence,
+        event_type: null,
+        summary: null,
+        memo: row.reference_memo,
+      };
+      statements.push(env.NEWS_DB.prepare(
+        "INSERT INTO model_experiment_samples (experiment_id, article_id, sample_ordinal, input_hash, reference_result_id, reference_calls_json) VALUES (?, ?, ?, ?, ?, ?)",
+      ).bind(experimentId, row.id, ordinal, promptHash, row.reference_result_id, JSON.stringify(modelExperimentReferenceCalls(referenceRow))));
+      for (const phase of MODEL_EXPERIMENT_PHASES) {
+        statements.push(env.NEWS_DB.prepare(
+          "INSERT INTO model_experiment_jobs (id, experiment_id, article_id, sample_ordinal, phase, model, reasoning_effort, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
+        ).bind(crypto.randomUUID(), experimentId, row.id, ordinal, phase.phase, phase.model, phase.reasoningEffort));
+      }
+    }
+    await env.NEWS_DB.batch(statements);
+  }
+  await env.NEWS_DB.prepare(
+    "UPDATE model_experiments SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+  ).bind(experimentId).run();
+  const dispatch = await advanceModelExperiment(env, experimentId);
+  return { experiment_id: experimentId, sample_size: rows.length, phase: 1, ...dispatch };
+}
+
+async function ensureModelExperimentPrice(
+  env: Env,
+  experimentId: string,
+  article: Article,
+  symbol: string,
+): Promise<void> {
+  const existing = await env.NEWS_DB.prepare(
+    "SELECT status FROM model_experiment_prices WHERE experiment_id = ? AND article_id = ? AND symbol = ?",
+  ).bind(experimentId, article.id, symbol).first<{ status: string }>();
+  if (existing?.status === "stored" || existing?.status === "failed") return;
+  await env.NEWS_DB.prepare(
+    "INSERT OR IGNORE INTO model_experiment_prices (experiment_id, article_id, symbol, status) VALUES (?, ?, ?, 'pending')",
+  ).bind(experimentId, article.id, symbol).run();
+  const predictionAt = normalizeDate(article.published_at) || normalizeDate(article.discovered_at);
+  if (!predictionAt) return;
+  try {
+    const chart = await fetchYahooChart(symbol, predictionAt, "1h", 12);
+    const baseline = nearestPoint(chart.timestamps, chart.closes, unixSeconds(predictionAt), "after", false);
+    if (!baseline || !baseline.price) throw new Error("No baseline market price was available");
+    const targets = predictionIntervalTargets(predictionAt);
+    const intervals = Object.fromEntries(MODEL_EXPERIMENT_INTERVALS.map((label) => {
+      const point = nearestElapsedPoint(chart.timestamps, chart.closes, targets[label]);
+      return [label, {
+        at: point ? isoFromUnix(point.at) : isoFromUnix(targets[label]),
+        price: point?.price ?? null,
+        change_pct: point ? ((point.price - baseline.price) / baseline.price) * 100 : null,
+      }];
+    }));
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiment_prices SET status = 'stored', baseline_price = ?, baseline_at = ?, intervals_json = ?, last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE experiment_id = ? AND article_id = ? AND symbol = ?",
+    ).bind(baseline.price, isoFromUnix(baseline.at), JSON.stringify(intervals), experimentId, article.id, symbol).run();
+  } catch (error) {
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiment_prices SET status = 'failed', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE experiment_id = ? AND article_id = ? AND symbol = ?",
+    ).bind((error instanceof Error ? error.message : String(error)).slice(0, 500), experimentId, article.id, symbol).run();
+  }
+}
+
+async function processModelExperimentJob(
+  env: Env,
+  jobId: string,
+): Promise<{ ok: boolean; jobId: string; skipped?: string }> {
+  await ensureModelExperimentSchema(env.NEWS_DB);
+  const job = await env.NEWS_DB.prepare(
+    `SELECT model_experiment_jobs.*, model_experiments.status AS experiment_status,
+      model_experiments.phase AS experiment_phase, model_experiment_samples.input_hash AS expected_input_hash
+    FROM model_experiment_jobs
+    INNER JOIN model_experiments ON model_experiments.id = model_experiment_jobs.experiment_id
+    INNER JOIN model_experiment_samples ON model_experiment_samples.experiment_id = model_experiment_jobs.experiment_id
+      AND model_experiment_samples.article_id = model_experiment_jobs.article_id
+    WHERE model_experiment_jobs.id = ?`,
+  ).bind(jobId).first<ModelExperimentJobRow & {
+    experiment_status: string;
+    experiment_phase: number;
+    expected_input_hash: string;
+  }>();
+  if (!job) return { ok: false, jobId, skipped: "missing" };
+  if (job.status === "succeeded" || job.status === "failed") return { ok: true, jobId, skipped: job.status };
+  if (job.experiment_status !== "running" || job.phase !== job.experiment_phase) return { ok: true, jobId, skipped: "inactive_phase" };
+  if (job.status === "running") throw new ResearchBusyError("Experiment job is already running");
+  if (job.status !== "queued") return { ok: true, jobId, skipped: job.status };
+
+  const productionWaiting = await env.NEWS_DB.prepare(
+    "SELECT COUNT(*) AS count FROM research_jobs WHERE status = 'pending' AND prediction_delay_eligible = 1 AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id)",
+  ).first<{ count: number }>();
+  if (Number(productionWaiting?.count || 0) > 0) throw new ResearchBusyError("Production research has priority");
+
+  const acquired = await env.NEWS_DB.prepare(
+    `UPDATE model_experiment_jobs SET status = 'running', attempts = attempts + 1, started_at = CURRENT_TIMESTAMP,
+      finished_at = NULL, last_error = NULL, updated_at = CURRENT_TIMESTAMP,
+      research_slot = (SELECT CAST(value AS INTEGER) FROM json_each('[0,1,2,3,4,5,6,7]') AS slots
+        WHERE NOT EXISTS (SELECT 1 FROM research_jobs WHERE status = 'running' AND research_slot = CAST(slots.value AS INTEGER))
+          AND NOT EXISTS (SELECT 1 FROM model_experiment_jobs AS active WHERE active.status = 'running' AND active.research_slot = CAST(slots.value AS INTEGER))
+        ORDER BY CAST(value AS INTEGER) LIMIT 1)
+    WHERE id = ? AND status = 'queued'
+      AND ((SELECT COUNT(*) FROM research_jobs WHERE status = 'running') +
+        (SELECT COUNT(*) FROM model_experiment_jobs WHERE status = 'running')) < ?`,
+  ).bind(jobId, RESEARCH_CONTAINER_COUNT).run();
+  if (!acquired.meta?.changes) throw new ResearchBusyError();
+  const leased = await env.NEWS_DB.prepare(
+    "SELECT research_slot, attempts FROM model_experiment_jobs WHERE id = ?",
+  ).bind(jobId).first<{ research_slot: number | null; attempts: number }>();
+  if (!leased || !Number.isInteger(leased.research_slot)) {
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiment_jobs SET status = 'queued', research_slot = NULL, last_error = 'No research slot was available', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind(jobId).run();
+    throw new ResearchBusyError();
+  }
+
+  const article = await env.NEWS_DB.prepare(
+    "SELECT articles.*, sources.name AS source_name, sources.source_type, sources.weight AS source_weight FROM articles LEFT JOIN sources ON sources.id = articles.source_id WHERE articles.id = ?",
+  ).bind(job.article_id).first<Article>();
+  if (!article) {
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiment_jobs SET status = 'failed', finished_at = CURRENT_TIMESTAMP, last_error = 'Article not found', research_slot = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind(jobId).run();
+    await advanceModelExperiment(env, job.experiment_id);
+    return { ok: false, jobId, skipped: "article_missing" };
+  }
+
+  try {
+    const prompt = researchPrompt(article);
+    const inputHash = await hashText(prompt);
+    const inferenceStarted = Date.now();
+    const memo = await runContainerResearch(env, prompt, Number(leased.research_slot), {
+      model: job.model,
+      reasoningEffort: job.reasoning_effort,
+    });
+    const durationSeconds = Math.max(0, Math.round((Date.now() - inferenceStarted) / 1000));
+    const fields = parseResearchFields(memo);
+    const validationError = validateResearchFields(fields);
+    if (validationError) throw new Error(`Codex returned an invalid structured analysis: ${validationError}`);
+    const calls = modelExperimentCalls(fields);
+    for (const call of calls.slice(0, 8)) {
+      await ensureModelExperimentPrice(env, job.experiment_id, article, call.symbol);
+    }
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiment_jobs SET status = 'succeeded', finished_at = CURRENT_TIMESTAMP, duration_seconds = ?, last_error = NULL, memo = ?, fields_json = ?, calls_json = ?, input_hash = ?, research_slot = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind(durationSeconds, memo, JSON.stringify(fields), JSON.stringify(calls), inputHash, jobId).run();
+    await advanceModelExperiment(env, job.experiment_id);
+    return { ok: true, jobId, skipped: inputHash === job.expected_input_hash ? undefined : "input_hash_changed" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const authFailure = error instanceof CodexAuthRefreshError || isCodexAuthRefreshFailure(error);
+    const capacityFailure = isTransientContainerCapacityError(error);
+    const attempts = Number(leased.attempts || 0);
+    const retry = authFailure || capacityFailure || attempts < MODEL_EXPERIMENT_MAX_ATTEMPTS;
+    await env.NEWS_DB.prepare(
+      `UPDATE model_experiment_jobs SET status = ?, finished_at = CURRENT_TIMESTAMP, last_error = ?,
+        duration_seconds = CASE WHEN ? = 'failed' THEN MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)) ELSE NULL END,
+        attempts = CASE WHEN ? THEN MAX(0, attempts - 1) ELSE attempts END,
+        research_slot = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    ).bind(
+      retry ? "queued" : "failed",
+      message.slice(0, 1000),
+      retry ? "queued" : "failed",
+      authFailure || capacityFailure ? 1 : 0,
+      jobId,
+    ).run();
+    if (retry) throw new ResearchBusyError(authFailure ? "Codex authentication refresh is pending" : message);
+    await advanceModelExperiment(env, job.experiment_id);
+    return { ok: false, jobId };
+  }
+}
+
+function percentile(values: number[], ratio: number): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1))];
+}
+
+function wilsonInterval(successes: number, total: number): [number | null, number | null] {
+  if (!total) return [null, null];
+  const z = 1.96;
+  const p = successes / total;
+  const denominator = 1 + (z * z) / total;
+  const centre = (p + (z * z) / (2 * total)) / denominator;
+  const margin = (z * Math.sqrt((p * (1 - p) + (z * z) / (4 * total)) / total)) / denominator;
+  return [Math.max(0, centre - margin), Math.min(1, centre + margin)];
+}
+
+function calibrationError(points: Array<{ confidence: number; correct: boolean }>): number | null {
+  if (!points.length) return null;
+  let weighted = 0;
+  for (let bin = 0; bin < 10; bin += 1) {
+    const lower = bin / 10;
+    const upper = (bin + 1) / 10;
+    const members = points.filter((point) => point.confidence >= lower && (bin === 9 ? point.confidence <= upper : point.confidence < upper));
+    if (!members.length) continue;
+    const averageConfidence = members.reduce((sum, point) => sum + point.confidence, 0) / members.length;
+    const accuracy = members.filter((point) => point.correct).length / members.length;
+    weighted += Math.abs(averageConfidence - accuracy) * members.length;
+  }
+  return weighted / points.length;
+}
+
+async function buildModelExperimentReport(env: Env, experimentId: string): Promise<{ json: Record<string, unknown>; text: string }> {
+  const [experiment, jobsResult, samplesResult, pricesResult] = await Promise.all([
+    env.NEWS_DB.prepare("SELECT * FROM model_experiments WHERE id = ?").bind(experimentId).first<ModelExperimentRow>(),
+    env.NEWS_DB.prepare("SELECT * FROM model_experiment_jobs WHERE experiment_id = ? ORDER BY phase, sample_ordinal").bind(experimentId).all<any>(),
+    env.NEWS_DB.prepare("SELECT * FROM model_experiment_samples WHERE experiment_id = ? ORDER BY sample_ordinal").bind(experimentId).all<any>(),
+    env.NEWS_DB.prepare("SELECT * FROM model_experiment_prices WHERE experiment_id = ?").bind(experimentId).all<any>(),
+  ]);
+  if (!experiment) throw new Error("Experiment not found");
+  const jobs = jobsResult.results || [];
+  const samples = samplesResult.results || [];
+  const priceByKey = new Map((pricesResult.results || []).map((row: any) => [`${row.article_id}:${row.symbol}`, row]));
+  const referenceByArticle = new Map(samples.map((row: any) => [row.article_id, JSON.parse(row.reference_calls_json || "[]") as ModelExperimentCall[]]));
+  const sampleByArticle = new Map(samples.map((row: any) => [row.article_id, row]));
+
+  const modelMetrics = MODEL_EXPERIMENT_PHASES.map((phase) => {
+    const modelJobs = jobs.filter((job: any) => Number(job.phase) === phase.phase);
+    const succeeded = modelJobs.filter((job: any) => job.status === "succeeded");
+    const durations = succeeded.map((job: any) => Number(job.duration_seconds)).filter(Number.isFinite);
+    let totalCalls = 0;
+    let validCalls = 0;
+    let actionableArticles = 0;
+    let referenceIntersection = 0;
+    let referencePredicted = 0;
+    let referenceExpected = 0;
+    let directionMatches = 0;
+    let directionCompared = 0;
+    let jaccardTotal = 0;
+    let hashMatches = 0;
+    const intervalData = Object.fromEntries(MODEL_EXPERIMENT_INTERVALS.map((label) => [label, [] as Array<{ change: number; desired: number; confidence: number | null; correct: boolean }>]));
+
+    for (const job of succeeded) {
+      const calls = JSON.parse(job.calls_json || "[]") as ModelExperimentCall[];
+      if (calls.length) actionableArticles += 1;
+      totalCalls += calls.length;
+      const reference = referenceByArticle.get(job.article_id) || [];
+      const predictedSymbols = new Set(calls.map((call) => call.symbol));
+      const referenceSymbols = new Set(reference.map((call) => call.symbol));
+      const union = new Set([...predictedSymbols, ...referenceSymbols]);
+      const intersection = [...predictedSymbols].filter((symbol) => referenceSymbols.has(symbol));
+      referenceIntersection += intersection.length;
+      referencePredicted += predictedSymbols.size;
+      referenceExpected += referenceSymbols.size;
+      jaccardTotal += union.size ? intersection.length / union.size : 1;
+      for (const symbol of intersection) {
+        directionCompared += 1;
+        if (calls.find((call) => call.symbol === symbol)?.direction === reference.find((call) => call.symbol === symbol)?.direction) directionMatches += 1;
+      }
+      const sample = sampleByArticle.get(job.article_id);
+      if (sample?.input_hash === job.input_hash) hashMatches += 1;
+      for (const call of calls) {
+        const price = priceByKey.get(`${job.article_id}:${call.symbol}`);
+        if (!price || price.status !== "stored") continue;
+        validCalls += 1;
+        const intervals = JSON.parse(price.intervals_json || "{}");
+        for (const label of MODEL_EXPERIMENT_INTERVALS) {
+          const change = Number(intervals[label]?.change_pct);
+          if (!Number.isFinite(change)) continue;
+          const correct = call.direction === "bullish" ? change > 0 : change < 0;
+          intervalData[label].push({
+            change,
+            desired: call.direction === "bullish" ? change : -change,
+            confidence: call.confidence,
+            correct,
+          });
+        }
+      }
+    }
+    const intervals = Object.fromEntries(MODEL_EXPERIMENT_INTERVALS.map((label) => {
+      const points = intervalData[label];
+      const hits = points.filter((point) => point.correct).length;
+      const calibrated = points.filter((point): point is typeof point & { confidence: number } => point.confidence !== null);
+      const [ciLow, ciHigh] = wilsonInterval(hits, points.length);
+      return [label, {
+        samples: points.length,
+        directional_accuracy: points.length ? hits / points.length : null,
+        accuracy_95_ci: [ciLow, ciHigh],
+        average_raw_movement_pct: points.length ? points.reduce((sum, point) => sum + point.change, 0) / points.length : null,
+        average_desired_movement_pct: points.length ? points.reduce((sum, point) => sum + point.desired, 0) / points.length : null,
+        brier_score: calibrated.length
+          ? calibrated.reduce((sum, point) => sum + Math.pow(point.confidence - (point.correct ? 1 : 0), 2), 0) / calibrated.length
+          : null,
+        expected_calibration_error: calibrationError(calibrated),
+      }];
+    }));
+    const accuracyValues = Object.values(intervals).map((item: any) => item.directional_accuracy).filter((value): value is number => typeof value === "number");
+    return {
+      phase: phase.phase,
+      model: phase.model,
+      reasoning_effort: phase.reasoningEffort,
+      jobs: modelJobs.length,
+      succeeded: succeeded.length,
+      failed: modelJobs.filter((job: any) => job.status === "failed").length,
+      structured_completion_rate: modelJobs.length ? succeeded.length / modelJobs.length : null,
+      actionable_article_rate: succeeded.length ? actionableArticles / succeeded.length : null,
+      total_calls: totalCalls,
+      market_valid_call_rate: totalCalls ? validCalls / totalCalls : null,
+      reference_ticker_precision: referencePredicted ? referenceIntersection / referencePredicted : null,
+      reference_ticker_recall: referenceExpected ? referenceIntersection / referenceExpected : null,
+      mean_article_ticker_jaccard: succeeded.length ? jaccardTotal / succeeded.length : null,
+      reference_direction_agreement: directionCompared ? directionMatches / directionCompared : null,
+      input_hash_match_rate: succeeded.length ? hashMatches / succeeded.length : null,
+      latency_seconds: {
+        average: durations.length ? durations.reduce((sum, value) => sum + value, 0) / durations.length : null,
+        p50: percentile(durations, 0.5),
+        p95: percentile(durations, 0.95),
+      },
+      mean_directional_accuracy: accuracyValues.length ? accuracyValues.reduce((sum, value) => sum + value, 0) / accuracyValues.length : null,
+      intervals,
+    };
+  });
+  const ranked = [...modelMetrics].sort((left: any, right: any) =>
+    Number(right.mean_directional_accuracy || 0) - Number(left.mean_directional_accuracy || 0));
+  const delta = ranked.length === 2
+    ? Number(ranked[0].mean_directional_accuracy || 0) - Number(ranked[1].mean_directional_accuracy || 0)
+    : 0;
+  const conclusion = delta >= 0.02
+    ? `${ranked[0].model} (${ranked[0].reasoning_effort}) produced the higher mean directional accuracy by ${(delta * 100).toFixed(2)} percentage points.`
+    : `The models were within ${(delta * 100).toFixed(2)} percentage points on mean directional accuracy; treat the market result as effectively tied and prefer the lower-allowance model unless calibration or ticker quality differs materially.`;
+  const reportJson: Record<string, unknown> = {
+    experiment_id: experimentId,
+    completed_at: new Date().toISOString(),
+    sample_size: experiment.sample_size,
+    methodology: {
+      cohort: "Same 1,000 matured articles for both models; publication age at least 10 days.",
+      intervals: MODEL_EXPERIMENT_INTERVALS,
+      market_measurement: "Direction is scored against the nearest available Yahoo Finance market price after each article publication timestamp.",
+      caveat: "Subsequent price movement is an observational proxy and does not prove that the article caused the move.",
+    },
+    models: modelMetrics,
+    conclusion,
+  };
+  const lines = [
+    "Cartdotcom model experiment complete",
+    `Experiment: ${experimentId}`,
+    `Cohort: ${experiment.sample_size} articles, evaluated by both models`,
+    "",
+    ...modelMetrics.flatMap((metric: any) => [
+      `${metric.model} (${metric.reasoning_effort})`,
+      `  Completed: ${metric.succeeded}/${metric.jobs}`,
+      `  Actionable articles: ${metric.actionable_article_rate === null ? "n/a" : (metric.actionable_article_rate * 100).toFixed(2) + "%"}`,
+      `  Valid market calls: ${metric.total_calls} calls, ${metric.market_valid_call_rate === null ? "n/a" : (metric.market_valid_call_rate * 100).toFixed(2) + "% valid"}`,
+      `  Reference ticker precision/recall: ${metric.reference_ticker_precision === null ? "n/a" : (metric.reference_ticker_precision * 100).toFixed(2) + "%"} / ${metric.reference_ticker_recall === null ? "n/a" : (metric.reference_ticker_recall * 100).toFixed(2) + "%"}`,
+      `  Mean directional accuracy: ${metric.mean_directional_accuracy === null ? "n/a" : (metric.mean_directional_accuracy * 100).toFixed(2) + "%"}`,
+      ...MODEL_EXPERIMENT_INTERVALS.map((label) => {
+        const interval = metric.intervals[label];
+        return `    ${label}: ${interval.directional_accuracy === null ? "n/a" : (interval.directional_accuracy * 100).toFixed(2) + "%"} (${interval.samples} samples), desired move ${interval.average_desired_movement_pct === null ? "n/a" : interval.average_desired_movement_pct.toFixed(3) + "%"}, Brier ${interval.brier_score === null ? "n/a" : interval.brier_score.toFixed(4)}`;
+      }),
+      `  Latency average/p50/p95: ${metric.latency_seconds.average === null ? "n/a" : metric.latency_seconds.average.toFixed(1) + "s"} / ${metric.latency_seconds.p50 ?? "n/a"}s / ${metric.latency_seconds.p95 ?? "n/a"}s`,
+      "",
+    ]),
+    conclusion,
+    "",
+    "Caveat: price movement is an observational validation proxy, not proof of article causality.",
+  ];
+  return { json: reportJson, text: lines.join("\n") };
+}
+
+async function sendModelExperimentReport(env: Env, experiment: ModelExperimentRow): Promise<void> {
+  const recipient = experiment.email_to || env.EXPERIMENT_REPORT_EMAIL_TO;
+  const sender = env.EXPERIMENT_REPORT_EMAIL_FROM;
+  if (!recipient || !sender || !experiment.report_text) {
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiments SET email_status = 'not_configured', email_error = 'Recipient, sender, or email provider is not configured', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind(experiment.id).run();
+    return;
+  }
+  try {
+    let messageId: string | null = null;
+    if (env.EXPERIMENT_EMAIL) {
+      const sent = await env.EXPERIMENT_EMAIL.send({
+        to: recipient,
+        from: sender,
+        subject: "Cartdotcom Luna vs Terra experiment results",
+        text: experiment.report_text,
+      });
+      messageId = sent.messageId;
+    } else if (env.RESEND_API_KEY) {
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({ from: sender, to: [recipient], subject: "Cartdotcom Luna vs Terra experiment results", text: experiment.report_text }),
+      });
+      const payload = await response.json() as { id?: string; message?: string };
+      if (!response.ok) throw new Error(payload.message || `Email provider returned HTTP ${response.status}`);
+      messageId = payload.id || null;
+    } else {
+      throw new Error("No Cloudflare Email binding or Resend API key is configured");
+    }
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiments SET email_status = 'sent', email_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind(messageId, experiment.id).run();
+  } catch (error) {
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiments SET email_status = 'failed', email_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind((error instanceof Error ? error.message : String(error)).slice(0, 1000), experiment.id).run();
+  }
+}
+
+async function finishModelExperiment(env: Env, experimentId: string): Promise<void> {
+  const claimed = await env.NEWS_DB.prepare(
+    "UPDATE model_experiments SET status = 'reporting', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running' AND phase = 2",
+  ).bind(experimentId).run();
+  if (!claimed.meta?.changes) return;
+  try {
+    const report = await buildModelExperimentReport(env, experimentId);
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiments SET status = 'completed', report_json = ?, report_text = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind(JSON.stringify(report.json), report.text, experimentId).run();
+    const completed = await env.NEWS_DB.prepare("SELECT * FROM model_experiments WHERE id = ?")
+      .bind(experimentId).first<ModelExperimentRow>();
+    if (completed) await sendModelExperimentReport(env, completed);
+  } catch (error) {
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiments SET status = 'failed', email_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind((error instanceof Error ? error.message : String(error)).slice(0, 1000), experimentId).run();
+  }
+}
+
+async function advanceModelExperiment(env: Env, experimentId?: string): Promise<Record<string, unknown>> {
+  await ensureModelExperimentSchema(env.NEWS_DB);
+  await env.NEWS_DB.batch([
+    env.NEWS_DB.prepare(
+      "UPDATE model_experiment_jobs SET status = 'pending', research_slot = NULL, last_error = 'Recovered stale running experiment job', updated_at = CURRENT_TIMESTAMP WHERE status = 'running' AND datetime(started_at) < datetime('now', '-8 minutes')",
+    ),
+    env.NEWS_DB.prepare(
+      "UPDATE model_experiment_jobs SET status = 'pending', research_slot = NULL, last_error = 'Recovered orphaned queued experiment job', updated_at = CURRENT_TIMESTAMP WHERE status = 'queued' AND datetime(queued_at) < datetime('now', '-10 minutes')",
+    ),
+  ]);
+  const experiment = experimentId
+    ? await env.NEWS_DB.prepare("SELECT * FROM model_experiments WHERE id = ?").bind(experimentId).first<ModelExperimentRow>()
+    : await env.NEWS_DB.prepare("SELECT * FROM model_experiments WHERE status = 'running' ORDER BY datetime(created_at) DESC LIMIT 1").first<ModelExperimentRow>();
+  if (!experiment || experiment.status !== "running") return { dispatched: 0, status: experiment?.status || "none" };
+
+  const counts = await env.NEWS_DB.prepare(
+    "SELECT status, COUNT(*) AS count FROM model_experiment_jobs WHERE experiment_id = ? AND phase = ? GROUP BY status",
+  ).bind(experiment.id, experiment.phase).all<{ status: string; count: number }>();
+  const byStatus = Object.fromEntries((counts.results || []).map((row) => [row.status, Number(row.count)]));
+  const terminal = Number(byStatus.succeeded || 0) + Number(byStatus.failed || 0);
+  if (terminal >= experiment.sample_size) {
+    if (experiment.phase === 1) {
+      await env.NEWS_DB.prepare(
+        "UPDATE model_experiments SET phase = 2, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND phase = 1 AND status = 'running'",
+      ).bind(experiment.id).run();
+      return advanceModelExperiment(env, experiment.id);
+    }
+    await finishModelExperiment(env, experiment.id);
+    return { dispatched: 0, status: "reporting" };
+  }
+
+  const production = await env.NEWS_DB.prepare(
+    "SELECT SUM(CASE WHEN status = 'pending' AND prediction_delay_eligible = 1 AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = research_jobs.id) THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running FROM research_jobs WHERE status IN ('pending', 'running')",
+  ).first<{ pending: number | null; running: number | null }>();
+  if (Number(production?.pending || 0) > 0) return { dispatched: 0, status: "waiting_for_production" };
+  const activeExperiment = await env.NEWS_DB.prepare(
+    "SELECT COUNT(*) AS count FROM model_experiment_jobs WHERE status IN ('queued', 'running')",
+  ).first<{ count: number }>();
+  const available = Math.max(0, Math.min(
+    MODEL_EXPERIMENT_MAX_CONCURRENCY - Number(activeExperiment?.count || 0),
+    RESEARCH_CONTAINER_COUNT - Number(production?.running || 0) - Number(activeExperiment?.count || 0),
+  ));
+  if (!available) return { dispatched: 0, status: "at_capacity" };
+  const pending = await env.NEWS_DB.prepare(
+    "SELECT id FROM model_experiment_jobs WHERE experiment_id = ? AND phase = ? AND status = 'pending' ORDER BY sample_ordinal LIMIT ?",
+  ).bind(experiment.id, experiment.phase, available).all<{ id: string }>();
+  let dispatched = 0;
+  for (const row of pending.results || []) {
+    const claimed = await env.NEWS_DB.prepare(
+      "UPDATE model_experiment_jobs SET status = 'queued', queued_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'",
+    ).bind(row.id).run();
+    if (!claimed.meta?.changes) continue;
+    await env.RESEARCH_QUEUE.send({ kind: "model_experiment", jobId: row.id });
+    dispatched += 1;
+  }
+  return { dispatched, status: "running", phase: experiment.phase };
+}
+
+async function modelExperimentStatus(env: Env, experimentId?: string): Promise<Record<string, unknown>> {
+  await ensureModelExperimentSchema(env.NEWS_DB);
+  const experiment = experimentId
+    ? await env.NEWS_DB.prepare("SELECT * FROM model_experiments WHERE id = ?").bind(experimentId).first<ModelExperimentRow>()
+    : await env.NEWS_DB.prepare("SELECT * FROM model_experiments ORDER BY datetime(created_at) DESC LIMIT 1").first<ModelExperimentRow>();
+  if (!experiment) return { experiment: null, progress: [] };
+  const progress = await env.NEWS_DB.prepare(
+    "SELECT phase, model, reasoning_effort, status, COUNT(*) AS count, AVG(duration_seconds) AS average_duration_seconds FROM model_experiment_jobs WHERE experiment_id = ? GROUP BY phase, model, reasoning_effort, status ORDER BY phase, status",
+  ).bind(experiment.id).all();
+  return {
+    experiment: {
+      ...experiment,
+      report: experiment.report_json ? JSON.parse(experiment.report_json) : null,
+      report_json: undefined,
+      report_text: experiment.report_text || null,
+    },
+    progress: progress.results || [],
+  };
 }
 
 async function processNextJob(env: Env): Promise<{ ok: boolean; jobId?: string; skipped?: string }> {
@@ -8045,6 +8869,42 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ...(await processPredictionOutcomes(env, limit)) });
   }
 
+  if (url.pathname === "/api/model-experiments" && request.method === "GET") {
+    return json({ ok: true, ...(await modelExperimentStatus(env, url.searchParams.get("id") || undefined)) });
+  }
+
+  if (url.pathname === "/api/model-experiments/start" && request.method === "POST") {
+    const body = await request.json().catch(() => ({})) as { email_to?: unknown };
+    const emailTo = typeof body.email_to === "string" ? body.email_to.trim() : null;
+    try {
+      return json({ ok: true, ...(await startModelExperiment(env, emailTo)) });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 });
+    }
+  }
+
+  if (url.pathname === "/api/model-experiments/dispatch" && request.method === "POST") {
+    return json({ ok: true, ...(await advanceModelExperiment(env, url.searchParams.get("id") || undefined)) });
+  }
+
+  if (url.pathname === "/api/model-experiments/email" && request.method === "POST") {
+    const body = await request.json().catch(() => ({})) as { experiment_id?: unknown; email_to?: unknown };
+    const experimentId = typeof body.experiment_id === "string" ? body.experiment_id.trim() : "";
+    const emailTo = typeof body.email_to === "string" ? body.email_to.trim() : "";
+    if (!experimentId || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTo)) {
+      return json({ error: "A valid experiment_id and email_to are required" }, { status: 400 });
+    }
+    await ensureModelExperimentSchema(env.NEWS_DB);
+    await env.NEWS_DB.prepare(
+      "UPDATE model_experiments SET email_to = ?, email_status = CASE WHEN status = 'completed' THEN 'pending' ELSE email_status END, email_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).bind(emailTo, experimentId).run();
+    const experiment = await env.NEWS_DB.prepare("SELECT * FROM model_experiments WHERE id = ?")
+      .bind(experimentId).first<ModelExperimentRow>();
+    if (!experiment) return json({ error: "Experiment not found" }, { status: 404 });
+    if (experiment.status === "completed") await sendModelExperimentReport(env, experiment);
+    return json({ ok: true, ...(await modelExperimentStatus(env, experimentId)) });
+  }
+
   if (url.pathname.startsWith("/api/simulation")) {
     return json({ error: "Paper trading simulation has been decommissioned. Use /api/predictions for prediction outcome measurement." }, { status: 410 });
   }
@@ -8252,6 +9112,10 @@ export default {
           "/api/predictions/daily",
           "/api/predictions/outcomes",
           "/api/predictions/process",
+          "/api/model-experiments",
+          "/api/model-experiments/start",
+          "/api/model-experiments/dispatch",
+          "/api/model-experiments/email",
           "/api/process-batch",
           "/api/research/recover",
           "/api/research/auth/rotate",
@@ -8295,6 +9159,7 @@ export default {
           backfillArticleContents(env, 20).catch((error) => console.error("Scheduled article content backfill failed", error)),
           archiveArticleCorpusBatch(env, ARTICLE_CORPUS_BACKFILL_BATCH).catch((error) => console.error("Scheduled article corpus backfill failed", error)),
           processPredictionOutcomes(env, 100).catch((error) => console.error("Scheduled prediction outcome processing failed", error)),
+          advanceModelExperiment(env).catch((error) => console.error("Scheduled model experiment advancement failed", error)),
         ]);
       }),
     );
@@ -8303,13 +9168,19 @@ export default {
   async queue(batch: MessageBatch<ResearchJobMessage>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       try {
-        await processJob(env, message.body.jobId);
+        if (message.body.kind === "model_experiment") {
+          await processModelExperimentJob(env, message.body.jobId);
+        } else {
+          await processJob(env, message.body.jobId);
+        }
         message.ack();
         await drainResearchBacklog(env);
+        await advanceModelExperiment(env);
       } catch (error) {
         if (error instanceof ResearchBusyError) {
           const authPending = /authentication/i.test(error.message);
-          message.retry({ delaySeconds: authPending ? 30 : 5 });
+          const productionPriority = /production research/i.test(error.message);
+          message.retry({ delaySeconds: authPending ? 30 : productionPriority ? 15 : 5 });
           if (!authPending) await drainResearchBacklog(env);
           continue;
         }

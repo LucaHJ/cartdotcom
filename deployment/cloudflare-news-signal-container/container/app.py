@@ -84,7 +84,12 @@ def run_login(flag: str, secret: str) -> None:
         raise RuntimeError(f"codex login {flag} failed: {completed.stderr[-800:]}")
 
 
-def run_research_exec(prompt: str, timeout_seconds: int) -> str:
+def run_research_exec(
+    prompt: str,
+    timeout_seconds: int,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> str:
     output_file = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False)
     output_path = Path(output_file.name)
     output_file.close()
@@ -101,9 +106,11 @@ def run_research_exec(prompt: str, timeout_seconds: int) -> str:
         "--output-last-message",
         str(output_path),
     ]
-    model = os.getenv("CODEX_RESEARCH_MODEL", "").strip()
-    if model:
-        command.extend(["--model", model])
+    selected_model = (model or os.getenv("CODEX_RESEARCH_MODEL", "")).strip()
+    if selected_model:
+        command.extend(["--model", selected_model])
+    if reasoning_effort:
+        command.extend(["--config", f'model_reasoning_effort="{reasoning_effort}"'])
     command.append("-")
 
     try:
@@ -176,7 +183,12 @@ async def list_tools(timeout_seconds: int = 60) -> list[str]:
         logging.disable(previous_disable_level)
 
 
-async def run_research(prompt: str, timeout_seconds: int = 3600) -> str:
+async def run_research(
+    prompt: str,
+    timeout_seconds: int = 3600,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> str:
     ensure_codex_auth()
     args: dict[str, Any] = {
         "prompt": prompt,
@@ -184,9 +196,11 @@ async def run_research(prompt: str, timeout_seconds: int = 3600) -> str:
         "sandbox": "read-only",
         "cwd": "/workspace",
     }
-    model = os.getenv("CODEX_RESEARCH_MODEL", "").strip()
-    if model:
-        args["model"] = model
+    selected_model = (model or os.getenv("CODEX_RESEARCH_MODEL", "")).strip()
+    if selected_model:
+        args["model"] = selected_model
+    if reasoning_effort:
+        args["config"] = {"model_reasoning_effort": reasoning_effort}
 
     params = StdioServerParameters(command=codex_command(), args=["mcp-server"])
     previous_disable_level = logging.root.manager.disable
@@ -213,7 +227,13 @@ async def run_research(prompt: str, timeout_seconds: int = 3600) -> str:
                 if stderr:
                     mcp_error = f"{mcp_error}; codex stderr: {stderr[-4000:]}"
                 try:
-                    return await asyncio.to_thread(run_research_exec, prompt, timeout_seconds)
+                    return await asyncio.to_thread(
+                        run_research_exec,
+                        prompt,
+                        timeout_seconds,
+                        selected_model,
+                        reasoning_effort,
+                    )
                 except Exception as exec_exc:
                     raise RuntimeError(f"MCP failed: {mcp_error}; CLI fallback failed: {exception_text(exec_exc)}") from exec_exc
     finally:
@@ -274,10 +294,22 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": "Missing prompt"}, status=400)
                     return
                 timeout_seconds = int(payload.get("timeout_seconds") or 3600)
+                model = str(payload.get("model") or "").strip() or None
+                reasoning_effort = str(payload.get("reasoning_effort") or "").strip().lower() or None
+                if reasoning_effort not in {None, "none", "low", "medium", "high", "xhigh"}:
+                    self.send_json({"ok": False, "error": "Invalid reasoning_effort"}, status=400)
+                    return
                 include_auth = request_path == "/research-internal"
                 try:
                     with RESEARCH_SEMAPHORE:
-                        memo = asyncio.run(run_research(prompt, timeout_seconds=timeout_seconds))
+                        memo = asyncio.run(
+                            run_research(
+                                prompt,
+                                timeout_seconds=timeout_seconds,
+                                model=model,
+                                reasoning_effort=reasoning_effort,
+                            )
+                        )
                     response = {"ok": True, "memo": memo}
                     if include_auth:
                         response["auth_json"] = current_auth_json()

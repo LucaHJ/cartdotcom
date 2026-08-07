@@ -22,6 +22,10 @@ Routes:
 - `GET /api/results` - Stored Codex research memos and structured fields.
 - `GET /api/market-impacts` - Ticker percentage moves from article publication time across 1h, 6h, 12h, 1d, 1w, and 1m.
 - `GET /api/ticker-signals` - Ticker-level aggregate score/confidence with contributing article breakdowns.
+- `GET /api/model-experiments` - Latest Luna/Terra experiment progress and completed report.
+- `POST /api/model-experiments/start` - Freeze 1,000 matured articles and start the sequential Luna-medium then Terra-low comparison.
+- `POST /api/model-experiments/dispatch` - Resume or nudge an interrupted experiment.
+- `POST /api/model-experiments/email` - Set the report recipient and retry delivery after completion.
 - `GET /api/simulation` - Paper portfolio built from stored article sentiment and confidence.
 - `POST /api/ingest` - Fetch RSS feeds, dedupe articles, and enqueue research jobs.
 - `POST /api/process-next` - Manually process one pending job.
@@ -81,6 +85,25 @@ If `CONTAINER_API_TOKEN` is set, protected routes require:
 ```text
 Authorization: Bearer <token>
 ```
+
+## Model Experiment Email
+
+Experiment reports are always retained in D1 and shown under **Settings -> Luna vs Terra Model Experiment**. Email delivery is optional and supports either a Cloudflare Email Service binding named `EXPERIMENT_EMAIL` or Resend.
+
+Configure a sender and default recipient as Worker secrets or variables:
+
+```bash
+npx wrangler secret put EXPERIMENT_REPORT_EMAIL_FROM
+npx wrangler secret put EXPERIMENT_REPORT_EMAIL_TO
+```
+
+For Resend, also configure:
+
+```bash
+npx wrangler secret put RESEND_API_KEY
+```
+
+For Cloudflare Email Service, onboard the sender domain and add a `send_email` binding named `EXPERIMENT_EMAIL` to `wrangler.jsonc`. A recipient entered in the dashboard overrides the default recipient. Failure to configure email does not block the experiment or its stored report.
 
 ## Local Checks
 
@@ -146,6 +169,7 @@ Cloudflare's docs note that the first container deploy can take several minutes 
 - Existing article content is backfilled automatically in bounded batches on every scheduled run; research jobs also attempt capture before analysis.
 - Completed articles are archived to R2 in bounded, resumable batches on every scheduled run. Missing and inaccessible article text is catalogued explicitly rather than silently omitted.
 - Cloudflare Queues runs up to eight research consumers concurrently across eight independently scalable Codex containers.
+- Model comparisons reserve at most four workers, yield to newly acquired first-pass articles, run both models against the same frozen 1,000-article cohort, and never write experiment calls into production prediction tables.
 - Ticker validation uses cached Yahoo Finance chart data and stores computed article/ticker impacts in D1.
 - The simulation starts with `$100,000`, buys on sufficiently positive sentiment, sells existing holdings on sufficiently negative sentiment, and sizes trades from score magnitude and confidence.
 - Do not store durable job data on the container filesystem.
