@@ -365,6 +365,7 @@ export interface Env {
   CODEX_AUTH_JSON?: string;
   CODEX_AUTH_STATE_KEY?: string;
   CODEX_RESEARCH_MODEL?: string;
+  CODEX_RESEARCH_REASONING_EFFORT?: string;
   EXPERIMENT_EMAIL?: SendEmail;
   EXPERIMENT_REPORT_EMAIL_FROM?: string;
   EXPERIMENT_REPORT_EMAIL_TO?: string;
@@ -4598,7 +4599,7 @@ function cloneForContainer(request: Request, path: string): Request {
 function containerEnvWithAuth(env: Env, authJson: string): Record<string, string> {
   return {
     CODEX_HOME: "/home/codex/.codex",
-    CODEX_RESEARCH_MODEL: env.CODEX_RESEARCH_MODEL || "gpt-5.6-sol",
+    CODEX_RESEARCH_MODEL: env.CODEX_RESEARCH_MODEL || "gpt-5.6-luna",
     CODEX_AUTH_JSON: authJson,
     OPENAI_API_KEY: env.OPENAI_API_KEY || "",
     CODEX_ACCESS_TOKEN: env.CODEX_ACCESS_TOKEN || "",
@@ -5574,7 +5575,7 @@ async function runContainerResearch(
         prompt,
         timeout_seconds: 300,
         model: options.model || undefined,
-        reasoning_effort: options.reasoningEffort || undefined,
+        reasoning_effort: options.reasoningEffort || env.CODEX_RESEARCH_REASONING_EFFORT || "medium",
       }),
     }),
   );
