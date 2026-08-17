@@ -2410,7 +2410,7 @@ async function handleMediaEnrich(request: Request, env: Env): Promise<Response> 
     if (!payload || !Array.isArray(payload.resources)) return json({ error: `Stored synthesis is invalid for ${jobId}`, results }, { status: 500 });
     payload.resources = await enrichSynthesisResourceMedia(payload.resources);
     await env.REEL_ARCHIVE.put(job.synthesis_json_key, JSON.stringify(payload, null, 2), { httpMetadata: { contentType: "application/json" } });
-    await publishSynthesisHtml(env, job, payload);
+    await publishSynthesisHtml(env, job, payload, { deferIndexRefresh: true });
     results.push({
       job_id: jobId,
       resources: payload.resources.length,
@@ -2420,6 +2420,8 @@ async function handleMediaEnrich(request: Request, env: Env): Promise<Response> 
       articles: payload.resources.filter((resource) => Boolean(resource.article_links?.length)).length,
     });
   }
+  await refreshArtifactCollectionPages(env);
+  await refreshReelLibraryManifest(env);
   return json({ ok: true, results });
 }
 
