@@ -260,8 +260,6 @@ type PredictionOutcome = {
   intervals: Record<string, PredictionPoint>;
   daily_points?: PredictionDailyPoint[];
   days_since_call?: number;
-  call_status?: "active" | "inactive";
-  inactive_at?: string | null;
   current_price?: number | null;
   current_price_at?: string | null;
   current_movement_pct?: number | null;
@@ -273,7 +271,6 @@ type StoredPredictionOutcomeRow = Omit<PredictionOutcome, "title" | "url" | "int
   article_title: string | null;
   article_url: string | null;
   intervals_json: string;
-  accuracy_cutoff_epoch: number | null;
 };
 
 type PredictionOutcomeFilters = {
@@ -2246,7 +2243,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     <section id="simulation-panel">
       <section class="panel">
-        <div class="model-blurb">Prediction Accuracy tracks every bullish or bearish ticker prediction against real market movement. Price collection continues for every call at 12h, 24h, 48h, 1w, 2w, 1m, 3m, 6m, 1y, 2y, 3y, and 4y. A call contributes to the accuracy charts only until a later opposite call is made for the same ticker; same-direction calls continue in parallel.</div>
+        <div class="model-blurb">Prediction Accuracy tracks every bullish or bearish ticker prediction against real market movement. Price collection continues for every call at 12h, 24h, 48h, 1w, 2w, 1m, 3m, 6m, 1y, 2y, 3y, and 4y. Every call remains an independent observation for its full lifetime; later calls do not alter or exclude earlier results.</div>
         <div class="panel-header">
           <div class="panel-title">Accuracy by Interval and Confidence</div>
           <div class="panel-meta" id="prediction-summary-meta">0 intervals</div>
@@ -3106,7 +3103,6 @@ const DASHBOARD_HTML = `<!doctype html>
       const succeeded = count(status.jobs, "succeeded");
       const results = Number((status.results && status.results.count) || 0);
       const predictions = Number((status.predictions && status.predictions.count) || 0);
-      const activePredictions = Number((status.predictions && status.predictions.active_count) || 0);
       const timing = status.timing || {};
       const capacity = Number(timing.parallel_capacity || 8);
       const synthesisSamples = Number(timing.synthesis_samples || 0);
@@ -3123,7 +3119,6 @@ const DASHBOARD_HTML = `<!doctype html>
         metric("Articles", analyzed + queued, analyzed + " actionable analyzed, " + queued + " queued"),
         metric("Results", results, succeeded + " succeeded", [
           { text: predictions.toLocaleString() + " predictions" },
-          { text: activePredictions.toLocaleString() + " active", active: true },
         ]),
         metric("Running", running, running + " of " + capacity + " parallel Codex workers active"),
         metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers"),
@@ -4072,7 +4067,7 @@ const DASHBOARD_HTML = `<!doctype html>
       return pill(
         formatMoney(point.price) + " " + signedPct(change),
         (accurate ? "green" : "red") + (counted ? " accuracy-counted" : ""),
-        "Price sampled at " + formatDate(point.at) + ". " + (accurate ? "Accurate" : "Inaccurate") + " " + direction + " prediction at " + label + " after prediction time. " + (counted ? "Included in the accuracy chart." : "Excluded from the accuracy chart because an opposite call was made before this sample."),
+        "Price sampled at " + formatDate(point.at) + ". " + (accurate ? "Accurate" : "Inaccurate") + " " + direction + " prediction at " + label + " after prediction time. " + (counted ? "Included in the accuracy chart as an independent observation." : "Excluded because the prediction confidence is missing or outside the supported range."),
       );
     }
 
@@ -4081,14 +4076,11 @@ const DASHBOARD_HTML = `<!doctype html>
       const predictionTime = new Date(item.prediction_at).getTime();
       const calculatedDays = Number.isFinite(predictionTime) ? Math.max(0, Math.floor((Date.now() - predictionTime) / 86400000)) : 0;
       const days = Number.isFinite(suppliedDays) ? Math.max(0, Math.floor(suppliedDays)) : calculatedDays;
-      const inactive = item.call_status === "inactive";
-      const status = inactive ? "Inactive" : "Active";
-      const statusHint = inactive
-        ? "A later opposite call ended this prediction's contribution to accuracy at " + formatDate(item.inactive_at) + ". Price tracking continues."
-        : "No later opposite call has ended this prediction's contribution to accuracy.";
+      const status = "Tracked";
+      const statusHint = "This call remains an independent observation and continues contributing whenever a tracked price interval is available.";
       return '<span class="prediction-call-meta" title="' + escapeAttr(days + " days since the call. " + statusHint) + '">' +
         '<span class="prediction-call-age">' + days + 'd</span>' +
-        '<span class="prediction-call-status ' + (inactive ? 'inactive' : 'active') + '">' + status + '</span>' +
+        '<span class="prediction-call-status active">' + status + '</span>' +
       '</span>';
     }
 
@@ -7205,13 +7197,10 @@ const PREDICTION_DATE_MATCH_SQL =
   "datetime(prediction_outcomes.prediction_at) = datetime(COALESCE(articles.published_at, research_results.created_at))";
 const PREDICTION_CONFIDENCE_PCT_SQL =
   "CASE WHEN prediction_outcomes.confidence <= 1 THEN prediction_outcomes.confidence * 100 ELSE prediction_outcomes.confidence END";
-const PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL =
-  "(SELECT MIN(unixepoch(opposite_outcomes.prediction_at)) FROM prediction_outcomes AS opposite_outcomes INNER JOIN research_results AS opposite_results ON opposite_results.id = opposite_outcomes.result_id LEFT JOIN articles AS opposite_articles ON opposite_articles.id = opposite_results.article_id WHERE opposite_outcomes.symbol = prediction_outcomes.symbol AND opposite_outcomes.direction IN ('bullish', 'bearish') AND opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND datetime(opposite_outcomes.prediction_at) = datetime(COALESCE(opposite_articles.published_at, opposite_results.created_at)))";
 const PREDICTION_ACCURACY_CTE_SQL =
-  `valid_accuracy_predictions AS MATERIALIZED (
+  `accuracy_predictions AS MATERIALIZED (
     SELECT prediction_outcomes.id, prediction_outcomes.symbol, prediction_outcomes.direction,
       prediction_outcomes.prediction_at, prediction_outcomes.intervals_json,
-      unixepoch(prediction_outcomes.prediction_at) AS prediction_epoch,
       ${PREDICTION_CONFIDENCE_PCT_SQL} AS confidence_pct
     FROM prediction_outcomes
     INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id
@@ -7219,21 +7208,7 @@ const PREDICTION_ACCURACY_CTE_SQL =
     WHERE prediction_outcomes.direction IN ('bullish', 'bearish')
       AND prediction_outcomes.confidence IS NOT NULL
       AND ${PREDICTION_DATE_MATCH_SQL}
-  ),
-  accuracy_predictions AS MATERIALIZED (
-    SELECT id, symbol, direction, prediction_at, intervals_json, confidence_pct,
-      CASE direction
-        WHEN 'bullish' THEN MIN(CASE WHEN direction = 'bearish' THEN prediction_epoch END) OVER (
-          PARTITION BY symbol ORDER BY prediction_epoch RANGE BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
-        )
-        WHEN 'bearish' THEN MIN(CASE WHEN direction = 'bullish' THEN prediction_epoch END) OVER (
-          PARTITION BY symbol ORDER BY prediction_epoch RANGE BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
-        )
-      END AS accuracy_cutoff_epoch
-    FROM valid_accuracy_predictions
   )`;
-const PREDICTION_HAS_COUNTED_INTERVAL_SQL =
-  "EXISTS (SELECT 1 FROM json_each(prediction_outcomes.intervals_json) AS accuracy_interval WHERE json_type(accuracy_interval.value, '$.change_pct') IN ('integer', 'real') AND NOT EXISTS (SELECT 1 FROM prediction_outcomes AS interval_opposite_outcomes INNER JOIN research_results AS interval_opposite_results ON interval_opposite_results.id = interval_opposite_outcomes.result_id LEFT JOIN articles AS interval_opposite_articles ON interval_opposite_articles.id = interval_opposite_results.article_id WHERE interval_opposite_outcomes.symbol = prediction_outcomes.symbol AND interval_opposite_outcomes.direction IN ('bullish', 'bearish') AND interval_opposite_outcomes.direction != prediction_outcomes.direction AND unixepoch(interval_opposite_outcomes.prediction_at) > unixepoch(prediction_outcomes.prediction_at) AND unixepoch(interval_opposite_outcomes.prediction_at) <= unixepoch(json_extract(accuracy_interval.value, '$.at')) AND datetime(interval_opposite_outcomes.prediction_at) = datetime(COALESCE(interval_opposite_articles.published_at, interval_opposite_results.created_at))))";
 
 async function buildSourceStats(env: Env): Promise<SourceStatsRow[]> {
   await ensurePredictionOutcomeTables(env);
@@ -7253,32 +7228,18 @@ async function buildSourceStats(env: Env): Promise<SourceStatsRow[]> {
       FROM articles
       GROUP BY source_id
     ), valid_source_outcomes AS MATERIALIZED (
-      SELECT articles.source_id, prediction_outcomes.symbol, prediction_outcomes.direction,
-        prediction_outcomes.intervals_json, unixepoch(prediction_outcomes.prediction_at) AS prediction_epoch
+      SELECT articles.source_id, prediction_outcomes.direction, prediction_outcomes.intervals_json
       FROM prediction_outcomes
       INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id
       INNER JOIN articles ON articles.id = research_results.article_id
       WHERE prediction_outcomes.direction IN ('bullish', 'bearish')
         AND ${PREDICTION_DATE_MATCH_SQL}
-    ), eligible_outcomes AS MATERIALIZED (
-      SELECT source_id, direction, intervals_json,
-        CASE direction
-          WHEN 'bullish' THEN MIN(CASE WHEN direction = 'bearish' THEN prediction_epoch END) OVER (
-            PARTITION BY symbol ORDER BY prediction_epoch RANGE BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
-          )
-          WHEN 'bearish' THEN MIN(CASE WHEN direction = 'bullish' THEN prediction_epoch END) OVER (
-            PARTITION BY symbol ORDER BY prediction_epoch RANGE BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
-          )
-        END AS accuracy_cutoff_epoch
-      FROM valid_source_outcomes
     ), eligible_movements AS (
-      SELECT eligible_outcomes.source_id, eligible_outcomes.direction,
+      SELECT valid_source_outcomes.source_id, valid_source_outcomes.direction,
         CAST(json_extract(interval.value, '$.change_pct') AS REAL) AS movement_pct
-      FROM eligible_outcomes
-      CROSS JOIN json_each(eligible_outcomes.intervals_json) AS interval
+      FROM valid_source_outcomes
+      CROSS JOIN json_each(valid_source_outcomes.intervals_json) AS interval
       WHERE json_type(interval.value, '$.change_pct') IN ('integer', 'real')
-        AND (eligible_outcomes.accuracy_cutoff_epoch IS NULL
-          OR unixepoch(json_extract(interval.value, '$.at')) < eligible_outcomes.accuracy_cutoff_epoch)
     ), movement_stats AS (
       SELECT source_id,
         AVG(CASE WHEN direction = 'bullish' THEN movement_pct END) AS bullish_average_movement_pct,
@@ -7513,9 +7474,8 @@ async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>
   const results = await Promise.all(intervalGroups.map((intervals) => {
     const eligibleSql = intervals.map((interval) => {
       const root = `$."${interval.label}"`;
-      return `SELECT direction, confidence_pct, accuracy_cutoff_epoch, '${interval.label}' AS interval,
-        CAST(json_extract(intervals_json, '${root}.change_pct') AS REAL) AS movement_pct,
-        unixepoch(json_extract(intervals_json, '${root}.at')) AS sampled_epoch
+      return `SELECT direction, confidence_pct, '${interval.label}' AS interval,
+        CAST(json_extract(intervals_json, '${root}.change_pct') AS REAL) AS movement_pct
       FROM accuracy_predictions
       WHERE json_type(intervals_json, '${root}.change_pct') IN ('integer', 'real')`;
     }).join("\nUNION ALL\n");
@@ -7529,7 +7489,6 @@ async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>
         FROM interval_values
         WHERE confidence_pct >= 0
           AND confidence_pct <= 100
-          AND (accuracy_cutoff_epoch IS NULL OR sampled_epoch < accuracy_cutoff_epoch)
       )
       SELECT interval, direction,
         CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin,
@@ -7585,10 +7544,6 @@ async function buildPredictionDailySummary(env: Env): Promise<{
           SELECT 1
           FROM json_each(accuracy_predictions.intervals_json) AS interval
           WHERE json_type(interval.value, '$.change_pct') IN ('integer', 'real')
-            AND (
-              accuracy_predictions.accuracy_cutoff_epoch IS NULL
-              OR unixepoch(json_extract(interval.value, '$.at')) < accuracy_predictions.accuracy_cutoff_epoch
-            )
         )
     ),
     series AS (
@@ -7599,8 +7554,6 @@ async function buildPredictionDailySummary(env: Env): Promise<{
         AVG(prediction_daily_points_v2.change_pct) AS average_movement_pct
       FROM chart_predictions
       INNER JOIN prediction_daily_points_v2 ON prediction_daily_points_v2.outcome_id = chart_predictions.id
-      WHERE chart_predictions.accuracy_cutoff_epoch IS NULL
-        OR unixepoch(prediction_daily_points_v2.sampled_at) < chart_predictions.accuracy_cutoff_epoch
       GROUP BY chart_predictions.direction, confidence_bin, prediction_daily_points_v2.day_index
     ),
     coverage AS (
@@ -7638,8 +7591,6 @@ async function buildPredictionDailySummary(env: Env): Promise<{
 }
 
 function predictionOutcomeFromStoredRow(row: StoredPredictionOutcomeRow): PredictionOutcome {
-  const cutoffEpoch = Number(row.accuracy_cutoff_epoch);
-  const hasCutoff = Number.isFinite(cutoffEpoch) && cutoffEpoch > 0;
   const nowEpoch = Math.floor(Date.now() / 1000);
   const predictionEpoch = unixSeconds(row.prediction_at);
   const nullableNumber = (value: unknown): number | null => {
@@ -7652,13 +7603,10 @@ function predictionOutcomeFromStoredRow(row: StoredPredictionOutcomeRow): Predic
   const hasEligibleConfidence = row.confidence !== null && Number.isFinite(confidencePct) && confidencePct >= 0 && confidencePct <= 100;
   const intervals = parsePredictionIntervals(row.intervals_json);
   for (const point of Object.values(intervals)) {
-    const sampledAt = unixSeconds(point.at);
     point.counts_toward_accuracy =
       hasEligibleConfidence &&
       point.change_pct !== null &&
-      point.change_pct !== undefined &&
-      Number.isFinite(sampledAt) &&
-      (!hasCutoff || sampledAt < cutoffEpoch);
+      point.change_pct !== undefined;
   }
   return {
     id: row.id,
@@ -7678,8 +7626,6 @@ function predictionOutcomeFromStoredRow(row: StoredPredictionOutcomeRow): Predic
     intervals,
     daily_points: [],
     days_since_call: Number.isFinite(predictionEpoch) ? Math.max(0, Math.floor((nowEpoch - predictionEpoch) / 86400)) : 0,
-    call_status: hasCutoff && cutoffEpoch <= nowEpoch ? "inactive" : "active",
-    inactive_at: hasCutoff ? isoFromUnix(cutoffEpoch) : null,
     current_price: nullableNumber(row.current_price),
     current_price_at: row.current_price_at || null,
     current_movement_pct: nullableNumber(row.current_movement_pct),
@@ -7792,7 +7738,6 @@ async function buildPredictionPage(
         LIMIT ? OFFSET ?
       )
       SELECT prediction_outcomes.*,
-        ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch,
         (SELECT daily.price FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_price,
         (SELECT daily.sampled_at FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_price_at,
         (SELECT daily.change_pct FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_movement_pct,
@@ -7810,7 +7755,6 @@ async function buildPredictionPage(
     result = await env.NEWS_DB.prepare(
       `WITH filtered_outcomes AS (
       SELECT prediction_outcomes.*,
-        ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch,
         (SELECT daily.price FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_price,
         (SELECT daily.sampled_at FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_price_at,
         (SELECT daily.change_pct FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_movement_pct,
@@ -7864,16 +7808,14 @@ async function buildPredictionCoverage(env: Env): Promise<Record<string, number>
   };
 }
 
-async function buildPredictionStatusCounts(db: D1Database): Promise<{ count: number; active_count: number }> {
+async function buildPredictionStatusCounts(db: D1Database): Promise<{ count: number }> {
   const row = await db.prepare(
     `WITH ${PREDICTION_ACCURACY_CTE_SQL}
-    SELECT COUNT(*) AS count,
-      SUM(CASE WHEN accuracy_cutoff_epoch IS NULL THEN 1 ELSE 0 END) AS active_count
+    SELECT COUNT(*) AS count
     FROM accuracy_predictions`,
-  ).first<{ count: number; active_count: number }>();
+  ).first<{ count: number }>();
   return {
     count: Number(row?.count || 0),
-    active_count: Number(row?.active_count || 0),
   };
 }
 
