@@ -2159,6 +2159,52 @@ async function handlePilotStatus(request: Request, env: Env): Promise<Response> 
   return json({ ok: true, pilot: await pilotRunSummary(env, run.id) });
 }
 
+async function handlePilotReprocess(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{ pilot_id?: string; job_ids?: string[]; reprocess_key?: string; confirm_reprocess?: string }>(request);
+  const pilotId = String(input.pilot_id || "").trim();
+  const reprocessKey = String(input.reprocess_key || "").trim().slice(0, 120);
+  const jobIds = [...new Set((input.job_ids || []).map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 20);
+  if (!pilotId || !reprocessKey || !jobIds.length) return json({ error: "pilot_id, reprocess_key and job_ids are required" }, { status: 400 });
+  if (input.confirm_reprocess !== "REARCHIVE_AND_RESYNTHESISE") {
+    return json({ error: "confirm_reprocess must equal REARCHIVE_AND_RESYNTHESISE" }, { status: 400 });
+  }
+  const placeholders = jobIds.map(() => "?").join(",");
+  const rows = await env.REEL_DB.prepare(
+    `SELECT id,status,stage FROM jobs WHERE pilot_run_id=? AND id IN (${placeholders}) ORDER BY created_at`,
+  ).bind(pilotId, ...jobIds).all<{ id: string; status: string; stage: string }>();
+  if (rows.results.length !== jobIds.length) return json({ error: "Every requested job must belong to the stated pilot" }, { status: 409 });
+  const queued: string[] = [];
+  const idempotent: string[] = [];
+  for (const job of rows.results) {
+    const prior = await env.REEL_DB.prepare(
+      "SELECT id FROM job_events WHERE job_id=? AND detail=? LIMIT 1",
+    ).bind(job.id, `reprocess:${reprocessKey}`).first<{ id: string }>();
+    if (prior) { idempotent.push(job.id); continue; }
+    if (job.status !== "complete") return json({ error: `Job ${job.id} is ${job.status}; only settled completed jobs may be reset` }, { status: 409 });
+    await env.REEL_DB.batch([
+      env.REEL_DB.prepare("DELETE FROM resources WHERE job_id=?").bind(job.id),
+      env.REEL_DB.prepare(
+        `UPDATE jobs SET status='queued',stage='queued',error_code=NULL,error_message=NULL,started_at=NULL,completed_at=NULL,
+          processing_seconds=NULL,codex_input_tokens=NULL,codex_cached_input_tokens=NULL,codex_output_tokens=NULL,
+          codex_reasoning_output_tokens=NULL,codex_total_tokens=NULL,synthesis_json_key=NULL,upload_token_hash=NULL,
+          upload_token_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+      ).bind(job.id),
+      env.REEL_DB.prepare("INSERT INTO job_events(job_id,stage,status,emoji,detail) VALUES (?,'queued','queued','⬇️',?)")
+        .bind(job.id, `reprocess:${reprocessKey}`),
+    ]);
+    try {
+      await env.REEL_QUEUE.send({ jobId: job.id });
+      queued.push(job.id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message.slice(0, 400) : "Queue send failed";
+      await env.REEL_DB.prepare("UPDATE jobs SET status='failed',stage='error_queue',error_code='error_queue',error_message=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(detail, job.id).run();
+      return json({ error: detail, queued, failed_job_id: job.id }, { status: 502 });
+    }
+  }
+  return json({ ok: true, pilot_id: pilotId, reprocess_key: reprocessKey, queued, idempotent }, { status: 202 });
+}
+
 async function handleConfirmLiveMode(env: Env): Promise<Response> {
   if ((env.INGEST_MODE || "disabled") !== "live") return json({ error: "INGEST_MODE is not live" }, { status: 409 });
   const senderId = allowedInstagramSenders(env)[0];
@@ -3609,6 +3655,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   }
   if (url.pathname === "/api/backlog/pilot" && request.method === "POST") return handleBacklogPilot(request, env);
   if (url.pathname === "/api/backlog/pilot" && request.method === "GET") return handlePilotStatus(request, env);
+  if (url.pathname === "/api/backlog/pilot/reprocess" && request.method === "POST") return handlePilotReprocess(request, env);
   if (url.pathname === "/api/admin/instagram-confirm-live" && request.method === "POST") return handleConfirmLiveMode(env);
   if (url.pathname === "/api/admin/instagram-pilot-summary" && request.method === "POST") return handlePilotSummaryDm(request, env);
   if (url.pathname === "/api/admin/instagram-recover-message" && request.method === "POST") return handleRecoverInstagramMessage(request, env);
