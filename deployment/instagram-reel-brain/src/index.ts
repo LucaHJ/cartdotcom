@@ -1377,8 +1377,11 @@ async function wikipediaArtwork(resources: SynthesisResource[]): Promise<Map<num
     return [{ index, artifactType, titles: wikipediaArtworkTitles(resource.name, artifactType) }];
   });
   const results = new Map<number, { url: string; alt: string }>();
-  for (let offset = 0; offset < targets.length; offset += 20) {
-    const batch = targets.slice(offset, offset + 20);
+  // Keep both the page-title and image-file queries comfortably below MediaWiki's
+  // URL/title limits. Large carousel result sets can otherwise lose later posters.
+  const artworkBatchSize = 8;
+  for (let offset = 0; offset < targets.length; offset += artworkBatchSize) {
+    const batch = targets.slice(offset, offset + artworkBatchSize);
     const url = new URL("https://en.wikipedia.org/w/api.php");
     url.searchParams.set("action", "query");
     url.searchParams.set("format", "json");
