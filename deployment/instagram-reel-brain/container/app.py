@@ -1107,6 +1107,7 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
     auth_json = str(payload.get("codex_auth_json") or "").strip()
     instagram_cookies_json = str(payload.get("instagram_cookies_json") or "").strip()
     instagram_media_json = str(payload.get("instagram_media_json") or "").strip()
+    archive_only = bool(payload.get("archive_only"))
     resume_only = bool(payload.get("resume_research"))
     resume_artifacts = payload.get("resume_artifacts") if isinstance(payload.get("resume_artifacts"), list) else []
     timeout_seconds = min(max(int(payload.get("timeout_seconds") or 600), 60), 900)
@@ -1153,6 +1154,16 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
             analysis_frames = carousel_frames[:MAX_FRAMES] if carousel_frames else frames
             for frame in analysis_frames:
                 upload_artifact(callback_base, callback_token, job_id, "frame", frame)
+
+            if archive_only:
+                return {
+                    "ok": True,
+                    "job_id": job_id,
+                    "shortcode": metadata["id"],
+                    "archive_only": True,
+                    "carousel_items": len(carousel_items) or int(metadata.get("carousel_item_count") or 0),
+                    "auth_json": auth_json or None,
+                }
 
             transcript = transcribe(callback_base, callback_token, job_id, audio)
             (workdir / "transcript.json").write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")

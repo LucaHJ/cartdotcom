@@ -1636,7 +1636,7 @@ async function loadCapturedCommentBundle(
     }
   }
   if (reportedCommentCount === null) {
-    const metadataArtifact = artifacts.results.find((artifact) => artifact.object_key.endsWith("/metadata/metadata.json"));
+    const metadataArtifact = artifacts.results.find((artifact) => artifact.object_key.endsWith("/metadata.json"));
     if (metadataArtifact) {
       const object = await env.REEL_ARCHIVE.get(metadataArtifact.object_key);
       const metadata: Record<string, unknown> = object
@@ -2358,6 +2358,41 @@ async function handlePilotReprocess(request: Request, env: Env): Promise<Respons
   return json({ ok: true, pilot_id: pilotId, reprocess_key: reprocessKey, queued, idempotent }, { status: 202 });
 }
 
+async function handlePilotRearchive(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{ pilot_id?: string; job_ids?: string[]; rearchive_key?: string; confirm_rearchive?: string }>(request);
+  const pilotId = String(input.pilot_id || "").trim();
+  const rearchiveKey = String(input.rearchive_key || "").trim().slice(0, 120);
+  const jobIds = [...new Set((input.job_ids || []).map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 20);
+  if (!pilotId || !rearchiveKey || !jobIds.length) return json({ error: "pilot_id, rearchive_key and job_ids are required" }, { status: 400 });
+  if (input.confirm_rearchive !== "REARCHIVE_WITHOUT_CODEX") {
+    return json({ error: "confirm_rearchive must equal REARCHIVE_WITHOUT_CODEX" }, { status: 400 });
+  }
+  const placeholders = jobIds.map(() => "?").join(",");
+  const rows = await env.REEL_DB.prepare(
+    `SELECT id,status FROM jobs WHERE pilot_run_id=? AND id IN (${placeholders}) ORDER BY created_at`,
+  ).bind(pilotId, ...jobIds).all<{ id: string; status: string }>();
+  if (rows.results.length !== jobIds.length) return json({ error: "Every requested job must belong to the stated pilot" }, { status: 409 });
+  const queued: string[] = [];
+  const idempotent: string[] = [];
+  for (const job of rows.results) {
+    const marker = `rearchive-only:${rearchiveKey}`;
+    const prior = await env.REEL_DB.prepare("SELECT id FROM job_events WHERE job_id=? AND detail=? LIMIT 1")
+      .bind(job.id, marker).first<{ id: string }>();
+    if (prior) { idempotent.push(job.id); continue; }
+    if (job.status !== "complete") return json({ error: `Job ${job.id} is ${job.status}; only completed jobs may be rearchived` }, { status: 409 });
+    await env.REEL_DB.batch([
+      env.REEL_DB.prepare(
+        "UPDATE jobs SET status='queued',stage='queued',error_code='rearchive_only',error_message=NULL,started_at=NULL,completed_at=NULL,upload_token_hash=NULL,upload_token_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+      ).bind(job.id),
+      env.REEL_DB.prepare("INSERT INTO job_events(job_id,stage,status,emoji,detail) VALUES (?,'queued','queued','⬇️',?)")
+        .bind(job.id, marker),
+    ]);
+    await env.REEL_QUEUE.send({ jobId: job.id });
+    queued.push(job.id);
+  }
+  return json({ ok: true, pilot_id: pilotId, rearchive_key: rearchiveKey, queued, idempotent }, { status: 202 });
+}
+
 async function handleMediaEnrich(request: Request, env: Env): Promise<Response> {
   const input = await readJson<{ job_ids?: string[]; confirm_enrich?: string }>(request);
   const jobIds = [...new Set((input.job_ids || []).map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 20);
@@ -3023,7 +3058,7 @@ async function handleArtifactUpload(request: Request, env: Env, jobId: string, k
   if (!ARTIFACT_KINDS.has(kind)) return json({ error: "Unsupported artifact kind" }, { status: 400 });
   if (!request.body) return json({ error: "Artifact body is required" }, { status: 400 });
   const filename = (request.headers.get("x-artifact-filename") || `${kind}.bin`).replace(/[^A-Za-z0-9._-]/g, "_");
-  const objectKey = `reels/${job.shortcode || job.id}/${job.id}/${kind}/${filename}`;
+  const objectKey = `reels/${job.shortcode || job.id}/${job.id}/${kind}/attempt-${Math.max(job.attempts, 1)}/${filename}`;
   const contentType = request.headers.get("content-type") || "application/octet-stream";
   const sha = request.headers.get("x-artifact-sha256");
   await env.REEL_ARCHIVE.put(objectKey, request.body, {
@@ -3031,6 +3066,12 @@ async function handleArtifactUpload(request: Request, env: Env, jobId: string, k
     customMetadata: { job_id: job.id, kind, source_url: job.canonical_url || job.source_url, ...(sha ? { sha256: sha } : {}) },
   });
   const head = await env.REEL_ARCHIVE.head(objectKey);
+  const previous = await env.REEL_DB.prepare("SELECT id,object_key FROM artifacts WHERE job_id=? AND kind=?")
+    .bind(job.id, kind).all<{ id: string; object_key: string }>();
+  const superseded = previous.results.filter((artifact) => artifact.object_key !== objectKey && artifact.object_key.endsWith(`/${filename}`));
+  if (superseded.length) {
+    await env.REEL_DB.batch(superseded.map((artifact) => env.REEL_DB.prepare("DELETE FROM artifacts WHERE id=?").bind(artifact.id)));
+  }
   await env.REEL_DB.prepare(
     "INSERT INTO artifacts(id, job_id, kind, object_key, content_type, byte_size, sha256) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(object_key) DO UPDATE SET content_type=excluded.content_type, byte_size=excluded.byte_size, sha256=excluded.sha256, created_at=CURRENT_TIMESTAMP",
   ).bind(uuid(), job.id, kind, objectKey, contentType, head?.size || null, sha || null).run();
@@ -3770,7 +3811,8 @@ async function processJob(env: Env, jobId: string): Promise<void> {
   // Queue delivery, including its configured delayed retries, is the authority for
   // attempt limits. Returning here would silently acknowledge the final retry of
   // an older administratively recovered job before it had another processing run.
-  const resumeArtifacts = await researchResumeManifest(env, job);
+  const archiveOnly = job.error_code === "rearchive_only";
+  const resumeArtifacts = archiveOnly ? null : await researchResumeManifest(env, job);
   const uploadToken = randomToken();
   const tokenHash = await sha256(uploadToken);
   const expires = new Date(Date.now() + 20 * 60_000).toISOString();
@@ -3795,13 +3837,14 @@ async function processJob(env: Env, jobId: string): Promise<void> {
       codex_auth_json: persistedAuth || env.CODEX_AUTH_JSON || "",
       instagram_cookies_json: instagramBrowserCookies ? JSON.stringify(instagramBrowserCookies) : "",
       instagram_media_json: job.source_media_json || "",
+      archive_only: archiveOnly,
       resume_research: Boolean(resumeArtifacts),
       resume_artifacts: resumeArtifacts || [],
       timeout_seconds: 600,
     }),
   }));
-  const result: { ok?: boolean; error?: string; error_code?: string; auth_json?: string } = await response
-    .json<{ ok?: boolean; error?: string; error_code?: string; auth_json?: string }>()
+  const result: { ok?: boolean; error?: string; error_code?: string; auth_json?: string; archive_only?: boolean } = await response
+    .json<{ ok?: boolean; error?: string; error_code?: string; auth_json?: string; archive_only?: boolean }>()
     .catch(() => ({}));
   await persistCodexAuth(env, result.auth_json).catch((error) => console.error("Could not persist refreshed Codex auth", error));
   if (!response.ok || !result.ok) {
@@ -3813,6 +3856,21 @@ async function processJob(env: Env, jobId: string): Promise<void> {
     if (job.pilot_run_id) await pilotRunSummary(env, job.pilot_run_id).catch((error) => console.error("Could not refresh pilot status", error));
     const detail = result.error || `Reel processing failed with HTTP ${response.status}`;
     throw new JobProcessingError(detail, code, retryDelayForFailure(code, detail, job.attempts));
+  }
+  if (archiveOnly && result.archive_only) {
+    const refreshed = await env.REEL_DB.prepare("SELECT * FROM jobs WHERE id=?").bind(job.id).first<JobRow>();
+    const object = job.synthesis_json_key ? await env.REEL_ARCHIVE.get(job.synthesis_json_key) : null;
+    const payload = object ? await object.json<SynthesisPayload>().catch(() => null) : null;
+    if (!refreshed || !payload?.metadata?.title || !Array.isArray(payload.resources)) {
+      throw new JobProcessingError("Stored synthesis is unavailable after archive-only refresh", "error_archive", 30);
+    }
+    payload.resources = await enrichSynthesisResourceMedia(payload.resources);
+    await env.REEL_ARCHIVE.put(job.synthesis_json_key!, JSON.stringify(payload, null, 2), { httpMetadata: { contentType: "application/json" } });
+    await publishSynthesisHtml(env, refreshed, payload);
+    await env.REEL_DB.prepare(
+      "UPDATE jobs SET status='complete',stage='complete',error_code=NULL,error_message=NULL,upload_token_hash=NULL,upload_token_expires_at=NULL,completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+    ).bind(job.id).run();
+    await setStage(env, job, "complete", "complete", "High-resolution archive refreshed without Codex");
   }
   if (job.pilot_run_id) await pilotRunSummary(env, job.pilot_run_id).catch((error) => console.error("Could not refresh pilot status", error));
 }
@@ -3840,6 +3898,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/api/backlog/pilot" && request.method === "POST") return handleBacklogPilot(request, env);
   if (url.pathname === "/api/backlog/pilot" && request.method === "GET") return handlePilotStatus(request, env);
   if (url.pathname === "/api/backlog/pilot/reprocess" && request.method === "POST") return handlePilotReprocess(request, env);
+  if (url.pathname === "/api/backlog/pilot/rearchive" && request.method === "POST") return handlePilotRearchive(request, env);
   if (url.pathname === "/api/admin/media-enrich" && request.method === "POST") return handleMediaEnrich(request, env);
   if (url.pathname === "/api/admin/instagram-confirm-live" && request.method === "POST") return handleConfirmLiveMode(env);
   if (url.pathname === "/api/admin/instagram-pilot-summary" && request.method === "POST") return handlePilotSummaryDm(request, env);
