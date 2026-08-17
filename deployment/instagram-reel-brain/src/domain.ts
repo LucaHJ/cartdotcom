@@ -1,5 +1,23 @@
 export type InstagramReaction = string;
 
+export type ResourceMedia = {
+  hero_image_url?: string | null;
+  hero_image_alt?: string | null;
+  spotify_url?: string | null;
+  youtube_candidates?: Array<{
+    title: string;
+    channel: string;
+    url: string;
+    confidence: "high" | "medium" | "low";
+    match_reason: string;
+  }>;
+  article_links?: Array<{
+    title: string;
+    publisher: string;
+    url: string;
+  }>;
+};
+
 export type InstagramMediaClassification = {
   mediaType: "carousel" | "reel" | "post" | "unknown";
   itemCount: number;
@@ -532,6 +550,23 @@ function safeHttpUrl(value: unknown): string {
   }
 }
 
+function youtubeVideoId(value: unknown): string {
+  const url = safeHttpUrl(value);
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    let id = "";
+    if (host === "youtu.be") id = parsed.pathname.split("/").filter(Boolean)[0] || "";
+    if (["youtube.com", "m.youtube.com", "music.youtube.com"].includes(host)) {
+      id = parsed.searchParams.get("v") || parsed.pathname.match(/^\/(?:shorts|embed|live)\/([A-Za-z0-9_-]{11})/)?.[1] || "";
+    }
+    return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : "";
+  } catch {
+    return "";
+  }
+}
+
 function formatCommentTimestamp(value: unknown): string {
   if (value === null || value === undefined || value === "") return "";
   const numeric = Number(value);
@@ -678,6 +713,7 @@ export function renderResourceHtml(input: {
   whyUseful: string;
   guide: string;
   sources: string[];
+  media?: ResourceMedia | null;
   artifactType?: string | null;
   sourceReels?: Array<{
     jobId: string;
@@ -693,6 +729,23 @@ export function renderResourceHtml(input: {
   const artifactCollection = artifactType ? ARTIFACT_COLLECTION_DEFINITIONS[artifactType] : null;
   const collectionPath = artifactCollection ? `${artifactCollection.folder}/index.html` : "";
   const canonicalUrl = safeHttpUrl(input.canonicalUrl);
+  const heroImageUrl = safeHttpUrl(input.media?.hero_image_url);
+  const spotifyUrl = safeHttpUrl(input.media?.spotify_url);
+  const youtubeCandidates = (input.media?.youtube_candidates || []).slice(0, 3).flatMap((candidate) => {
+    const id = youtubeVideoId(candidate.url);
+    const url = safeHttpUrl(candidate.url);
+    return id && url ? [{ ...candidate, id, url }] : [];
+  });
+  const youtubeMatches = youtubeCandidates.length
+    ? `<section class="resource-media-section"><h2>${youtubeCandidates.length === 1 ? "YouTube video" : "Possible YouTube matches"}</h2>${youtubeCandidates.length > 1 ? "<p>The source was ambiguous. Expand a candidate to preview it and choose the correct video.</p>" : ""}<div class="youtube-match-grid">${youtubeCandidates.map((candidate, index) => `<details class="youtube-match"${youtubeCandidates.length === 1 ? " open" : ""}><summary><img src="https://i.ytimg.com/vi/${escapeHtml(candidate.id)}/hqdefault.jpg" alt="${escapeHtml(candidate.title)} thumbnail" loading="lazy" referrerpolicy="no-referrer"><span><small>${escapeHtml(candidate.confidence)} confidence${youtubeCandidates.length > 1 ? ` · candidate ${index + 1}` : ""}</small><strong>${escapeHtml(candidate.title)}</strong><span>${escapeHtml(candidate.channel)}</span></span></summary><div class="youtube-match-detail"><p>${escapeHtml(candidate.match_reason)}</p><div class="youtube-embed"><iframe src="https://www.youtube.com/embed/${escapeHtml(candidate.id)}" title="${escapeHtml(candidate.title)}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div><a href="${escapeHtml(candidate.url)}" target="_blank" rel="noopener noreferrer">Open on YouTube</a></div></details>`).join("")}</div></section>`
+    : "";
+  const articleLinks = (input.media?.article_links || []).flatMap((article) => {
+    const url = safeHttpUrl(article.url);
+    return url ? [{ ...article, url }] : [];
+  });
+  const articles = articleLinks.length
+    ? `<section class="resource-media-section"><h2>Mentioned articles</h2><ul class="article-link-list">${articleLinks.map((article) => `<li><a href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.title)}</a><span>${escapeHtml(article.publisher)}</span></li>`).join("")}</ul></section>`
+    : "";
   const sources = input.sources.length
     ? input.sources.map((source) => {
       const url = safeHttpUrl(source);
@@ -710,13 +763,16 @@ export function renderResourceHtml(input: {
   <header class="document-header">
     <p class="document-kicker">${escapeHtml(definition.label)} · ${escapeHtml(definition.folder)}/</p>
     <h1>${escapeHtml(input.name)}</h1>
-    <div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button>${collectionPath ? `<a href="#${encodeURIComponent(collectionPath)}" data-library-path="${escapeHtml(collectionPath)}">View all ${escapeHtml(artifactCollection!.title.toLowerCase())}</a>` : ""}${backToReel}${canonicalUrl ? `<a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noopener noreferrer">Official or canonical link</a>` : ""}</div>
+    <div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button>${collectionPath ? `<a href="#${encodeURIComponent(collectionPath)}" data-library-path="${escapeHtml(collectionPath)}">View all ${escapeHtml(artifactCollection!.title.toLowerCase())}</a>` : ""}${backToReel}${canonicalUrl ? `<a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noopener noreferrer">Official or canonical link</a>` : ""}${spotifyUrl ? `<a href="${escapeHtml(spotifyUrl)}" target="_blank" rel="noopener noreferrer">Open on Spotify</a>` : ""}</div>
   </header>
+  ${heroImageUrl ? `<figure class="resource-hero"><img src="${escapeHtml(heroImageUrl)}" alt="${escapeHtml(input.media?.hero_image_alt || `${input.name} artwork`)}" loading="lazy" referrerpolicy="no-referrer"><figcaption>${escapeHtml(input.media?.hero_image_alt || input.name)}</figcaption></figure>` : ""}
   <section><h2>Profile</h2>${renderProse(input.summary)}</section>
   <section><h2>Why it is useful</h2>${renderProse(input.whyUseful)}</section>
   <section><h2>Practical guide</h2>${renderProse(input.guide)}</section>
   <section><h2>Research standard</h2><ul>${definition.rules.map((rule) => `<li>${escapeHtml(rule)}</li>`).join("")}</ul></section>
   <section><h2>Research sources</h2><ul class="source-list">${sources}</ul></section>
+  ${youtubeMatches}
+  ${articles}
   ${artifactType ? `<section><h2>Source Reels</h2>${sourceReelCards}</section>` : ""}
 </article>`;
 }

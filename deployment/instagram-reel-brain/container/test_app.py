@@ -40,6 +40,14 @@ class FakeJsonResponse:
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_selects_largest_image_candidate_instead_of_last_thumbnail(self):
+        candidates = [
+            {"url": "https://example.test/original.jpg", "width": 1170, "height": 1560},
+            {"url": "https://example.test/medium.jpg", "width": 720, "height": 960},
+            {"url": "https://example.test/thumb.jpg", "width": 150, "height": 150},
+        ]
+        self.assertEqual(app.select_largest_image_candidate(candidates)["url"], "https://example.test/original.jpg")
+
     def test_instagram_cookie_file_is_scoped_and_private(self):
         with tempfile.TemporaryDirectory() as raw:
             workdir = Path(raw)

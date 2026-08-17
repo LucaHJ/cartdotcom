@@ -271,6 +271,19 @@ def download_remote_media(url: str, destination: Path, headers: dict[str, Any] |
         raise PipelineError("error_download", "A carousel item download produced an empty file")
 
 
+def select_largest_image_candidate(thumbnails: list[dict[str, Any]]) -> dict[str, Any]:
+    if not thumbnails:
+        raise PipelineError("error_download", "Carousel slide exposed no downloadable image candidate")
+    return max(
+        thumbnails,
+        key=lambda row: (
+            int(row.get("width") or 0) * int(row.get("height") or 0),
+            int(row.get("width") or 0),
+            int(row.get("height") or 0),
+        ),
+    )
+
+
 def instagram_cookie_values(cookie_path: Path | None) -> dict[str, str]:
     if not cookie_path or not cookie_path.exists():
         return {}
@@ -667,7 +680,7 @@ def download_instagram_media(
             thumbnails = [row for row in (entry.get("thumbnails") or []) if isinstance(row, dict) and row.get("url")]
             if not thumbnails:
                 raise PipelineError("error_download", f"Carousel slide {index} exposed no downloadable media")
-            selected = thumbnails[-1]
+            selected = select_largest_image_candidate(thumbnails)
             extension = "png" if ".png" in str(selected["url"]).lower() else "jpg"
             source = str(selected["url"])
         item_path = items_dir / f"slide-{index:02d}.{extension}"
@@ -899,6 +912,15 @@ Inspect every attached sampled frame. For a carousel, the frames are the origina
 Return JSON matching the supplied schema. The root Reel must branch to focused resource profiles. Classify every resource as exactly one of: recipe, software, product, service, organization, person, place, technique, learning, media, reference, or other. Also set artifact_type when the resource is a reusable font, quote, film, TV show, recipe, book, piece of music, or podcast; otherwise set it to null. For a shared artifact, use its concise canonical work name (for example, "Meditations", not "Meditations by Marcus Aurelius" or an edition-specific heading) so references from separate Reels merge into one durable profile. Create focused resource entries for useful named artifacts so they can join their central collection, but do not manufacture entries for incidental background details. Every resource needs a concise profile, why it matters, a practical guide, a canonical URL when available, and source URLs. For quotes, verify the wording, speaker, original source, and context. If a resource cannot be verified, say so and lower confidence rather than inventing details. Ignore engagement bait and irrelevant comments.
 
 Identify the Reel's music or audio only when evidence supports it. First use the Instagram audio metadata supplied in Reel metadata. If that is absent, use an explicit spoken/visible title plus web research. Never guess from musical style or lyrics alone. Set audio to unidentified when no reliable match exists. A source URL must be the Instagram audio page or a canonical page for the identified recording.
+
+For every mentioned film, TV programme, YouTube video, song, album, podcast, or article, resolve the real canonical work rather than treating promotional overlay copy as its title. Thumbnail slogans such as "THEY TRIED" are visual observations, not canonical titles. Read the platform title, creator/channel, publisher, byline, and other visible metadata separately. When a title is truncated, research the visible title fragment together with the creator/channel and subject. Never silently promote a thumbnail slogan into a resource name.
+
+Populate every resource's media fields, using null or empty arrays when they do not apply:
+- youtube_candidates: if one exact YouTube video is verified, return that one canonical watch URL with its exact title, channel, confidence, and match reason. If identity remains ambiguous, return the three strongest plausible canonical YouTube watch URLs, ordered best-first, and explain the distinguishing evidence. Never return a YouTube search-results URL.
+- hero_image_url and hero_image_alt: for films use a reputable poster image; for music use album/single cover art; for a verified YouTube video use its official YouTube thumbnail. Use a direct HTTPS image URL and record the page that establishes provenance in sources.
+- spotify_url: for a recommended song or album, find the canonical open.spotify.com track or album URL. Do not substitute a generic search URL.
+- article_links: return the canonical article URL, exact headline, and publisher for every article genuinely mentioned. Do not use an outlet homepage or search-results URL.
+If an exact work cannot be verified, preserve the ambiguity in youtube_candidates or the guide instead of inventing a canonical identity.
 
 Apply the rule for the selected resource type inside the practical guide:
 - recipe: ingredients and quantities; yield; total and active time; ordered method; substitutions; dietary flags; food-safety notes; original recipe source.

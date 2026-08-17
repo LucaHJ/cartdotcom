@@ -94,6 +94,36 @@ test("renders bidirectional artifact collection and source Reel links", () => {
   assert.match(collection, /data-gallery-action/);
 });
 
+test("renders verified media links, artwork, and selectable YouTube candidates", () => {
+  const detail = domain.renderResourceHtml({
+    rootId: "job-media",
+    rootPath: "reels/example/index.html",
+    name: "Referenced media",
+    kind: "media",
+    canonicalUrl: "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    summary: "Media mentioned by the carousel.",
+    whyUseful: "Provides the original context.",
+    guide: "Compare the candidates before selecting one.",
+    sources: ["https://example.com/source"],
+    media: {
+      hero_image_url: "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg",
+      hero_image_alt: "Official video thumbnail",
+      spotify_url: "https://open.spotify.com/track/example",
+      youtube_candidates: [
+        { title: "Candidate one", channel: "Channel A", url: "https://www.youtube.com/watch?v=M7lc1UVf-VE", confidence: "medium", match_reason: "Title fragment matches." },
+        { title: "Candidate two", channel: "Channel B", url: "https://youtu.be/dQw4w9WgXcQ", confidence: "low", match_reason: "Subject matches but creator does not." },
+      ],
+      article_links: [{ title: "Original article", publisher: "Example", url: "https://example.com/article" }],
+    },
+  });
+  assert.match(detail, /class="resource-hero"/);
+  assert.match(detail, /Open on Spotify/);
+  assert.equal((detail.match(/class="youtube-match"/g) || []).length, 2);
+  assert.match(detail, /youtube\.com\/embed\/M7lc1UVf-VE/);
+  assert.match(detail, /Possible YouTube matches/);
+  assert.match(detail, /Original article/);
+});
+
 test("routes Instagram text into retrieval, note, status, help, and emoji commands", () => {
   assert.deepEqual(domain.parseMessageCommand("send me the video about robot arms that mentions MoveIt"), {
     intent: "retrieval",

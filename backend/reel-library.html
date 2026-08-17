@@ -438,9 +438,23 @@
         function sanitizeArticle(html) {
             const template = document.createElement("template");
             template.innerHTML = String(html || "");
-            const blocked = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "FORM", "INPUT", "TEXTAREA", "SELECT", "LINK", "META"]);
+            const blocked = new Set(["SCRIPT", "STYLE", "OBJECT", "EMBED", "FORM", "INPUT", "TEXTAREA", "SELECT", "LINK", "META"]);
             for (const element of [...template.content.querySelectorAll("*")]) {
                 if (blocked.has(element.tagName)) { element.remove(); continue; }
+                if (element.tagName === "IFRAME") {
+                    const src = element.getAttribute("src") || "";
+                    if (!/^https:\/\/www\.youtube\.com\/embed\/[A-Za-z0-9_-]{11}(?:[?&][A-Za-z0-9_=&.-]*)?$/i.test(src)) {
+                        element.remove();
+                        continue;
+                    }
+                    const allowed = new Set(["src", "title", "loading", "allow", "referrerpolicy", "allowfullscreen"]);
+                    for (const attribute of [...element.attributes]) if (!allowed.has(attribute.name.toLowerCase())) element.removeAttribute(attribute.name);
+                    element.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation allow-popups");
+                }
+                if (element.tagName === "IMG") {
+                    const src = element.getAttribute("src") || "";
+                    if (!/^https:\/\//i.test(src)) element.removeAttribute("src");
+                }
                 for (const attribute of [...element.attributes]) {
                     const name = attribute.name.toLowerCase();
                     if (name.startsWith("on") || name === "style" || name === "srcdoc") element.removeAttribute(attribute.name);

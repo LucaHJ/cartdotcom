@@ -30,6 +30,7 @@ import {
   type CapturedComment,
   type ArtifactType,
   type ResourceKind,
+  type ResourceMedia,
 } from "./domain";
 
 type ReelJobMessage = { jobId: string } | { type: "carousel_resolve"; sourceMessageId: string };
@@ -100,6 +101,11 @@ type SynthesisResource = {
   why_useful: string;
   guide: string;
   sources?: string[];
+  hero_image_url?: string | null;
+  hero_image_alt?: string | null;
+  spotify_url?: string | null;
+  youtube_candidates?: ResourceMedia["youtube_candidates"];
+  article_links?: ResourceMedia["article_links"];
 };
 
 type RoutedSynthesisResource = SynthesisResource & {
@@ -1325,6 +1331,7 @@ type CanonicalArtifactRow = {
   why_useful: string | null;
   guide_text: string | null;
   evidence_json: string | null;
+  media_json: string | null;
   job_id: string;
   reel_title: string | null;
   author_username: string | null;
@@ -1342,7 +1349,7 @@ async function refreshCanonicalArtifactPage(env: Env, canonicalKey: string): Pro
   const definition = ARTIFACT_COLLECTION_DEFINITIONS[artifactType];
   if (!definition) return null;
   const rows = await env.REEL_DB.prepare(
-    `SELECT r.name,r.kind,r.artifact_type,r.canonical_url,r.summary,r.why_useful,r.guide_text,r.evidence_json,
+    `SELECT r.name,r.kind,r.artifact_type,r.canonical_url,r.summary,r.why_useful,r.guide_text,r.evidence_json,r.media_json,
       j.id AS job_id,j.title AS reel_title,j.author_username,j.shortcode,j.library_path AS root_path,
       CASE WHEN EXISTS(SELECT 1 FROM artifacts a WHERE a.job_id=j.id AND a.kind='carousel_item') THEN 'carousel'
         WHEN COALESCE(j.canonical_url,j.source_url) LIKE '%/p/%' THEN 'post' ELSE 'reel' END AS media_type
@@ -1374,6 +1381,14 @@ async function refreshCanonicalArtifactPage(env: Env, canonicalKey: string): Pro
       mediaType: row.media_type,
     }] as const;
   })).values()];
+  const media = rows.results.flatMap((row) => {
+    try {
+      const value = JSON.parse(row.media_json || "null") as ResourceMedia | null;
+      return value && typeof value === "object" ? [value] : [];
+    } catch {
+      return [];
+    }
+  }).sort((left, right) => JSON.stringify(right).length - JSON.stringify(left).length)[0] || null;
   const html = renderResourceHtml({
     rootId: sourceReels[0]?.jobId || "",
     rootPath: "",
@@ -1386,6 +1401,7 @@ async function refreshCanonicalArtifactPage(env: Env, canonicalKey: string): Pro
     sources: [...sources],
     artifactType,
     sourceReels,
+    media,
   });
   const key = `library/${path}`;
   await env.REEL_ARCHIVE.put(key, html, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
@@ -1562,6 +1578,7 @@ async function publishSynthesisHtml(
         guide: resource.guide,
         sources: resource.sources || [],
         artifactType: resource.artifactType,
+        media: resource,
       });
       await env.REEL_ARCHIVE.put(key, html, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
       await putReelLibraryHtml(env, path, html, {
@@ -1578,8 +1595,8 @@ async function publishSynthesisHtml(
       });
     }
     statements.push(
-      env.REEL_DB.prepare("UPDATE resources SET canonical_key=?,guide_text=?,guide_html_key=?,library_path=? WHERE job_id=? AND slug=?")
-        .bind(resource.canonicalKey, resource.guide, key, path, job.id, resource.slug),
+      env.REEL_DB.prepare("UPDATE resources SET canonical_key=?,guide_text=?,media_json=?,guide_html_key=?,library_path=? WHERE job_id=? AND slug=?")
+        .bind(resource.canonicalKey, resource.guide, JSON.stringify({ hero_image_url: resource.hero_image_url || null, hero_image_alt: resource.hero_image_alt || null, spotify_url: resource.spotify_url || null, youtube_candidates: resource.youtube_candidates || [], article_links: resource.article_links || [] }), key, path, job.id, resource.slug),
     );
   }
   await removeSupersededReelLibraryFiles(
@@ -2930,10 +2947,10 @@ async function handleComplete(request: Request, env: Env, jobId: string): Promis
   for (const resource of resources) {
     statements.push(
       env.REEL_DB.prepare(
-        "INSERT INTO resources(id, job_id, name, slug, kind, artifact_type, canonical_key, canonical_url, summary, why_useful, guide_text, guide_markdown_key, evidence_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, slug) DO UPDATE SET name=excluded.name, kind=excluded.kind, artifact_type=excluded.artifact_type, canonical_key=excluded.canonical_key, canonical_url=excluded.canonical_url, summary=excluded.summary, why_useful=excluded.why_useful, guide_text=excluded.guide_text, guide_markdown_key=excluded.guide_markdown_key, evidence_json=excluded.evidence_json",
+        "INSERT INTO resources(id, job_id, name, slug, kind, artifact_type, canonical_key, canonical_url, summary, why_useful, guide_text, guide_markdown_key, evidence_json, media_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, slug) DO UPDATE SET name=excluded.name, kind=excluded.kind, artifact_type=excluded.artifact_type, canonical_key=excluded.canonical_key, canonical_url=excluded.canonical_url, summary=excluded.summary, why_useful=excluded.why_useful, guide_text=excluded.guide_text, guide_markdown_key=excluded.guide_markdown_key, evidence_json=excluded.evidence_json, media_json=excluded.media_json",
       ).bind(
         uuid(), job.id, resource.name, resource.slug, resource.kind || null, resource.artifactType, resource.canonicalKey, resource.canonical_url || null,
-        resource.summary, resource.why_useful, resource.guide, null, JSON.stringify(resource.sources || []),
+        resource.summary, resource.why_useful, resource.guide, null, JSON.stringify(resource.sources || []), JSON.stringify({ hero_image_url: resource.hero_image_url || null, hero_image_alt: resource.hero_image_alt || null, spotify_url: resource.spotify_url || null, youtube_candidates: resource.youtube_candidates || [], article_links: resource.article_links || [] }),
       ),
     );
   }
