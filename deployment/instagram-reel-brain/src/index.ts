@@ -1332,12 +1332,14 @@ function routeSynthesisResources(job: JobRow, payload: SynthesisPayload): Routed
   });
 }
 
-function wikipediaArtworkTitle(name: string, artifactType: ArtifactType): string {
+function wikipediaArtworkTitles(name: string, artifactType: ArtifactType): string[] {
   const cleaned = name.trim();
   if (artifactType === "film") {
-    return /\(\d{4}\)$/.test(cleaned) ? cleaned.replace(/\((\d{4})\)$/, "($1 film)") : `${cleaned} (film)`;
+    const qualified = /\(\d{4}\)$/.test(cleaned) ? cleaned.replace(/\((\d{4})\)$/, "($1 film)") : `${cleaned} (film)`;
+    return qualified === cleaned ? [cleaned] : [qualified, cleaned];
   }
-  return /\((?:TV series|television series)\)$/i.test(cleaned) ? cleaned : `${cleaned} (TV series)`;
+  const qualified = /\((?:TV series|television series)\)$/i.test(cleaned) ? cleaned : `${cleaned} (TV series)`;
+  return qualified === cleaned ? [cleaned] : [qualified, cleaned];
 }
 
 function resolvedWikipediaTitle(
@@ -1372,7 +1374,7 @@ async function wikipediaArtwork(resources: SynthesisResource[]): Promise<Map<num
     const kind = normalizeResourceKind(resource.kind, resource.name, resource.summary);
     const artifactType = normalizeArtifactType(resource.artifact_type, kind, resource.name, resource.summary);
     if ((artifactType !== "film" && artifactType !== "tv_show") || resource.hero_image_url) return [];
-    return [{ index, artifactType, title: wikipediaArtworkTitle(resource.name, artifactType) }];
+    return [{ index, artifactType, titles: wikipediaArtworkTitles(resource.name, artifactType) }];
   });
   const results = new Map<number, { url: string; alt: string }>();
   for (let offset = 0; offset < targets.length; offset += 20) {
@@ -1386,7 +1388,7 @@ async function wikipediaArtwork(resources: SynthesisResource[]): Promise<Map<num
     url.searchParams.set("piprop", "original|thumbnail");
     url.searchParams.set("pithumbsize", "1200");
     url.searchParams.set("imlimit", "20");
-    url.searchParams.set("titles", batch.map((target) => target.title).join("|"));
+    url.searchParams.set("titles", batch.flatMap((target) => target.titles).join("|"));
     try {
       const response = await fetch(url, { headers: { "user-agent": "Instagram-Reel-Brain/1.0 (private research archive)" } });
       if (!response.ok) continue;
@@ -1401,15 +1403,18 @@ async function wikipediaArtwork(resources: SynthesisResource[]): Promise<Map<num
       const pages = new Map((payload.query?.pages || []).map((page) => [page.title || "", page]));
       const unresolvedFiles: Array<{ target: typeof batch[number]; title: string }> = [];
       for (const target of batch) {
-        const page = pages.get(resolvedWikipediaTitle(target.title, mappings));
-        const imageUrl = page?.original?.source || page?.thumbnail?.source || "";
-        if (imageUrl.startsWith("https://")) {
+        const candidatePages = target.titles.flatMap((title) => {
+          const page = pages.get(resolvedWikipediaTitle(title, mappings));
+          return page && !page.missing ? [page] : [];
+        });
+        const directImage = candidatePages.map((page) => page.original?.source || page.thumbnail?.source || "").find((source) => source.startsWith("https://")) || "";
+        if (directImage) {
           results.set(target.index, {
-            url: imageUrl,
+            url: directImage,
             alt: `${resources[target.index].name} ${target.artifactType === "film" ? "film poster or cover image" : "television artwork"}`,
           });
-        } else if (page) {
-          const title = bestWikipediaArtworkFile(page, resources[target.index].name);
+        } else {
+          const title = candidatePages.map((page) => bestWikipediaArtworkFile(page, resources[target.index].name)).find(Boolean);
           if (title) unresolvedFiles.push({ target, title });
         }
       }
@@ -2351,6 +2356,36 @@ async function handlePilotReprocess(request: Request, env: Env): Promise<Respons
     }
   }
   return json({ ok: true, pilot_id: pilotId, reprocess_key: reprocessKey, queued, idempotent }, { status: 202 });
+}
+
+async function handleMediaEnrich(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{ job_ids?: string[]; confirm_enrich?: string }>(request);
+  const jobIds = [...new Set((input.job_ids || []).map((value) => String(value || "").trim()).filter(Boolean))].slice(0, 20);
+  if (!jobIds.length) return json({ error: "job_ids are required" }, { status: 400 });
+  if (input.confirm_enrich !== "ENRICH_MEDIA_AND_REPUBLISH") {
+    return json({ error: "confirm_enrich must equal ENRICH_MEDIA_AND_REPUBLISH" }, { status: 400 });
+  }
+  const results: Array<{ job_id: string; resources: number; artwork: number; youtube: number; spotify: number; articles: number }> = [];
+  for (const jobId of jobIds) {
+    const job = await env.REEL_DB.prepare("SELECT * FROM jobs WHERE id=? AND status='complete' AND synthesis_json_key IS NOT NULL")
+      .bind(jobId).first<JobRow>();
+    if (!job?.synthesis_json_key) return json({ error: `Completed synthesis is unavailable for ${jobId}`, results }, { status: 409 });
+    const object = await env.REEL_ARCHIVE.get(job.synthesis_json_key);
+    const payload = object ? await object.json<SynthesisPayload>().catch(() => null) : null;
+    if (!payload || !Array.isArray(payload.resources)) return json({ error: `Stored synthesis is invalid for ${jobId}`, results }, { status: 500 });
+    payload.resources = await enrichSynthesisResourceMedia(payload.resources);
+    await env.REEL_ARCHIVE.put(job.synthesis_json_key, JSON.stringify(payload, null, 2), { httpMetadata: { contentType: "application/json" } });
+    await publishSynthesisHtml(env, job, payload);
+    results.push({
+      job_id: jobId,
+      resources: payload.resources.length,
+      artwork: payload.resources.filter((resource) => Boolean(resource.hero_image_url)).length,
+      youtube: payload.resources.filter((resource) => Boolean(resource.youtube_candidates?.length)).length,
+      spotify: payload.resources.filter((resource) => Boolean(resource.spotify_url)).length,
+      articles: payload.resources.filter((resource) => Boolean(resource.article_links?.length)).length,
+    });
+  }
+  return json({ ok: true, results });
 }
 
 async function handleConfirmLiveMode(env: Env): Promise<Response> {
@@ -3805,6 +3840,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/api/backlog/pilot" && request.method === "POST") return handleBacklogPilot(request, env);
   if (url.pathname === "/api/backlog/pilot" && request.method === "GET") return handlePilotStatus(request, env);
   if (url.pathname === "/api/backlog/pilot/reprocess" && request.method === "POST") return handlePilotReprocess(request, env);
+  if (url.pathname === "/api/admin/media-enrich" && request.method === "POST") return handleMediaEnrich(request, env);
   if (url.pathname === "/api/admin/instagram-confirm-live" && request.method === "POST") return handleConfirmLiveMode(env);
   if (url.pathname === "/api/admin/instagram-pilot-summary" && request.method === "POST") return handlePilotSummaryDm(request, env);
   if (url.pathname === "/api/admin/instagram-recover-message" && request.method === "POST") return handleRecoverInstagramMessage(request, env);
