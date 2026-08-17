@@ -124,6 +124,26 @@ test("renders verified media links, artwork, and selectable YouTube candidates",
   assert.match(detail, /Original article/);
 });
 
+test("adds deterministic YouTube, Spotify, and article fallbacks", () => {
+  const youtube = domain.applyMediaLinkFallbacks({
+    name: "Exact video",
+    kind: "media",
+    canonical_url: "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+  }, null);
+  assert.equal(youtube.youtube_candidates.length, 1);
+  assert.equal(youtube.hero_image_url, "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg");
+
+  const music = domain.applyMediaLinkFallbacks({ name: "Song and artist", kind: "media" }, "music");
+  assert.equal(music.spotify_url, "https://open.spotify.com/search/Song%20and%20artist");
+
+  const article = domain.applyMediaLinkFallbacks({
+    name: "Mentioned investigation",
+    kind: "reference",
+    canonical_url: "https://example.com/report",
+  }, null);
+  assert.deepEqual(article.article_links, [{ title: "Mentioned investigation", publisher: "example.com", url: "https://example.com/report" }]);
+});
+
 test("routes Instagram text into retrieval, note, status, help, and emoji commands", () => {
   assert.deepEqual(domain.parseMessageCommand("send me the video about robot arms that mentions MoveIt"), {
     intent: "retrieval",

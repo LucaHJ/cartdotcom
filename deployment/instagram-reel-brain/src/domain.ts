@@ -18,6 +18,53 @@ export type ResourceMedia = {
   }>;
 };
 
+type MediaLinkResource = ResourceMedia & {
+  name: string;
+  kind?: string | null;
+  canonical_url?: string | null;
+};
+
+export function applyMediaLinkFallbacks(resource: MediaLinkResource, artifactType: ArtifactType | null): ResourceMedia {
+  const canonicalUrl = safeHttpUrl(resource.canonical_url);
+  const canonicalYoutubeId = youtubeVideoId(canonicalUrl);
+  const youtubeCandidates = (resource.youtube_candidates || []).slice(0, 3);
+  if (!youtubeCandidates.length && canonicalYoutubeId && canonicalUrl) {
+    youtubeCandidates.push({
+      title: resource.name,
+      channel: "Channel not recorded",
+      url: canonicalUrl,
+      confidence: "high",
+      match_reason: "The researched canonical URL is an exact YouTube video URL.",
+    });
+  }
+  const firstYoutubeId = youtubeCandidates.map((candidate) => youtubeVideoId(candidate.url)).find(Boolean) || null;
+  const canonicalSpotify = canonicalUrl && /^https:\/\/open\.spotify\.com\/(track|album|episode|show)\//i.test(canonicalUrl)
+    ? canonicalUrl
+    : null;
+  const spotifyUrl = safeHttpUrl(resource.spotify_url)
+    || canonicalSpotify
+    || (artifactType === "music" ? `https://open.spotify.com/search/${encodeURIComponent(resource.name)}` : null);
+  const articleLinks = [...(resource.article_links || [])];
+  const canonicalIsArticle = canonicalUrl
+    && !canonicalYoutubeId
+    && !/^https:\/\/(?:open\.)?spotify\.com\//i.test(canonicalUrl)
+    && !/^https:\/\/(?:www\.)?instagram\.com\//i.test(canonicalUrl)
+    && normalizeResourceKind(resource.kind, resource.name, "") === "reference";
+  if (canonicalIsArticle && !articleLinks.some((article) => safeHttpUrl(article.url) === canonicalUrl)) {
+    let publisher = "Source publication";
+    try { publisher = new URL(canonicalUrl).hostname.replace(/^www\./, ""); } catch { /* already validated */ }
+    articleLinks.unshift({ title: resource.name, publisher, url: canonicalUrl });
+  }
+  return {
+    hero_image_url: safeHttpUrl(resource.hero_image_url)
+      || (firstYoutubeId ? `https://i.ytimg.com/vi/${firstYoutubeId}/hqdefault.jpg` : null),
+    hero_image_alt: resource.hero_image_alt || (firstYoutubeId ? `${resource.name} YouTube thumbnail` : null),
+    spotify_url: spotifyUrl,
+    youtube_candidates: youtubeCandidates,
+    article_links: articleLinks,
+  };
+}
+
 export type InstagramMediaClassification = {
   mediaType: "carousel" | "reel" | "post" | "unknown";
   itemCount: number;

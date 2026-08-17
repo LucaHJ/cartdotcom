@@ -2,6 +2,7 @@ import { Container, getContainer } from "@cloudflare/containers";
 import puppeteer, { type BrowserWorker, type Cookie } from "@cloudflare/puppeteer";
 import {
   DEFAULT_STAGE_REACTIONS,
+  applyMediaLinkFallbacks,
   canonicalArtifactKey,
   canonicalizeInstagramUrl,
   classifyInstagramMediaPayload,
@@ -114,6 +115,15 @@ type RoutedSynthesisResource = SynthesisResource & {
   artifactType: ArtifactType | null;
   canonicalKey: string | null;
   documentSlug: string;
+};
+
+type WikipediaPageImage = {
+  title?: string;
+  missing?: boolean;
+  original?: { source?: string };
+  thumbnail?: { source?: string };
+  images?: Array<{ title?: string }>;
+  imageinfo?: Array<{ thumburl?: string; url?: string }>;
 };
 
 type SynthesisPayload = {
@@ -1320,6 +1330,144 @@ function routeSynthesisResources(job: JobRow, payload: SynthesisPayload): Routed
     const canonicalKey = artifactType ? canonicalArtifactKey(artifactType, resource.name) : null;
     return { ...resource, slug, kind, artifactType, canonicalKey, documentSlug: artifactType ? slug : `${slug}-${sourceSuffix}` };
   });
+}
+
+function wikipediaArtworkTitle(name: string, artifactType: ArtifactType): string {
+  const cleaned = name.trim();
+  if (artifactType === "film") {
+    return /\(\d{4}\)$/.test(cleaned) ? cleaned.replace(/\((\d{4})\)$/, "($1 film)") : `${cleaned} (film)`;
+  }
+  return /\((?:TV series|television series)\)$/i.test(cleaned) ? cleaned : `${cleaned} (TV series)`;
+}
+
+function resolvedWikipediaTitle(
+  title: string,
+  mappings: Array<{ from?: string; to?: string }>,
+): string {
+  let current = title;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = mappings.find((entry) => entry.from === current)?.to;
+    if (!next || next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+function bestWikipediaArtworkFile(page: WikipediaPageImage, resourceName: string): string | null {
+  const nameWords = resourceName.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2);
+  const ranked = (page.images || []).flatMap((image) => {
+    const title = String(image.title || "");
+    if (!/^File:.+\.(?:jpe?g|png|webp)$/i.test(title)) return [];
+    const lower = title.toLowerCase();
+    let score = /poster|cover|key art/.test(lower) ? 100 : 0;
+    score += nameWords.filter((word) => lower.includes(word)).length * 10;
+    if (/icon|logo|flag|symbol|edit|protection|wikiquote|featured/.test(lower)) score -= 100;
+    return [{ title, score }];
+  }).sort((left, right) => right.score - left.score);
+  return ranked[0] && ranked[0].score > 0 ? ranked[0].title : null;
+}
+
+async function wikipediaArtwork(resources: SynthesisResource[]): Promise<Map<number, { url: string; alt: string }>> {
+  const targets = resources.flatMap((resource, index) => {
+    const kind = normalizeResourceKind(resource.kind, resource.name, resource.summary);
+    const artifactType = normalizeArtifactType(resource.artifact_type, kind, resource.name, resource.summary);
+    if ((artifactType !== "film" && artifactType !== "tv_show") || resource.hero_image_url) return [];
+    return [{ index, artifactType, title: wikipediaArtworkTitle(resource.name, artifactType) }];
+  });
+  const results = new Map<number, { url: string; alt: string }>();
+  for (let offset = 0; offset < targets.length; offset += 20) {
+    const batch = targets.slice(offset, offset + 20);
+    const url = new URL("https://en.wikipedia.org/w/api.php");
+    url.searchParams.set("action", "query");
+    url.searchParams.set("format", "json");
+    url.searchParams.set("formatversion", "2");
+    url.searchParams.set("redirects", "1");
+    url.searchParams.set("prop", "pageimages|images");
+    url.searchParams.set("piprop", "original|thumbnail");
+    url.searchParams.set("pithumbsize", "1200");
+    url.searchParams.set("imlimit", "20");
+    url.searchParams.set("titles", batch.map((target) => target.title).join("|"));
+    try {
+      const response = await fetch(url, { headers: { "user-agent": "Instagram-Reel-Brain/1.0 (private research archive)" } });
+      if (!response.ok) continue;
+      const payload = await response.json<{
+        query?: {
+          normalized?: Array<{ from?: string; to?: string }>;
+          redirects?: Array<{ from?: string; to?: string }>;
+          pages?: WikipediaPageImage[];
+        };
+      }>();
+      const mappings = [...(payload.query?.normalized || []), ...(payload.query?.redirects || [])];
+      const pages = new Map((payload.query?.pages || []).map((page) => [page.title || "", page]));
+      const unresolvedFiles: Array<{ target: typeof batch[number]; title: string }> = [];
+      for (const target of batch) {
+        const page = pages.get(resolvedWikipediaTitle(target.title, mappings));
+        const imageUrl = page?.original?.source || page?.thumbnail?.source || "";
+        if (imageUrl.startsWith("https://")) {
+          results.set(target.index, {
+            url: imageUrl,
+            alt: `${resources[target.index].name} ${target.artifactType === "film" ? "film poster or cover image" : "television artwork"}`,
+          });
+        } else if (page) {
+          const title = bestWikipediaArtworkFile(page, resources[target.index].name);
+          if (title) unresolvedFiles.push({ target, title });
+        }
+      }
+      if (unresolvedFiles.length) {
+        const imageUrl = new URL("https://en.wikipedia.org/w/api.php");
+        imageUrl.searchParams.set("action", "query");
+        imageUrl.searchParams.set("format", "json");
+        imageUrl.searchParams.set("formatversion", "2");
+        imageUrl.searchParams.set("prop", "imageinfo");
+        imageUrl.searchParams.set("iiprop", "url");
+        imageUrl.searchParams.set("iiurlwidth", "1200");
+        imageUrl.searchParams.set("titles", unresolvedFiles.map((entry) => entry.title).join("|"));
+        const imageResponse = await fetch(imageUrl, { headers: { "user-agent": "Instagram-Reel-Brain/1.0 (private research archive)" } });
+        const imagePayload = imageResponse.ok ? await imageResponse.json<{ query?: { pages?: WikipediaPageImage[] } }>() : {};
+        const imagePages = new Map((imagePayload.query?.pages || []).map((page) => [page.title || "", page]));
+        for (const entry of unresolvedFiles) {
+          const image = imagePages.get(entry.title)?.imageinfo?.[0];
+          const source = image?.thumburl || image?.url || "";
+          if (source.startsWith("https://")) {
+            results.set(entry.target.index, {
+              url: source,
+              alt: `${resources[entry.target.index].name} ${entry.target.artifactType === "film" ? "film poster or cover image" : "television artwork"}`,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("Wikipedia artwork lookup failed", error instanceof Error ? error.message : String(error));
+    }
+  }
+  return results;
+}
+
+async function enrichSynthesisResourceMedia(resources: SynthesisResource[]): Promise<SynthesisResource[]> {
+  const artwork = await wikipediaArtwork(resources);
+  return Promise.all(resources.map(async (resource, index) => {
+    const kind = normalizeResourceKind(resource.kind, resource.name, resource.summary);
+    const artifactType = normalizeArtifactType(resource.artifact_type, kind, resource.name, resource.summary);
+    const media = applyMediaLinkFallbacks(resource, artifactType);
+    const resolvedArtwork = artwork.get(index);
+    if (resolvedArtwork && !media.hero_image_url) {
+      media.hero_image_url = resolvedArtwork.url;
+      media.hero_image_alt = resolvedArtwork.alt;
+    }
+    if (media.spotify_url && !media.hero_image_url && /^https:\/\/open\.spotify\.com\/(track|album|episode|show)\//i.test(media.spotify_url)) {
+      try {
+        const response = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(media.spotify_url)}`);
+        const spotify = response.ok ? await response.json<{ thumbnail_url?: string }>() : {};
+        if (spotify.thumbnail_url?.startsWith("https://")) {
+          media.hero_image_url = spotify.thumbnail_url;
+          media.hero_image_alt = `${resource.name} Spotify artwork`;
+        }
+      } catch (error) {
+        console.warn("Spotify artwork lookup failed", error instanceof Error ? error.message : String(error));
+      }
+    }
+    return { ...resource, ...media };
+  }));
 }
 
 type CanonicalArtifactRow = {
@@ -2956,6 +3104,7 @@ async function handleComplete(request: Request, env: Env, jobId: string): Promis
   if (!payload.metadata?.title || !payload.metadata?.author_username || !payload.summary || !Array.isArray(payload.resources)) {
     return json({ error: "Incomplete synthesis payload" }, { status: 400 });
   }
+  payload.resources = await enrichSynthesisResourceMedia(payload.resources);
   const resources = routeSynthesisResources(job, payload);
   const audio = payload.audio && payload.audio.identification_method !== "unidentified" && payload.audio.source_url
     ? payload.audio
