@@ -1,0 +1,10 @@
+UPDATE settings SET value = json_set(value, '$.display', '⬇️', '$.reaction', '⬇️'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.queued';
+UPDATE settings SET value = json_set(value, '$.display', '📥', '$.reaction', '📥'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.downloading';
+UPDATE settings SET value = json_set(value, '$.display', '💬', '$.reaction', '💬'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.synthesizing';
+UPDATE settings SET value = json_set(value, '$.display', '✅', '$.reaction', '✅'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.complete';
+UPDATE settings SET value = json_set(value, '$.display', '⛔', '$.reaction', '⛔'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.error_download';
+UPDATE settings SET value = json_set(value, '$.display', '🎞️', '$.reaction', '🎞️'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.error_media';
+UPDATE settings SET value = json_set(value, '$.display', '🎙️', '$.reaction', '🎙️'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.error_transcript';
+UPDATE settings SET value = json_set(value, '$.display', '🔎', '$.reaction', '🔎'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.error_research';
+UPDATE settings SET value = json_set(value, '$.display', '💾', '$.reaction', '💾'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.error_archive';
+UPDATE settings SET value = json_set(value, '$.display', '❓', '$.reaction', '❓'), updated_at = CURRENT_TIMESTAMP WHERE key = 'emoji.error_unknown';

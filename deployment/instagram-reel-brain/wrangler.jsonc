@@ -1,0 +1,72 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cartdotcom-instagram-reel-brain",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": {
+    "INGEST_MODE": "live",
+    "PUBLIC_BASE_URL": "https://cartdotcom-instagram-reel-brain.lucajeannin.workers.dev",
+    "CODEX_RESEARCH_MODEL": "gpt-5.6-luna",
+    "CODEX_RESEARCH_REASONING_EFFORT": "medium",
+    "INSTAGRAM_GRAPH_VERSION": "v24.0"
+  },
+  "ai": { "binding": "AI" },
+  "browser": { "binding": "BROWSER" },
+  "d1_databases": [
+    {
+      "binding": "REEL_DB",
+      "database_name": "cartdotcom-instagram-reel-brain",
+      "database_id": "163fb08a-bbd7-4d50-9197-b8b7f16e085a",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "REEL_ARCHIVE",
+      "bucket_name": "cartdotcom-instagram-reel-brain"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "REEL_LIBRARY_KV",
+      "id": "b0c0506cf9be4d1a80d22e0e58ff0bf2"
+    },
+    {
+      "binding": "SECOND_BRAIN_KV",
+      "id": "b0c0506cf9be4d1a80d22e0e58ff0bf2"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "REEL_QUEUE", "queue": "cartdotcom-instagram-reel-brain" }
+    ],
+    "consumers": [
+      {
+        "queue": "cartdotcom-instagram-reel-brain",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_concurrency": 1,
+        "max_retries": 3,
+        "dead_letter_queue": "cartdotcom-instagram-reel-brain-dlq"
+      }
+    ]
+  },
+  "containers": [
+    {
+      "class_name": "ReelBrainContainer",
+      "image": "./container/Dockerfile",
+      "instance_type": "basic",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "REEL_CONTAINER", "class_name": "ReelBrainContainer" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ReelBrainContainer"] }
+  ]
+}
