@@ -1,3 +1,6 @@
+/backend/reel-library.html
+  Cache-Control: private, no-store
+
 /*.css
   Cache-Control: public, max-age=300, must-revalidate
 

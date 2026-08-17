@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Reel Research Library</title>
+    <link rel="stylesheet" href="/reel-library.css?v=20260809-canonical-artifacts-thumbnails">
+</head>
+<body>
+    <main class="library-app">
+        <aside class="library-sidebar" aria-label="Reel research files">
+            <header class="library-brand">
+                <p class="eyebrow">private research archive</p>
+                <h1>Reel Library</h1>
+                <p>HTML research files, transcripts, resource profiles, and private source-video access.</p>
+                <nav class="library-nav" aria-label="Library navigation">
+                    <a href="/home.html">Home</a>
+                    <a href="/backend/instagram.html">Instagram</a>
+                    <a href="/backend/second-brain.html">Second Brain</a>
+                    <button id="logoutButton" type="button">Logout</button>
+                </nav>
+            </header>
+            <div class="library-controls">
+                <label><span class="eyebrow">Find a file</span><input id="fileSearch" type="search" placeholder="Creator, Reel, resource…" autocomplete="off"></label>
+                <button id="refreshLibrary" class="text-button" type="button">Refresh</button>
+                <button id="systemStatusButton" class="text-button status-button" type="button"><span id="systemStatusDot" class="status-dot" aria-hidden="true"></span>Status</button>
+            </div>
+            <div class="tree-toolbar">
+                <button id="collapseTree" type="button">Collapse all</button>
+                <button id="openTree" type="button">Open all</button>
+                <span id="fileCount">0 files</span>
+            </div>
+            <div id="fileTree" class="file-tree" aria-live="polite"></div>
+        </aside>
+
+        <section class="reader-pane" aria-label="Persistent HTML reader">
+            <header class="reader-bar">
+                <button id="galleryButton" class="gallery-back-button" type="button" hidden>&larr; Gallery</button>
+                <span id="readerPath" class="reader-path">Select a file</span>
+                <span id="readerStatus" class="reader-status" aria-live="polite">Loading library…</span>
+            </header>
+            <div id="readerWorkspace" class="reader-workspace">
+                <div id="readerScroll" class="reader-scroll">
+                    <article id="readerContent" class="reader-content">
+                        <div class="reader-empty"><p class="eyebrow">persistent reader</p><h2>Your Reel research stays open here.</h2><p>Select any HTML file from the tree. Resource links open inside this reader, and archived videos can be played or downloaded without making the R2 bucket public.</p></div>
+                    </article>
+                </div>
+                <aside id="reelMediaPanel" class="reel-media-panel" aria-label="Reel video and comments" hidden>
+                    <section class="reel-video-stage" aria-label="Archived Reel video">
+                        <video id="archiveVideo" controls muted autoplay playsinline preload="metadata"></video>
+                        <div id="carouselViewer" class="carousel-viewer" hidden>
+                            <img id="carouselImage" alt="Archived carousel slide">
+                            <button id="previousSlide" class="carousel-arrow is-previous" type="button" aria-label="Previous slide">‹</button>
+                            <button id="nextSlide" class="carousel-arrow is-next" type="button" aria-label="Next slide">›</button>
+                            <span id="carouselPosition" class="carousel-position">1 / 1</span>
+                        </div>
+                        <p id="videoMessage" class="video-message">Preparing private video…</p>
+                    </section>
+                    <section class="reel-creator-card" aria-label="Reel creator and description">
+                        <strong id="reelCreator">@creator</strong>
+                        <div id="reelDescription" class="reel-description"><p>No description captured.</p></div>
+                        <div class="video-actions">
+                            <a id="openVideo" href="#" target="_blank" rel="noopener noreferrer">Open video</a>
+                            <a id="downloadVideo" href="#">Download archive</a>
+                        </div>
+                    </section>
+                    <section class="reel-comments-panel" aria-label="Captured public comments">
+                        <header><h2>Comments</h2><span id="commentsStatus">0 captured</span></header>
+                        <ol id="commentsList" class="comments-list"><li class="empty-comment">No public comments were captured.</li></ol>
+                    </section>
+                </aside>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const fileTree = document.getElementById("fileTree");
+        const fileSearch = document.getElementById("fileSearch");
+        const fileCount = document.getElementById("fileCount");
+        const readerPath = document.getElementById("readerPath");
+        const readerStatus = document.getElementById("readerStatus");
+        const galleryButton = document.getElementById("galleryButton");
+        const readerContent = document.getElementById("readerContent");
+        const readerScroll = document.getElementById("readerScroll");
+        const readerWorkspace = document.getElementById("readerWorkspace");
+        const reelMediaPanel = document.getElementById("reelMediaPanel");
+        const archiveVideo = document.getElementById("archiveVideo");
+        const carouselViewer = document.getElementById("carouselViewer");
+        const carouselImage = document.getElementById("carouselImage");
+        const previousSlide = document.getElementById("previousSlide");
+        const nextSlide = document.getElementById("nextSlide");
+        const carouselPosition = document.getElementById("carouselPosition");
+        const videoMessage = document.getElementById("videoMessage");
+        const openVideo = document.getElementById("openVideo");
+        const downloadVideo = document.getElementById("downloadVideo");
+        const reelCreator = document.getElementById("reelCreator");
+        const reelDescription = document.getElementById("reelDescription");
+        const commentsStatus = document.getElementById("commentsStatus");
+        const commentsList = document.getElementById("commentsList");
+        let files = [];
+        let selectedPath = "";
+        let activeAudio = null;
+        let carouselSlides = [];
+        let activeSlideIndex = 0;
+        let carouselSwipeStart = null;
+        const thumbnailCache = new Map();
+        const treeStateStorageKey = "reel-library-tree-state-v1";
+        let rememberedTreeState = loadTreeState();
+        let treeStateSaveFrame = null;
+
+        function statusClass(ok) { return ok ? "is-ok" : "is-error"; }
+
+        function formatBrisbaneDateTime(value) {
+            const text = String(value || "").trim();
+            if (!text) return "Unknown time";
+            const utcText = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)
+                ? `${text.replace(" ", "T")}Z`
+                : text;
+            const date = new Date(utcText);
+            if (Number.isNaN(date.getTime())) return text;
+            return new Intl.DateTimeFormat("en-AU", {
+                timeZone: "Australia/Brisbane",
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: true,
+                timeZoneName: "short"
+            }).format(date);
+        }
+
+        function formatDuration(seconds) {
+            if (seconds == null || !Number.isFinite(Number(seconds)) || Number(seconds) < 0) return "Not measured";
+            const rounded = Math.round(Number(seconds));
+            const hours = Math.floor(rounded / 3600);
+            const minutes = Math.floor((rounded % 3600) / 60);
+            const remainingSeconds = rounded % 60;
+            if (hours) return `${hours}h ${minutes}m ${remainingSeconds}s`;
+            if (minutes) return `${minutes}m ${remainingSeconds}s`;
+            return `${remainingSeconds}s`;
+        }
+
+        function displayStage(value) {
+            return String(value || "unknown")
+                .replaceAll("synthesizing", "synthesising")
+                .replaceAll("synthesized", "synthesised")
+                .replaceAll("organization", "organisation");
+        }
+
+        function renderStatusDashboard(payload) {
+            const checks = Object.entries(payload.checks || {});
+            const totals = payload.totals || {};
+            const jobs = Array.isArray(payload.recent_jobs) ? payload.recent_jobs : [];
+            const commands = Array.isArray(payload.recent_commands) ? payload.recent_commands : [];
+            const outbound = Array.isArray(payload.recent_outbound) ? payload.recent_outbound : [];
+            const emojis = Array.isArray(payload.emojis) ? payload.emojis : [];
+            const tokenUsage = payload.token_usage || {};
+            const processingTime = payload.processing_time || {};
+            const carouselResolver = payload.carousel_resolver || {};
+            readerContent.innerHTML = `<article class="status-document">
+                <header class="document-header"><p class="document-kicker">Live system health</p><h1>Reel Brain status</h1><p>Generated ${escapeHtml(formatBrisbaneDateTime(payload.generated_at))}. Backlog processing is <strong>${payload.service?.backlog_processing ? "on" : "off"}</strong>; ingest mode is <strong>${escapeHtml(payload.service?.ingest_mode || "unknown")}</strong>.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button><button id="runLiveChecks" type="button">Run live checks</button><button id="runSelfTest" type="button">Run command self-test</button><button id="repairArtifacts" type="button">Rebuild shared artefacts</button><button id="connectInstagramBrowser" type="button">${carouselResolver.connected ? "Reconnect Instagram" : "Connect Instagram"}</button><button id="finishInstagramBrowser" type="button" hidden>Finish Instagram connection</button><button id="refreshStatus" type="button">Refresh</button></div><div id="instagramBrowserResults" class="self-test-results" hidden></div><div id="selfTestResults" class="self-test-results" hidden></div></header>
+                <section><h2>Core checks</h2><div class="health-list">${checks.map(([name, check]) => {
+                    const actual = name === "instagram" ? (check.live_probe_run ? check.ok : check.configured) : check.ok;
+                    const detail = name === "instagram" ? (check.live_probe_run ? (check.ok ? `Connected as @${check.username || "account"}` : check.error || "Probe failed") : check.configured ? "Configured; run live checks to validate the token" : "Instagram credentials are missing") : check.detail;
+                    return `<div class="health-row ${statusClass(Boolean(actual))}"><span class="health-mark">${actual ? "●" : "×"}</span><div><strong>${escapeHtml(name)}</strong><p>${escapeHtml(detail || "No detail")}</p></div></div>`;
+                }).join("")}</div></section>
+                <section><h2>Stored records</h2><dl class="status-totals"><div><dt>Reels</dt><dd>${escapeHtml(totals.jobs ?? 0)}</dd></div><div><dt>Active Reel failures</dt><dd>${escapeHtml(totals.active_failed ?? 0)}</dd></div><div><dt>Superseded historical failures</dt><dd>${escapeHtml(totals.superseded_failed ?? 0)}</dd></div><div><dt>Resources</dt><dd>${escapeHtml(totals.resources ?? 0)}</dd></div><div><dt>Notes</dt><dd>${escapeHtml(totals.notes ?? 0)}</dd></div><div><dt>DM commands</dt><dd>${escapeHtml(totals.commands ?? 0)}</dd></div><div><dt>Outbound failures</dt><dd>${escapeHtml(totals.outbound_failures ?? 0)}</dd></div><div><dt>Average processing time</dt><dd>${escapeHtml(formatDuration(processingTime.average_seconds))}</dd></div><div><dt>Timed synthesis jobs</dt><dd>${escapeHtml(processingTime.measured_jobs ?? 0)}</dd></div><div><dt>Average Codex tokens</dt><dd>${tokenUsage.average_total_tokens == null ? "Not measured" : escapeHtml(Number(tokenUsage.average_total_tokens).toLocaleString("en-AU"))}</dd></div><div><dt>Measured synthesis jobs</dt><dd>${escapeHtml(tokenUsage.measured_jobs ?? 0)}</dd></div></dl></section>
+                <section><h2>Recent Reel jobs</h2>${jobs.length ? `<ol class="status-log">${jobs.map(job => `<li><strong>${escapeHtml(job.status_emoji || "•")} ${escapeHtml(job.title || job.id)}</strong><span>${escapeHtml(displayStage(job.stage))} · ${escapeHtml(job.status)} · ${escapeHtml(formatBrisbaneDateTime(job.updated_at))}${job.token_usage?.total_tokens != null ? ` · ${escapeHtml(Number(job.token_usage.total_tokens).toLocaleString("en-AU"))} tokens` : ""}</span>${job.error_message ? `<p>${escapeHtml(job.error_message)}</p>` : ""}</li>`).join("")}</ol>` : "<p>No Reel jobs yet.</p>"}</section>
+                <section><h2>Message commands</h2>${commands.length ? `<ol class="status-log">${commands.map(command => `<li><strong>${escapeHtml(command.intent)}</strong><span>${escapeHtml(command.status)} · ${escapeHtml(formatBrisbaneDateTime(command.created_at))}</span>${command.error ? `<p>${escapeHtml(command.error)}</p>` : ""}</li>`).join("")}</ol>` : "<p>No message commands recorded yet.</p>"}</section>
+                <section><h2>Instagram delivery log</h2>${outbound.length ? `<ol class="status-log">${outbound.map(event => `<li><strong>${escapeHtml(event.display_emoji || "")} ${escapeHtml(event.kind)}${event.stage ? ` · ${escapeHtml(displayStage(event.stage))}` : ""}</strong><span>${escapeHtml(event.status)}${event.http_status ? ` · HTTP ${escapeHtml(event.http_status)}` : ""} · ${escapeHtml(formatBrisbaneDateTime(event.created_at))}</span>${event.error ? `<p>${escapeHtml(event.error)}</p>` : ""}</li>`).join("")}</ol>` : "<p>No outbound attempts recorded yet.</p>"}</section>
+                <section><h2>Carousel resolver</h2><p>${carouselResolver.connected ? `Connected ${escapeHtml(formatBrisbaneDateTime(carouselResolver.connected_at))}. New carousel shares are resolved automatically from the authenticated Instagram session.` : "A one-time Instagram connection is required before third-party carousel shares can be resolved automatically."}</p>${Array.isArray(carouselResolver.recent) && carouselResolver.recent.length ? `<ol class="status-log">${carouselResolver.recent.map(item => `<li><strong>${escapeHtml(item.title || item.media_id || "Carousel")}</strong><span>${escapeHtml(item.status)} · ${escapeHtml(item.resolution_method || "pending")} · ${escapeHtml(formatBrisbaneDateTime(item.updated_at))}</span>${item.error ? `<p>${escapeHtml(item.error)}</p>` : ""}</li>`).join("")}</ol>` : "<p>No cloud carousel resolutions recorded yet.</p>"}</section>
+                <section><h2>Status icon map</h2><dl class="emoji-map">${emojis.map(item => {
+                    const stage = String(item.key || "").replace("emoji.", "");
+                    const delivery = item.value?.reaction ? `${item.value.reaction} reaction` : "dashboard only";
+                    return `<div><dt>${escapeHtml(displayStage(stage))}</dt><dd>${escapeHtml(item.value?.display || "?")} <span>${delivery}</span></dd></div>`;
+                }).join("")}</dl></section>
+            </article>`;
+            document.getElementById("runLiveChecks")?.addEventListener("click", () => showStatusDashboard(true));
+            document.getElementById("runSelfTest")?.addEventListener("click", runCommandSelfTest);
+            document.getElementById("repairArtifacts")?.addEventListener("click", rebuildSharedArtifacts);
+            document.getElementById("connectInstagramBrowser")?.addEventListener("click", startInstagramBrowserConnection);
+            document.getElementById("finishInstagramBrowser")?.addEventListener("click", finishInstagramBrowserConnection);
+            document.getElementById("refreshStatus")?.addEventListener("click", () => showStatusDashboard(false));
+        }
+
+        async function startInstagramBrowserConnection() {
+            const output = document.getElementById("instagramBrowserResults");
+            const finish = document.getElementById("finishInstagramBrowser");
+            const loginWindow = window.open("about:blank", "instagramCarouselConnection");
+            output.hidden = false;
+            output.innerHTML = "<p>Opening the secure Cloudflare browser login…</p>";
+            try {
+                const payload = await api("/api/reel-library/instagram-browser/start", { method: "POST" });
+                if (loginWindow) loginWindow.location.href = payload.live_view_url;
+                else window.open(payload.live_view_url, "_blank", "noopener");
+                finish.hidden = false;
+                output.innerHTML = `<strong>Login window opened</strong><p>Log in to @warroombraintransfer there, then return and press Finish Instagram connection before ${escapeHtml(formatBrisbaneDateTime(payload.expires_at))}.</p>`;
+            } catch (error) {
+                if (loginWindow) loginWindow.close();
+                output.innerHTML = `<strong>Connection could not start</strong><p>${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        async function finishInstagramBrowserConnection() {
+            const output = document.getElementById("instagramBrowserResults");
+            output.hidden = false;
+            output.innerHTML = "<p>Checking the Instagram session…</p>";
+            try {
+                await api("/api/reel-library/instagram-browser/complete", { method: "POST" });
+                output.innerHTML = "<strong>Instagram connected</strong><p>Future carousel shares will resolve automatically. One recent failed carousel has been queued as a bounded acceptance test.</p>";
+                setTimeout(() => showStatusDashboard(false), 1200);
+            } catch (error) {
+                output.innerHTML = `<strong>Connection not complete</strong><p>${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        async function rebuildSharedArtifacts() {
+            const button = document.getElementById("repairArtifacts");
+            button.disabled = true;
+            button.textContent = "Rebuilding…";
+            try {
+                const payload = await api("/api/reel-library/repair-artifacts", { method: "POST" });
+                readerStatus.textContent = `${payload.repaired || 0} Reel research files rebuilt`;
+                await loadLibrary();
+            } catch (error) {
+                readerStatus.textContent = error.message;
+                button.disabled = false;
+                button.textContent = "Rebuild shared artefacts";
+            }
+        }
+
+        async function runCommandSelfTest() {
+            const output = document.getElementById("selfTestResults");
+            output.hidden = false;
+            output.innerHTML = "<p>Running isolated command tests…</p>";
+            try {
+                const payload = await api("/api/reel-library/self-test", { method: "POST" });
+                output.innerHTML = `<strong>${payload.ok ? "Self-test passed" : "Self-test needs attention"}</strong><ol>${(payload.tests || []).map(test => `<li class="${test.ok ? "is-ok" : "is-error"}">${test.ok ? "✓" : "×"} ${escapeHtml(test.name)} — ${escapeHtml(test.detail)}</li>`).join("")}</ol><p>${escapeHtml(payload.cleanup || "")}</p>`;
+            } catch (error) {
+                output.innerHTML = `<strong>Self-test failed</strong><p>${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        async function showStatusDashboard(probe = false) {
+            closeVideoPlayer();
+            closeAudioPlayer();
+            readerWorkspace.classList.remove("has-reel-media");
+            reelMediaPanel.hidden = true;
+            selectedPath = "";
+            galleryButton.hidden = false;
+            readerContent.classList.remove("is-gallery");
+            markTreeSelection();
+            readerPath.textContent = "system/status";
+            readerStatus.textContent = probe ? "Running live checks…" : "Loading status…";
+            try {
+                const payload = await api(`/api/reel-library/status${probe ? "?probe=1" : ""}`);
+                renderStatusDashboard(payload);
+                const healthy = Object.entries(payload.checks || {}).every(([name, check]) => name === "instagram" ? (check.live_probe_run ? check.ok : check.configured) : check.ok);
+                document.getElementById("systemStatusDot").className = `status-dot ${healthy ? "is-ok" : "is-error"}`;
+                readerStatus.textContent = healthy ? "All configured checks passed" : "Attention required";
+                readerScroll.scrollTop = 0;
+            } catch (error) {
+                document.getElementById("systemStatusDot").className = "status-dot is-error";
+                readerStatus.textContent = "Status unavailable";
+                readerContent.innerHTML = `<p class="empty-message error-message">${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        function syncMediaColumnWidth() {
+            const stage = archiveVideo.closest(".reel-video-stage");
+            const width = carouselViewer.hidden ? archiveVideo.videoWidth : carouselImage.naturalWidth;
+            const height = carouselViewer.hidden ? archiveVideo.videoHeight : carouselImage.naturalHeight;
+            if (!stage || !width || !height) return;
+            const naturalRatio = width / height;
+            const columnWidth = Math.min(520, Math.max(260, Math.round(stage.clientHeight * naturalRatio)));
+            readerWorkspace.style.setProperty("--reel-player-width", `${columnWidth}px`);
+        }
+
+        function addTokenUsageToDocument(tokenUsage) {
+            if (readerContent.querySelector("[data-token-usage]")) return;
+            const meta = readerContent.querySelector(".document-meta");
+            if (!meta) return;
+            const row = document.createElement("div");
+            row.dataset.tokenUsage = "";
+            row.innerHTML = tokenUsage?.total_tokens != null
+                ? `<dt>Codex tokens</dt><dd>${escapeHtml(Number(tokenUsage.total_tokens).toLocaleString("en-AU"))} total · ${escapeHtml(Number(tokenUsage.input_tokens || 0).toLocaleString("en-AU"))} input · ${escapeHtml(Number(tokenUsage.output_tokens || 0).toLocaleString("en-AU"))} output</dd>`
+                : "<dt>Codex tokens</dt><dd>Not measured (legacy synthesis)</dd>";
+            meta.append(row);
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[character]));
+        }
+
+        async function api(path, options = {}) {
+            const response = await fetch(path, { credentials: "same-origin", ...options, headers: { accept: "application/json", ...(options.headers || {}) } });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || payload.error) throw new Error(payload.error || "Request failed");
+            return payload;
+        }
+
+        function loadTreeState() {
+            try {
+                const parsed = JSON.parse(sessionStorage.getItem(treeStateStorageKey) || "");
+                return Array.isArray(parsed?.openFolders)
+                    ? { openFolders: parsed.openFolders, scrollTop: Math.max(0, Number(parsed.scrollTop) || 0) }
+                    : null;
+            } catch {
+                return null;
+            }
+        }
+
+        function captureTreeState() {
+            if (!fileTree.querySelector("details")) return rememberedTreeState;
+            rememberedTreeState = {
+                openFolders: [...fileTree.querySelectorAll("details[open][data-folder-path]")].map(node => node.dataset.folderPath),
+                scrollTop: fileTree.scrollTop,
+            };
+            try { sessionStorage.setItem(treeStateStorageKey, JSON.stringify(rememberedTreeState)); } catch { /* Storage is optional. */ }
+            return rememberedTreeState;
+        }
+
+        function scheduleTreeStateSave() {
+            if (treeStateSaveFrame !== null) return;
+            treeStateSaveFrame = requestAnimationFrame(() => {
+                treeStateSaveFrame = null;
+                captureTreeState();
+            });
+        }
+
+        function markTreeSelection() {
+            fileTree.querySelectorAll("[data-file-path]").forEach(entry => {
+                entry.classList.toggle("is-selected", entry.dataset.filePath === selectedPath);
+            });
+        }
+
+        function makeTree(filteredFiles) {
+            const root = { folders: new Map(), files: [] };
+            for (const file of filteredFiles) {
+                const parts = file.path.split("/");
+                let node = root;
+                for (const folder of parts.slice(0, -1)) {
+                    if (!node.folders.has(folder)) node.folders.set(folder, { folders: new Map(), files: [] });
+                    node = node.folders.get(folder);
+                }
+                node.files.push({ ...file, name: parts.at(-1) });
+            }
+            return root;
+        }
+
+        function renderNode(node, depth = 0, parentPath = "") {
+            const folders = [...node.folders.entries()].sort(([a], [b]) => a.localeCompare(b));
+            const childFiles = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
+            return `${folders.map(([name, child]) => {
+                const folderPath = parentPath ? `${parentPath}/${name}` : name;
+                return `<details data-folder-path="${escapeHtml(folderPath)}" ${depth < 3 ? "open" : ""}><summary>${escapeHtml(name)}</summary><div class="tree-children">${renderNode(child, depth + 1, folderPath)}</div></details>`;
+            }).join("")}${childFiles.map(file => `<button class="file-entry ${file.path === selectedPath ? "is-selected" : ""}" type="button" data-file-path="${escapeHtml(file.path)}"><span class="file-entry-name">${escapeHtml(file.name)}</span><span class="file-entry-title">${escapeHtml(file.title || file.kind || "HTML file")}</span></button>`).join("")}`;
+        }
+
+        function renderTree(options = {}) {
+            const state = captureTreeState();
+            const query = fileSearch.value.trim().toLowerCase();
+            const filtered = query ? files.filter(file => [file.path, file.title, file.author, file.kind, file.resource_kind, file.resource_folder].join(" ").toLowerCase().includes(query)) : files;
+            fileCount.textContent = `${filtered.length} file${filtered.length === 1 ? "" : "s"}`;
+            fileTree.innerHTML = filtered.length ? renderNode(makeTree(filtered)) : `<p class="empty-message">No HTML files match this search.</p>`;
+            if (state?.openFolders) {
+                const openFolders = new Set(state.openFolders);
+                fileTree.querySelectorAll("details[data-folder-path]").forEach(node => {
+                    node.open = openFolders.has(node.dataset.folderPath);
+                });
+            }
+            markTreeSelection();
+            fileTree.scrollTop = options.resetScroll ? 0 : Math.min(state?.scrollTop || 0, fileTree.scrollHeight);
+        }
+
+        function galleryMediaLabel(file) {
+            if (file.media_type === "carousel") return "Carousel";
+            if (file.media_type === "post") return "Post";
+            return "Reel";
+        }
+
+        async function loadThumbnail(element) {
+            const jobId = element.dataset.thumbnailJobId;
+            const image = element.querySelector("img");
+            if (!jobId || !image) return;
+            try {
+                let thumbnailUrl = thumbnailCache.get(jobId);
+                if (!thumbnailUrl) {
+                    const payload = await api(`/api/reel-library/thumbnail?job_id=${encodeURIComponent(jobId)}`);
+                    thumbnailUrl = payload.thumbnail_url;
+                    thumbnailCache.set(jobId, thumbnailUrl);
+                }
+                image.src = thumbnailUrl;
+                element.classList.add("has-thumbnail");
+            } catch {
+                element.classList.add("has-no-thumbnail");
+            }
+        }
+
+        async function hydrateThumbnails(root = readerContent) {
+            const pending = [...root.querySelectorAll("[data-thumbnail-job-id]")].filter(element => !element.classList.contains("has-thumbnail") && !element.classList.contains("has-no-thumbnail"));
+            const workers = Array.from({ length: Math.min(4, pending.length) }, async () => {
+                while (pending.length) await loadThumbnail(pending.shift());
+            });
+            await Promise.all(workers);
+        }
+
+        function showGallery(options = {}) {
+            closeVideoPlayer();
+            closeAudioPlayer();
+            readerWorkspace.classList.remove("has-reel-media");
+            reelMediaPanel.hidden = true;
+            selectedPath = "";
+            galleryButton.hidden = true;
+            readerPath.textContent = "gallery";
+            readerContent.classList.add("is-gallery");
+            const reels = files.filter(file => file.kind === "reel").sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")));
+            readerContent.innerHTML = `<article class="reel-gallery-document">
+                <header class="gallery-header"><p class="document-kicker">Synthesised archive</p><h1>Reel gallery</h1><p>Open a Reel, carousel, or post to read its synthesis and research. The complete file tree remains available on the left.</p></header>
+                ${reels.length ? `<div class="reel-gallery-grid">${reels.map(file => `<button class="reel-gallery-card" type="button" data-file-path="${escapeHtml(file.path)}" data-thumbnail-job-id="${escapeHtml(file.job_id)}">
+                    <img alt="" loading="lazy">
+                    <span class="reel-card-shade" aria-hidden="true"></span>
+                    <span class="reel-card-copy"><span class="gallery-card-type">${escapeHtml(galleryMediaLabel(file))}</span>
+                    <strong>${escapeHtml(file.title || "Untitled Instagram research")}</strong>
+                    <span class="gallery-card-author">@${escapeHtml(String(file.author || "unknown").replace(/^@/, ""))}</span>
+                    <span class="gallery-card-date">${escapeHtml(formatBrisbaneDateTime(file.updated_at))}</span></span>
+                </button>`).join("")}</div>` : `<p class="empty-message">No synthesised Reels are available yet.</p>`}
+            </article>`;
+            readerStatus.textContent = `${reels.length} synthesised item${reels.length === 1 ? "" : "s"}`;
+            readerScroll.scrollTop = 0;
+            markTreeSelection();
+            hydrateThumbnails();
+            if (!options.preserveHash) history.replaceState(null, "", "#gallery");
+        }
+
+        function sanitizeArticle(html) {
+            const template = document.createElement("template");
+            template.innerHTML = String(html || "");
+            const blocked = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "FORM", "INPUT", "TEXTAREA", "SELECT", "LINK", "META"]);
+            for (const element of [...template.content.querySelectorAll("*")]) {
+                if (blocked.has(element.tagName)) { element.remove(); continue; }
+                for (const attribute of [...element.attributes]) {
+                    const name = attribute.name.toLowerCase();
+                    if (name.startsWith("on") || name === "style" || name === "srcdoc") element.removeAttribute(attribute.name);
+                }
+                if (element.hasAttribute("href")) {
+                    const href = element.getAttribute("href") || "";
+                    if (!/^(https?:|#)/i.test(href)) element.setAttribute("href", "#");
+                }
+            }
+            return template.innerHTML;
+        }
+
+        function configureSelectedFile() {
+            closeVideoPlayer();
+            closeAudioPlayer();
+            hydrateThumbnails();
+            const documentActions = readerContent.querySelector(".document-actions");
+            if (documentActions && !documentActions.querySelector("[data-gallery-action]")) {
+                documentActions.insertAdjacentHTML("afterbegin", '<button type="button" data-gallery-action>Back to gallery</button>');
+            }
+            const reelArticle = readerContent.querySelector('.reel-document[data-document-kind="reel"]');
+            const sidecar = reelArticle?.querySelector("[data-reel-sidecar]");
+            if (!reelArticle || !sidecar) {
+                readerWorkspace.classList.remove("has-reel-media");
+                reelMediaPanel.hidden = true;
+                return;
+            }
+
+            readerWorkspace.classList.add("has-reel-media");
+            reelMediaPanel.hidden = false;
+            reelCreator.textContent = sidecar.querySelector("[data-sidecar-username]")?.textContent?.trim() || "@unknown";
+            const description = sidecar.querySelector("[data-sidecar-description]");
+            reelDescription.innerHTML = description?.innerHTML || "<p>No creator description was captured.</p>";
+
+            const comments = sidecar.querySelector("[data-sidecar-comments]");
+            const sourceList = comments?.querySelector("ol");
+            commentsList.innerHTML = sourceList?.innerHTML || '<li class="empty-comment">No public comments were captured.</li>';
+            const capturedCount = commentsList.querySelectorAll(".captured-comment:not(.empty-comment)").length;
+            const reportedRaw = comments?.getAttribute("data-reported-comment-count") || "";
+            const reportedCount = reportedRaw ? Number(reportedRaw) : null;
+            commentsStatus.textContent = Number.isFinite(reportedCount) && reportedCount > capturedCount
+                ? `${capturedCount} captured of ${reportedCount} reported`
+                : `${capturedCount} captured`;
+            const archivedSlidesRow = [...reelArticle.querySelectorAll(".document-meta div")]
+                .find(row => row.querySelector("dt")?.textContent.trim() === "Archived slides");
+            const archivedSlides = Number(archivedSlidesRow?.querySelector("dd")?.textContent || 0);
+            const mediaType = sidecar.dataset.mediaType || (archivedSlides > 1 ? "carousel" : "reel");
+            const carouselItemCount = Number(sidecar.dataset.carouselItemCount || archivedSlides || 0);
+            sidecar.remove();
+            if (mediaType === "carousel" && carouselItemCount > 1) showArchivedCarousel(reelArticle.dataset.jobId);
+            else showArchivedVideo(reelArticle.dataset.jobId);
+            const audioSection = reelArticle.querySelector("[data-reel-audio][data-audio-available='true']");
+            if (audioSection) showArchivedAudio(reelArticle.dataset.jobId, audioSection);
+        }
+
+        async function loadFile(path, options = {}) {
+            if (!path) return;
+            readerStatus.textContent = "Loading…";
+            try {
+                const payload = await api(`/api/reel-library/file?path=${encodeURIComponent(path)}`);
+                selectedPath = payload.file.path;
+                galleryButton.hidden = false;
+                readerPath.textContent = selectedPath;
+                readerContent.classList.remove("is-gallery");
+                readerContent.innerHTML = sanitizeArticle(payload.file.html);
+                readerStatus.textContent = payload.file.metadata?.kind === "resource"
+                    ? `${payload.file.metadata?.resource_kind || "Resource"} profile`
+                    : "Reel research";
+                markTreeSelection();
+                if (!options.preserveHash) history.replaceState(null, "", `#${encodeURIComponent(selectedPath)}`);
+                readerScroll.scrollTop = 0;
+                configureSelectedFile();
+            } catch (error) {
+                readerStatus.textContent = "Could not load file";
+                readerContent.innerHTML = `<p class="empty-message error-message">${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        async function loadLibrary() {
+            readerStatus.textContent = "Refreshing…";
+            try {
+                const payload = await api("/api/reel-library/files");
+                files = Array.isArray(payload.files) ? payload.files : [];
+                renderTree();
+                readerStatus.textContent = `${files.length} HTML files`;
+                const requested = decodeURIComponent(location.hash.replace(/^#/, ""));
+                if (requested && files.some(file => file.path === requested)) await loadFile(requested, { preserveHash: true });
+                else showGallery({ preserveHash: requested === "gallery" });
+            } catch (error) {
+                fileTree.innerHTML = `<p class="empty-message error-message">${escapeHtml(error.message)}</p>`;
+                readerStatus.textContent = "Library unavailable";
+            }
+        }
+
+        async function showArchivedVideo(jobId) {
+            if (!jobId) return;
+            videoMessage.hidden = false;
+            videoMessage.textContent = "Preparing private video…";
+            archiveVideo.hidden = true;
+            try {
+                const payload = await api(`/api/reel-library/video?job_id=${encodeURIComponent(jobId)}`);
+                archiveVideo.src = payload.play_url;
+                archiveVideo.muted = true;
+                openVideo.href = payload.play_url;
+                downloadVideo.href = payload.download_url;
+                archiveVideo.hidden = false;
+                videoMessage.hidden = true;
+                archiveVideo.play().catch(() => undefined);
+                readerStatus.textContent = `Video link expires ${formatBrisbaneDateTime(payload.expires_at)}`;
+                addTokenUsageToDocument(payload.token_usage);
+            } catch (error) {
+                readerStatus.textContent = error.message;
+                videoMessage.hidden = false;
+                videoMessage.textContent = error.message;
+            }
+        }
+
+        function renderCarouselSlide(index) {
+            if (!carouselSlides.length) return;
+            activeSlideIndex = (index + carouselSlides.length) % carouselSlides.length;
+            const slide = carouselSlides[activeSlideIndex];
+            carouselImage.src = slide.play_url;
+            carouselImage.alt = `Archived carousel slide ${activeSlideIndex + 1} of ${carouselSlides.length}`;
+            carouselPosition.textContent = `${activeSlideIndex + 1} / ${carouselSlides.length}`;
+            openVideo.href = slide.play_url;
+            downloadVideo.href = slide.download_url;
+            openVideo.textContent = "Open slide";
+            downloadVideo.textContent = "Download slide";
+        }
+
+        async function showArchivedCarousel(jobId) {
+            if (!jobId) return;
+            videoMessage.hidden = false;
+            videoMessage.textContent = "Preparing private carousel…";
+            archiveVideo.hidden = true;
+            carouselViewer.hidden = true;
+            try {
+                const payload = await api(`/api/reel-library/carousel?job_id=${encodeURIComponent(jobId)}`);
+                carouselSlides = Array.isArray(payload.slides) ? payload.slides : [];
+                if (!carouselSlides.length) throw new Error("No archived carousel slides are available.");
+                carouselViewer.hidden = false;
+                videoMessage.hidden = true;
+                renderCarouselSlide(0);
+                readerStatus.textContent = `Carousel links expire ${formatBrisbaneDateTime(payload.expires_at)}`;
+                addTokenUsageToDocument(payload.token_usage);
+            } catch (error) {
+                readerStatus.textContent = error.message;
+                videoMessage.hidden = false;
+                videoMessage.textContent = error.message;
+            }
+        }
+
+        async function showArchivedAudio(jobId, section) {
+            const player = section.querySelector("[data-audio-player]");
+            const download = section.querySelector("[data-audio-download]");
+            if (!jobId || !player || !download) return;
+            activeAudio = player;
+            try {
+                const payload = await api(`/api/reel-library/audio?job_id=${encodeURIComponent(jobId)}`);
+                player.src = payload.play_url;
+                download.href = payload.download_url;
+            } catch (error) {
+                section.hidden = true;
+                readerStatus.textContent = error.message;
+            }
+        }
+
+        function closeAudioPlayer() {
+            if (!activeAudio) return;
+            activeAudio.pause();
+            activeAudio.removeAttribute("src");
+            activeAudio.load();
+            activeAudio = null;
+        }
+
+        function closeVideoPlayer() {
+            archiveVideo.pause();
+            archiveVideo.removeAttribute("src");
+            archiveVideo.load();
+            archiveVideo.hidden = true;
+            carouselViewer.hidden = true;
+            carouselImage.removeAttribute("src");
+            carouselSlides = [];
+            activeSlideIndex = 0;
+            videoMessage.hidden = false;
+            openVideo.removeAttribute("href");
+            downloadVideo.removeAttribute("href");
+            openVideo.textContent = "Open video";
+            downloadVideo.textContent = "Download archive";
+            readerWorkspace.style.removeProperty("--reel-player-width");
+        }
+
+        archiveVideo.addEventListener("loadedmetadata", syncMediaColumnWidth);
+        carouselImage.addEventListener("load", syncMediaColumnWidth);
+        previousSlide.addEventListener("click", () => renderCarouselSlide(activeSlideIndex - 1));
+        nextSlide.addEventListener("click", () => renderCarouselSlide(activeSlideIndex + 1));
+        carouselViewer.addEventListener("pointerdown", event => { carouselSwipeStart = event.clientX; });
+        carouselViewer.addEventListener("pointerup", event => {
+            if (carouselSwipeStart == null) return;
+            const distance = event.clientX - carouselSwipeStart;
+            carouselSwipeStart = null;
+            if (Math.abs(distance) > 42) renderCarouselSlide(activeSlideIndex + (distance < 0 ? 1 : -1));
+        });
+        window.addEventListener("resize", syncMediaColumnWidth);
+
+        fileTree.addEventListener("click", event => {
+            const button = event.target.closest("[data-file-path]");
+            if (button) loadFile(button.dataset.filePath);
+        });
+        readerContent.addEventListener("click", event => {
+            const galleryAction = event.target.closest("[data-gallery-action]");
+            if (galleryAction) { event.preventDefault(); showGallery(); return; }
+            const galleryFile = event.target.closest("[data-file-path]");
+            if (galleryFile) { event.preventDefault(); loadFile(galleryFile.dataset.filePath); return; }
+            const fileLink = event.target.closest("[data-library-path]");
+            if (fileLink) { event.preventDefault(); loadFile(fileLink.dataset.libraryPath); return; }
+        });
+        fileSearch.addEventListener("input", () => renderTree({ resetScroll: true }));
+        fileTree.addEventListener("scroll", scheduleTreeStateSave, { passive: true });
+        fileTree.addEventListener("toggle", scheduleTreeStateSave, true);
+        document.getElementById("refreshLibrary").addEventListener("click", loadLibrary);
+        document.getElementById("systemStatusButton").addEventListener("click", () => showStatusDashboard(false));
+        galleryButton.addEventListener("click", () => showGallery());
+        document.getElementById("collapseTree").addEventListener("click", () => { fileTree.querySelectorAll("details").forEach(item => item.open = false); captureTreeState(); });
+        document.getElementById("openTree").addEventListener("click", () => { fileTree.querySelectorAll("details").forEach(item => item.open = true); captureTreeState(); });
+        document.getElementById("logoutButton").addEventListener("click", async () => { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined); location.href = "/login.html"; });
+        window.addEventListener("hashchange", () => { const path = decodeURIComponent(location.hash.replace(/^#/, "")); if (!path || path === "gallery") showGallery({ preserveHash: true }); else if (path !== selectedPath) loadFile(path, { preserveHash: true }); });
+        loadLibrary();
+    </script>
+</body>
+</html>
