@@ -6923,6 +6923,9 @@ async function ensurePredictionOutcomeTables(env: Env): Promise<void> {
     env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_prediction_at ON prediction_outcomes(prediction_at DESC)"),
     env.NEWS_DB.prepare("CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_symbol ON prediction_outcomes(symbol)"),
     env.NEWS_DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_article_prediction_at ON prediction_outcomes(article_id, prediction_at)",
+    ),
+    env.NEWS_DB.prepare(
       "CREATE INDEX IF NOT EXISTS idx_prediction_outcomes_symbol_prediction_at_direction ON prediction_outcomes(symbol, prediction_at, direction)",
     ),
     env.NEWS_DB.prepare(
@@ -7503,32 +7506,42 @@ async function buildSourceActivity(
 }
 
 async function buildPredictionSummary(env: Env): Promise<Record<string, unknown>[]> {
-  const result = await env.NEWS_DB.prepare(
-    `WITH ${PREDICTION_ACCURACY_CTE_SQL},
-    eligible AS (
-      SELECT accuracy_predictions.direction, accuracy_predictions.confidence_pct,
-        interval.key AS interval,
-        CAST(json_extract(interval.value, '$.change_pct') AS REAL) AS movement_pct
+  const intervalGroups = Array.from(
+    { length: Math.ceil(PREDICTION_INTERVALS.length / 4) },
+    (_, index) => PREDICTION_INTERVALS.slice(index * 4, index * 4 + 4),
+  );
+  const results = await Promise.all(intervalGroups.map((intervals) => {
+    const eligibleSql = intervals.map((interval) => {
+      const root = `$."${interval.label}"`;
+      return `SELECT direction, confidence_pct, accuracy_cutoff_epoch, '${interval.label}' AS interval,
+        CAST(json_extract(intervals_json, '${root}.change_pct') AS REAL) AS movement_pct,
+        unixepoch(json_extract(intervals_json, '${root}.at')) AS sampled_epoch
       FROM accuracy_predictions
-      CROSS JOIN json_each(accuracy_predictions.intervals_json) AS interval
-      WHERE accuracy_predictions.confidence_pct >= 0
-        AND accuracy_predictions.confidence_pct <= 100
-        AND json_type(interval.value, '$.change_pct') IN ('integer', 'real')
-        AND (
-          accuracy_predictions.accuracy_cutoff_epoch IS NULL
-          OR unixepoch(json_extract(interval.value, '$.at')) < accuracy_predictions.accuracy_cutoff_epoch
-        )
-    )
-    SELECT interval, direction,
-      CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin,
-      COUNT(*) AS samples,
-      SUM(CASE WHEN (direction = 'bullish' AND movement_pct > 0) OR (direction = 'bearish' AND movement_pct < 0) THEN 1 ELSE 0 END) AS accurate,
-      AVG(movement_pct) AS average_movement_pct
-    FROM eligible
-    GROUP BY interval, direction, confidence_bin
-    ORDER BY interval, direction, confidence_bin`,
-  ).all<PredictionSummaryRow>();
-  const rows = result.results || [];
+      WHERE json_type(intervals_json, '${root}.change_pct') IN ('integer', 'real')`;
+    }).join("\nUNION ALL\n");
+    return env.NEWS_DB.prepare(
+      `WITH ${PREDICTION_ACCURACY_CTE_SQL},
+      interval_values AS MATERIALIZED (
+        ${eligibleSql}
+      ),
+      eligible AS (
+        SELECT direction, confidence_pct, interval, movement_pct
+        FROM interval_values
+        WHERE confidence_pct >= 0
+          AND confidence_pct <= 100
+          AND (accuracy_cutoff_epoch IS NULL OR sampled_epoch < accuracy_cutoff_epoch)
+      )
+      SELECT interval, direction,
+        CASE WHEN confidence_pct >= 100 THEN 9 ELSE CAST(confidence_pct / 10 AS INTEGER) END AS confidence_bin,
+        COUNT(*) AS samples,
+        SUM(CASE WHEN (direction = 'bullish' AND movement_pct > 0) OR (direction = 'bearish' AND movement_pct < 0) THEN 1 ELSE 0 END) AS accurate,
+        AVG(movement_pct) AS average_movement_pct
+      FROM eligible
+      GROUP BY interval, direction, confidence_bin
+      ORDER BY interval, direction, confidence_bin`,
+    ).all<PredictionSummaryRow>();
+  }));
+  const rows = results.flatMap((result) => result.results || []);
   return PREDICTION_INTERVALS.map((interval) => {
     const intervalRows = rows.filter((row) => row.interval === interval.label);
     const cellsFor = (direction: "bullish" | "bearish") =>
@@ -7763,10 +7776,39 @@ async function buildPredictionPage(
 
   const offset = decodePredictionCursor(filters.cursor, filters.sort);
   const pageBindings = [...bindings, pageLimit + 1, offset];
-  const orderSql = predictionOutcomeOrderSql(filters.sort);
-
-  const result = await env.NEWS_DB.prepare(
-    `WITH filtered_outcomes AS (
+  let result: D1Result<StoredPredictionOutcomeRow>;
+  if (filters.sort === "newest" || filters.sort === "oldest") {
+    const direction = filters.sort === "oldest" ? "ASC" : "DESC";
+    result = await env.NEWS_DB.prepare(
+      `WITH filtered_ids AS MATERIALIZED (
+        SELECT prediction_outcomes.id, prediction_outcomes.article_id,
+          MAX(unixepoch(prediction_outcomes.prediction_at)) OVER (PARTITION BY prediction_outcomes.article_id) AS latest_prediction_epoch
+        ${fromSql}
+        WHERE ${clauses.join(" AND ")}
+      ), page_ids AS MATERIALIZED (
+        SELECT id, article_id, latest_prediction_epoch
+        FROM filtered_ids
+        ORDER BY latest_prediction_epoch ${direction}, article_id ${direction}, id ${direction}
+        LIMIT ? OFFSET ?
+      )
+      SELECT prediction_outcomes.*,
+        ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch,
+        (SELECT daily.price FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_price,
+        (SELECT daily.sampled_at FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_price_at,
+        (SELECT daily.change_pct FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_movement_pct,
+        (SELECT daily.change_pct FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY ABS(daily.change_pct) DESC, daily.day_index DESC LIMIT 1) AS peak_movement_pct
+      FROM page_ids
+      INNER JOIN prediction_outcomes ON prediction_outcomes.id = page_ids.id
+      INNER JOIN research_results ON research_results.id = prediction_outcomes.result_id
+      LEFT JOIN articles ON articles.id = research_results.article_id
+      ORDER BY page_ids.latest_prediction_epoch ${direction}, page_ids.article_id ${direction}, prediction_outcomes.id ${direction}`,
+    )
+      .bind(...pageBindings)
+      .all<StoredPredictionOutcomeRow>();
+  } else {
+    const orderSql = predictionOutcomeOrderSql(filters.sort);
+    result = await env.NEWS_DB.prepare(
+      `WITH filtered_outcomes AS (
       SELECT prediction_outcomes.*,
         ${PREDICTION_ACCURACY_CUTOFF_EPOCH_SQL} AS accuracy_cutoff_epoch,
         (SELECT daily.price FROM prediction_daily_points_v2 AS daily WHERE daily.outcome_id = prediction_outcomes.id ORDER BY daily.day_index DESC LIMIT 1) AS current_price,
@@ -7790,9 +7832,10 @@ async function buildPredictionPage(
     INNER JOIN group_metrics ON group_metrics.article_id = filtered_outcomes.article_id
     ORDER BY ${orderSql}
     LIMIT ? OFFSET ?`,
-  )
-    .bind(...pageBindings)
-    .all<StoredPredictionOutcomeRow>();
+    )
+      .bind(...pageBindings)
+      .all<StoredPredictionOutcomeRow>();
+  }
   const rows = result.results || [];
   const hasMore = rows.length > pageLimit;
   const outcomes = rows.slice(0, pageLimit).map(predictionOutcomeFromStoredRow);
