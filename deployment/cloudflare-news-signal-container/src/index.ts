@@ -734,29 +734,6 @@ async function ensureArticleStorageSchema(db: D1Database): Promise<void> {
       ).run();
       await addColumnIfMissing(db, "source_check_details", "stale_count", "INTEGER NOT NULL DEFAULT 0");
       await db.prepare("CREATE INDEX IF NOT EXISTS idx_source_check_details_source ON source_check_details(source_id, check_id)").run();
-      await db.prepare(
-        "UPDATE research_jobs SET synthesis_duration_seconds = MAX(0, unixepoch(finished_at) - unixepoch(started_at)) WHERE synthesis_duration_seconds IS NULL AND started_at IS NOT NULL AND finished_at IS NOT NULL AND status IN ('succeeded', 'failed')",
-      ).run();
-      await db.prepare(
-        "UPDATE research_jobs SET prediction_delay_seconds = (SELECT MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.published_at)) FROM articles WHERE articles.id = research_jobs.article_id AND articles.published_at IS NOT NULL AND research_jobs.finished_at IS NOT NULL) WHERE prediction_delay_seconds IS NULL AND prediction_delay_eligible = 1 AND status = 'succeeded'",
-      ).run();
-      await db.prepare(
-        `UPDATE research_jobs
-        SET prediction_delay_eligible = 1,
-          prediction_delay_seconds = (
-            SELECT MAX(0, unixepoch(research_jobs.finished_at) - unixepoch(articles.published_at))
-            FROM research_results
-            INNER JOIN articles ON articles.id = research_results.article_id
-            WHERE research_results.job_id = research_jobs.id
-              AND articles.published_at IS NOT NULL
-              AND research_results.symbols IS NOT NULL
-              AND trim(research_results.symbols) NOT IN ('', '[]')
-          )
-        WHERE prediction_delay_eligible = 3
-          AND status = 'succeeded'`,
-      ).run();
-      await pruneLegacyFirstPassBacklog(db);
-      await archiveFailedResearchJobs(db);
     })().catch((error) => {
       articleStorageSchemaReady = null;
       throw error;
