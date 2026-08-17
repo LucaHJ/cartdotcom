@@ -1,7 +1,36 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { findInstagramCarouselMediaPayload, findInstagramDirectPermalink } from "../src/domain.ts";
+import { classifyInstagramMediaPayload, findInstagramCarouselMediaPayload, findInstagramDirectPermalink, instagramDirectCarousels } from "../src/domain.ts";
+
+test("classifies Instagram private media payloads before a carousel-only pilot", () => {
+  assert.deepEqual(classifyInstagramMediaPayload({ items: [{ media_type: 8, carousel_media: [{ pk: "1" }, { pk: "2" }, { pk: "3" }] }] }), {
+    mediaType: "carousel",
+    itemCount: 3,
+  });
+  assert.deepEqual(classifyInstagramMediaPayload({ items: [{ media_type: 2, media_product_type: "clips" }] }), {
+    mediaType: "reel",
+    itemCount: 1,
+  });
+  assert.deepEqual(classifyInstagramMediaPayload({ items: [{ media_type: 1 }] }), {
+    mediaType: "post",
+    itemCount: 1,
+  });
+});
+
+test("extracts carousel backlog items from Instagram Direct without mixing ordinary Reels", () => {
+  const payload = { thread: { items: [
+    { item_id: "carousel-message", user_id: "sender", timestamp: "1770000000000000", media_share: {
+      code: "DCarousel01", carousel_media: [{ pk: "1" }, { pk: "2" }],
+    } },
+    { item_id: "reel-message", user_id: "sender", media_share: { code: "DReel00001", media_type: 2 } },
+  ] } };
+  const rows = instagramDirectCarousels(payload);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].itemId, "carousel-message");
+  assert.equal(rows[0].shortcode, "DCarousel01");
+  assert.equal(rows[0].itemCount, 2);
+});
 
 const webhookTime = Date.parse("2026-08-17T06:23:33Z");
 

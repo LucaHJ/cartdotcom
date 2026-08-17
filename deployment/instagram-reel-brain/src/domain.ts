@@ -1,5 +1,39 @@
 export type InstagramReaction = string;
 
+export type InstagramMediaClassification = {
+  mediaType: "carousel" | "reel" | "post" | "unknown";
+  itemCount: number;
+};
+
+export type InstagramDirectCarousel = {
+  itemId: string;
+  shortcode: string;
+  sourceUrl: string;
+  timestampMs: number;
+  senderId: string;
+  instructions: string;
+  mediaPayload: { items: Array<Record<string, unknown>> };
+  itemCount: number;
+};
+
+export function classifyInstagramMediaPayload(payload: unknown): InstagramMediaClassification {
+  if (!payload || typeof payload !== "object") return { mediaType: "unknown", itemCount: 0 };
+  const root = payload as { items?: unknown[] };
+  const item = Array.isArray(root.items) && root.items[0] && typeof root.items[0] === "object"
+    ? root.items[0] as Record<string, unknown>
+    : payload as Record<string, unknown>;
+  const carousel = Array.isArray(item.carousel_media) ? item.carousel_media : [];
+  const mediaType = Number(item.media_type);
+  if (carousel.length > 1 || mediaType === 8) {
+    return { mediaType: "carousel", itemCount: Math.max(carousel.length, 2) };
+  }
+  if (mediaType === 2 || String(item.media_product_type || "").toLowerCase() === "clips") {
+    return { mediaType: "reel", itemCount: 1 };
+  }
+  if (mediaType === 1) return { mediaType: "post", itemCount: 1 };
+  return { mediaType: "unknown", itemCount: 0 };
+}
+
 export type EmojiSetting = { display: string; reaction: InstagramReaction };
 
 export const DEFAULT_STAGE_REACTIONS: Record<string, EmojiSetting> = {
@@ -329,6 +363,43 @@ export function findInstagramCarouselMediaPayload(value: unknown): { items: Arra
     if (found) return found;
   }
   return null;
+}
+
+export function instagramDirectCarousels(payload: unknown): InstagramDirectCarousel[] {
+  const found: InstagramDirectCarousel[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    const itemId = String(record.item_id || "").trim();
+    if (itemId) {
+      const mediaPayload = findInstagramCarouselMediaPayload(record);
+      const media = mediaPayload?.items?.[0];
+      const shortcode = String(media?.code || media?.shortcode || "").trim();
+      const itemCount = Array.isArray(media?.carousel_media) ? media.carousel_media.length : 0;
+      if (mediaPayload && itemCount > 1 && /^[A-Za-z0-9_-]{5,30}$/.test(shortcode)) {
+        found.push({
+          itemId,
+          shortcode,
+          sourceUrl: `https://www.instagram.com/p/${shortcode}/`,
+          timestampMs: directItemTimestamp(record) || 0,
+          senderId: String(record.user_id || record.sender_id || "").trim(),
+          instructions: String(record.text || "").trim().slice(0, 3000),
+          mediaPayload,
+          itemCount,
+        });
+        return;
+      }
+    }
+    for (const child of Object.values(record)) visit(child);
+  };
+  visit(payload);
+  const unique = new Map<string, InstagramDirectCarousel>();
+  for (const item of found) if (!unique.has(item.itemId)) unique.set(item.itemId, item);
+  return [...unique.values()].sort((left, right) => right.timestampMs - left.timestampMs);
 }
 
 /**

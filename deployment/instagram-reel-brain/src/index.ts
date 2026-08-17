@@ -4,9 +4,11 @@ import {
   DEFAULT_STAGE_REACTIONS,
   canonicalArtifactKey,
   canonicalizeInstagramUrl,
+  classifyInstagramMediaPayload,
   findInstagramCarouselMediaPayload,
   findInstagramDirectPermalink,
   instagramDedupeKey,
+  instagramDirectCarousels,
   instagramPostUrlFromCdnUrl,
   isValidInstagramReaction,
   normalizeArtifactType,
@@ -1801,6 +1803,10 @@ type BacklogCandidate = {
   shortcode: string | null;
   instructions: string;
   hasShareEvidence: boolean;
+  mediaType?: "carousel" | "reel" | "post" | "unknown";
+  carouselItemCount?: number;
+  classificationDetail?: string;
+  sourceMediaJson?: string;
 };
 
 function allowedInstagramSenders(env: Env): string[] {
@@ -1869,6 +1875,58 @@ async function loadBacklogCandidates(env: Env, maxMessagePages = 30): Promise<Ba
   return [...unique.values()].sort((left, right) => right.createdTime.localeCompare(left.createdTime));
 }
 
+async function loadDirectCarouselBacklogCandidates(env: Env, targetPool = 40): Promise<BacklogCandidate[]> {
+  const cookies = await loadInstagramBrowserCookies(env);
+  if (!cookies) throw new Error("Instagram browser authentication is not connected");
+  const systemUserId = instagramCookieValue(cookies, "ds_user_id");
+  const inboxUrl = new URL("https://www.instagram.com/api/v1/direct_v2/inbox/");
+  inboxUrl.searchParams.set("thread_message_limit", "50");
+  inboxUrl.searchParams.set("limit", "20");
+  inboxUrl.searchParams.set("persistentBadging", "true");
+  const inbox = await fetchInstagramDirectJson(inboxUrl.toString(), cookies);
+  if (!inbox.ok) throw new Error(`Instagram Direct inbox request failed with HTTP ${inbox.status}`);
+  const rows = [...instagramDirectCarousels(inbox.payload)];
+  const threads = instagramDirectThreads(inbox.payload);
+  for (const thread of threads.slice(0, 10)) {
+    const threadId = String(thread.thread_id || thread.id || "").trim();
+    if (!threadId) continue;
+    let cursor = "";
+    for (let pageNumber = 0; pageNumber < 30 && rows.length < targetPool; pageNumber += 1) {
+      const threadUrl = new URL(`https://www.instagram.com/api/v1/direct_v2/threads/${encodeURIComponent(threadId)}/`);
+      threadUrl.searchParams.set("limit", "100");
+      if (cursor) threadUrl.searchParams.set("cursor", cursor);
+      const page = await fetchInstagramDirectJson(threadUrl.toString(), cookies);
+      if (!page.ok) break;
+      rows.push(...instagramDirectCarousels(page.payload));
+      const root = page.payload as { thread?: { oldest_cursor?: unknown; has_older?: unknown }; oldest_cursor?: unknown; has_older?: unknown } | null;
+      const nextCursor = String(root?.thread?.oldest_cursor || root?.oldest_cursor || "").trim();
+      const hasOlder = root?.thread?.has_older ?? root?.has_older;
+      if (!nextCursor || hasOlder === false || nextCursor === cursor) break;
+      cursor = nextCursor;
+    }
+    if (rows.length >= targetPool) break;
+  }
+  const unique = new Map<string, BacklogCandidate>();
+  for (const row of rows) {
+    if (systemUserId && row.senderId === systemUserId) continue;
+    const candidate: BacklogCandidate = {
+      messageId: `direct:${row.itemId}`,
+      createdTime: row.timestampMs ? new Date(row.timestampMs).toISOString() : "",
+      senderId: "",
+      sourceUrl: row.sourceUrl,
+      shortcode: row.shortcode,
+      instructions: row.instructions,
+      hasShareEvidence: true,
+      mediaType: "carousel",
+      carouselItemCount: row.itemCount,
+      classificationDetail: "instagram_direct_carousel_media",
+      sourceMediaJson: JSON.stringify(row.mediaPayload),
+    };
+    if (!unique.has(candidate.messageId)) unique.set(candidate.messageId, candidate);
+  }
+  return [...unique.values()].sort((left, right) => right.createdTime.localeCompare(left.createdTime));
+}
+
 async function loadCachedPilotCandidates(env: Env, pilotKey: string): Promise<BacklogCandidate[] | null> {
   const row = await env.REEL_DB.prepare(
     "SELECT candidates_json FROM pilot_candidate_cache WHERE pilot_key=? AND datetime(expires_at) > CURRENT_TIMESTAMP",
@@ -1888,6 +1946,51 @@ async function cachePilotCandidates(env: Env, pilotKey: string, candidates: Back
      VALUES (?,?,datetime('now','+2 hours'),CURRENT_TIMESTAMP)
      ON CONFLICT(pilot_key) DO UPDATE SET candidates_json=excluded.candidates_json,expires_at=excluded.expires_at,updated_at=CURRENT_TIMESTAMP`,
   ).bind(pilotKey, JSON.stringify(candidates)).run();
+}
+
+async function classifyBacklogCandidate(env: Env, candidate: BacklogCandidate): Promise<BacklogCandidate> {
+  if (candidate.mediaType) return candidate;
+  if (!candidate.sourceUrl || !candidate.shortcode) return { ...candidate, mediaType: "unknown", carouselItemCount: 0 };
+  const cookies = await loadInstagramBrowserCookies(env);
+  if (!cookies) throw new Error("Instagram browser authentication is not connected");
+  const classifyResponse = async (response: Response | null): Promise<ReturnType<typeof classifyInstagramMediaPayload>> => {
+    if (!response?.ok) return { mediaType: "unknown", itemCount: 0 };
+    return classifyInstagramMediaPayload(await response.json<unknown>().catch(() => null));
+  };
+  const response = await fetch(`https://www.instagram.com/api/v1/media/shortcode/${encodeURIComponent(candidate.shortcode)}/info/`, {
+    headers: {
+      ...instagramDirectHeaders(cookies),
+      referer: candidate.sourceUrl,
+    },
+  }).catch(() => null);
+  let classification = await classifyResponse(response);
+  const detail = [`shortcode_HTTP_${response?.status || "network"}`];
+  if (classification.mediaType === "unknown") {
+    const page = await fetch(candidate.sourceUrl, {
+      headers: { accept: "text/html", "user-agent": instagramDirectHeaders(cookies)["user-agent"] },
+      redirect: "follow",
+    }).catch(() => null);
+    const html = page?.ok ? await page.text() : "";
+    detail.push(`html_HTTP_${page?.status || "network"}`, `html_bytes_${html.length}`);
+    const embedded = html ? instagramCarouselPayloadFromHtml(html) : null;
+    if (embedded) detail.push("html_embedded_media");
+    if (embedded) classification = classifyInstagramMediaPayload(embedded);
+    if (classification.mediaType === "unknown" && html) {
+      const escapedShortcode = candidate.shortcode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const forward = html.match(new RegExp(`"media_id":"(\\d{8,30})".{0,5000}"shortcode":"${escapedShortcode}"`, "s"));
+      const reverse = html.match(new RegExp(`"shortcode":"${escapedShortcode}".{0,5000}"media_id":"(\\d{8,30})"`, "s"));
+      const mediaId = forward?.[1] || reverse?.[1] || "";
+      detail.push(mediaId ? "html_media_id" : `html_no_media_id:shortcode_${html.includes(candidate.shortcode)}`);
+      if (mediaId) {
+        const info = await fetch(`https://www.instagram.com/api/v1/media/${encodeURIComponent(mediaId)}/info/`, {
+          headers: { ...instagramDirectHeaders(cookies), referer: candidate.sourceUrl },
+        }).catch(() => null);
+        detail.push(`media_HTTP_${info?.status || "network"}`);
+        classification = await classifyResponse(info);
+      }
+    }
+  }
+  return { ...candidate, mediaType: classification.mediaType, carouselItemCount: classification.itemCount, classificationDetail: detail.join(";") };
 }
 
 async function findExistingJobForCandidate(env: Env, candidate: BacklogCandidate): Promise<{ id: string; status: string; pilot_run_id: string | null } | null> {
@@ -1930,7 +2033,7 @@ async function backlogProcessingActive(env: Env): Promise<boolean> {
 }
 
 async function handleBacklogPilot(request: Request, env: Env): Promise<Response> {
-  const input = await readJson<{ pilot_key?: string; target_count?: number; confirm_pilot?: string; dry_run?: boolean }>(request);
+  const input = await readJson<{ pilot_key?: string; target_count?: number; confirm_pilot?: string; dry_run?: boolean; carousel_only?: boolean; debug_limit?: number }>(request);
   const pilotKey = String(input.pilot_key || "").trim().slice(0, 120);
   const targetCount = Math.min(20, Math.max(1, Number(input.target_count || 10)));
   if (!pilotKey) return json({ error: "pilot_key is required" }, { status: 400 });
@@ -1941,8 +2044,9 @@ async function handleBacklogPilot(request: Request, env: Env): Promise<Response>
   let candidates: BacklogCandidate[];
   try {
     candidates = input.dry_run
-      ? await loadBacklogCandidates(env)
-      : (await loadCachedPilotCandidates(env, pilotKey)) || await loadBacklogCandidates(env);
+      ? (input.carousel_only ? await loadDirectCarouselBacklogCandidates(env) : await loadBacklogCandidates(env))
+      : (await loadCachedPilotCandidates(env, pilotKey))
+        || (input.carousel_only ? await loadDirectCarouselBacklogCandidates(env) : await loadBacklogCandidates(env));
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Instagram conversation scan failed";
     return json({ error: detail.slice(0, 500), retryable: true }, { status: 502 });
@@ -1952,19 +2056,30 @@ async function handleBacklogPilot(request: Request, env: Env): Promise<Response>
     const selectedCandidates: BacklogCandidate[] = [];
     let duplicates = 0;
     let unavailable = 0;
+    let nonCarousels = 0;
+    const classificationDebug: Array<Record<string, unknown>> = [];
     for (const candidate of candidates) {
       if (!candidate.sourceUrl || !candidate.shortcode) {
         if (candidate.hasShareEvidence) unavailable += 1;
         continue;
       }
-      const existing = await findExistingJobForCandidate(env, candidate);
+      const classified = input.carousel_only ? await classifyBacklogCandidate(env, candidate) : candidate;
+      if (input.debug_limit && classificationDebug.length < Math.min(20, input.debug_limit)) {
+        classificationDebug.push({ source_url: classified.sourceUrl, shortcode: classified.shortcode, media_type: classified.mediaType, detail: classified.classificationDetail });
+      }
+      if (input.carousel_only && classified.mediaType !== "carousel") {
+        nonCarousels += 1;
+        if (input.debug_limit && classificationDebug.length >= Math.min(20, input.debug_limit)) break;
+        continue;
+      }
+      const existing = await findExistingJobForCandidate(env, classified);
       if (existing) { duplicates += 1; continue; }
-      selection.push({ message_id: candidate.messageId, created_time: candidate.createdTime, source_url: candidate.sourceUrl, shortcode: candidate.shortcode });
-      selectedCandidates.push(candidate);
+      selection.push({ message_id: classified.messageId, created_time: classified.createdTime, source_url: classified.sourceUrl, shortcode: classified.shortcode, media_type: classified.mediaType || null, carousel_item_count: classified.carouselItemCount || null });
+      selectedCandidates.push(classified);
       if (selection.length === targetCount) break;
     }
     if (selectedCandidates.length === targetCount) await cachePilotCandidates(env, pilotKey, selectedCandidates);
-    return json({ ok: selection.length === targetCount, dry_run: true, target_count: targetCount, selectable: selection.length, duplicates_before_selection: duplicates, unavailable_before_selection: unavailable, selection }, { status: selection.length === targetCount ? 200 : 409 });
+    return json({ ok: selection.length === targetCount, dry_run: true, target_count: targetCount, carousel_only: Boolean(input.carousel_only), selectable: selection.length, duplicates_before_selection: duplicates, unavailable_before_selection: unavailable, non_carousels_before_selection: nonCarousels, classification_debug: classificationDebug, selection }, { status: selection.length === targetCount ? 200 : 409 });
   }
 
   let run = await env.REEL_DB.prepare("SELECT id, status FROM pilot_runs WHERE pilot_key=?").bind(pilotKey).first<{ id: string; status: string }>();
@@ -1988,25 +2103,28 @@ async function handleBacklogPilot(request: Request, env: Env): Promise<Response>
         .bind(uuid(), run.id, candidate.messageId).run();
       continue;
     }
-    const before = await findExistingJobForCandidate(env, candidate);
+    const classified = input.carousel_only ? await classifyBacklogCandidate(env, candidate) : candidate;
+    if (input.carousel_only && classified.mediaType !== "carousel") continue;
+    const before = await findExistingJobForCandidate(env, classified);
     if (before && before.pilot_run_id !== run.id) {
       duplicates += 1;
       await env.REEL_DB.prepare("INSERT OR IGNORE INTO pilot_items(id,pilot_run_id,source_message_id,source_url,shortcode,job_id,decision,detail) VALUES (?,?,?,?,?,?,'duplicate','Rejected before queue and Codex')")
-        .bind(uuid(), run.id, candidate.messageId, candidate.sourceUrl, candidate.shortcode, before.id).run();
+        .bind(uuid(), run.id, classified.messageId, classified.sourceUrl, classified.shortcode, before.id).run();
       continue;
     }
     const result = await createJob(env, {
-      sourceUrl: candidate.sourceUrl,
-      instructions: candidate.instructions,
-      senderId: candidate.senderId,
-      sourceMessageId: candidate.messageId,
+      sourceUrl: classified.sourceUrl!,
+      instructions: classified.instructions,
+      senderId: classified.senderId,
+      sourceMessageId: classified.messageId,
       pilotRunId: run.id,
+      sourceMediaJson: classified.sourceMediaJson || null,
     });
     const resolved = await env.REEL_DB.prepare("SELECT pilot_run_id FROM jobs WHERE id=?").bind(result.id).first<{ pilot_run_id: string | null }>();
     const selected = !result.duplicate || resolved?.pilot_run_id === run.id;
     if (!selected) duplicates += 1;
     await env.REEL_DB.prepare("INSERT OR IGNORE INTO pilot_items(id,pilot_run_id,source_message_id,source_url,shortcode,job_id,decision,detail) VALUES (?,?,?,?,?,?,?,?)")
-      .bind(uuid(), run.id, candidate.messageId, candidate.sourceUrl, candidate.shortcode, result.id, selected ? "selected" : "duplicate", selected ? "Queued after canonical deduplication" : "Rejected before queue and Codex").run();
+      .bind(uuid(), run.id, classified.messageId, classified.sourceUrl, classified.shortcode, result.id, selected ? "selected" : "duplicate", selected ? "Queued after carousel classification and canonical deduplication" : "Rejected before queue and Codex").run();
     const count = await env.REEL_DB.prepare("SELECT COUNT(*) AS count FROM jobs WHERE pilot_run_id=? AND status!='duplicate'").bind(run.id).first<{ count: number }>();
     if (Number(count?.count || 0) >= targetCount) break;
   }
