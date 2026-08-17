@@ -1390,7 +1390,9 @@ async function wikipediaArtwork(resources: SynthesisResource[]): Promise<Map<num
     url.searchParams.set("prop", "pageimages|images");
     url.searchParams.set("piprop", "original|thumbnail");
     url.searchParams.set("pithumbsize", "1200");
-    url.searchParams.set("imlimit", "20");
+    // `imlimit` is shared across every page in this request, not applied per page.
+    // Request the API maximum so later film/TV titles still receive poster files.
+    url.searchParams.set("imlimit", "max");
     url.searchParams.set("titles", batch.flatMap((target) => target.titles).join("|"));
     try {
       const response = await fetch(url, { headers: { "user-agent": "Instagram-Reel-Brain/1.0 (private research archive)" } });
