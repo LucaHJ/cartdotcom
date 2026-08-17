@@ -1,5 +1,6 @@
 node_modules/
 .wrangler/
+.wrangler*/
 *.sqlite3
 *.db
 __pycache__/
