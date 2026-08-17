@@ -1332,11 +1332,18 @@ function routeSynthesisResources(job: JobRow, payload: SynthesisPayload): Routed
   });
 }
 
-function wikipediaArtworkTitles(name: string, artifactType: ArtifactType): string[] {
+function wikipediaArtworkTitles(name: string, artifactType: ArtifactType, summary = ""): string[] {
   const cleaned = name.trim();
   if (artifactType === "film") {
-    const qualified = /\(\d{4}\)$/.test(cleaned) ? cleaned.replace(/\((\d{4})\)$/, "($1 film)") : `${cleaned} (film)`;
-    return qualified === cleaned ? [cleaned] : [qualified, cleaned];
+    const titleYear = cleaned.match(/\(((?:19|20)\d{2})\)$/)?.[1];
+    const summaryYear = summary.match(/\b((?:19|20)\d{2})\b/)?.[1];
+    const year = titleYear || summaryYear;
+    const base = titleYear ? cleaned.replace(/\s*\((?:19|20)\d{2}\)$/, "") : cleaned;
+    return [...new Set([
+      year ? `${base} (${year} film)` : "",
+      `${base} (film)`,
+      cleaned,
+    ].filter(Boolean))];
   }
   const qualified = /\((?:TV series|television series)\)$/i.test(cleaned) ? cleaned : `${cleaned} (TV series)`;
   return qualified === cleaned ? [cleaned] : [qualified, cleaned];
@@ -1374,7 +1381,7 @@ async function wikipediaArtwork(resources: SynthesisResource[]): Promise<Map<num
     const kind = normalizeResourceKind(resource.kind, resource.name, resource.summary);
     const artifactType = normalizeArtifactType(resource.artifact_type, kind, resource.name, resource.summary);
     if ((artifactType !== "film" && artifactType !== "tv_show") || resource.hero_image_url) return [];
-    return [{ index, artifactType, titles: wikipediaArtworkTitles(resource.name, artifactType) }];
+    return [{ index, artifactType, titles: wikipediaArtworkTitles(resource.name, artifactType, resource.summary || "") }];
   });
   const results = new Map<number, { url: string; alt: string }>();
   // Keep both the page-title and image-file queries comfortably below MediaWiki's
