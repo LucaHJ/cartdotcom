@@ -1436,10 +1436,10 @@ async function refreshYoutubeCollectionPages(env: Env, onlyVideoIds?: Set<string
   let removed = 0;
   let cursor: string | undefined;
   do {
-    const result = await env.REEL_LIBRARY_KV.list({ prefix: `${REEL_LIBRARY_FILE_PREFIX}youtube/`, cursor });
+    const result = await env.REEL_LIBRARY_KV.list({ prefix: REEL_LIBRARY_FILE_PREFIX, cursor });
     const stale = result.keys.filter((key) => {
       const path = String(((key.metadata || {}) as Record<string, unknown>).path || "");
-      return path && !retainedPaths.has(path);
+      return path.startsWith("youtube/") && !retainedPaths.has(path);
     });
     if (stale.length) await Promise.all(stale.map((key) => env.REEL_LIBRARY_KV!.delete(key.name)));
     removed += stale.length;
