@@ -467,6 +467,21 @@
             return template.innerHTML;
         }
 
+        function openSpotify(link) {
+            const webUrl = link.getAttribute("href") || "";
+            const appUri = link.dataset.spotifyUri || "";
+            if (!/^https:\/\/open\.spotify\.com\//i.test(webUrl) || !/^spotify:(track|album|episode|show|playlist|artist):[A-Za-z0-9]+$/i.test(appUri)) return false;
+            let appOpened = false;
+            const markOpened = () => { if (document.visibilityState === "hidden") appOpened = true; };
+            document.addEventListener("visibilitychange", markOpened, { once: true });
+            window.location.href = appUri;
+            window.setTimeout(() => {
+                document.removeEventListener("visibilitychange", markOpened);
+                if (!appOpened && document.visibilityState === "visible") window.location.href = webUrl;
+            }, 1400);
+            return true;
+        }
+
         function configureSelectedFile() {
             closeVideoPlayer();
             closeAudioPlayer();
@@ -665,6 +680,8 @@
             if (button) loadFile(button.dataset.filePath);
         });
         readerContent.addEventListener("click", event => {
+            const spotifyLink = event.target.closest("[data-spotify-uri]");
+            if (spotifyLink) { event.preventDefault(); openSpotify(spotifyLink); return; }
             const galleryAction = event.target.closest("[data-gallery-action]");
             if (galleryAction) { event.preventDefault(); showGallery(); return; }
             const galleryFile = event.target.closest("[data-file-path]");

@@ -440,6 +440,11 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .document-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 22px 0; }
 .document-actions a, .document-actions button { border: 1px solid var(--line); border-radius: 999px; padding: 8px 13px; background: transparent; color: var(--ink); font-family: Inter, ui-sans-serif, sans-serif; font-size: 12px; text-decoration: none; cursor: pointer; }
 .document-actions a:hover, .document-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.document-actions .spotify-brand-link { display: inline-grid; width: 36px; height: 36px; padding: 0; place-items: center; border: 0; border-radius: 50%; color: #1ed760; background: #121212; }
+.document-actions .spotify-brand-link:hover { color: #1fdf64; background: #000; transform: translateY(-1px); }
+.spotify-brand-link svg { display: block; width: 36px; height: 36px; overflow: visible; }
+.spotify-brand-link circle { fill: currentColor; }
+.spotify-brand-link path { fill: #121212; }
 .document-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 30px 0 0; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-family: Inter, ui-sans-serif, sans-serif; }
 .document-meta div { min-width: 0; }
 .document-meta dt { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }

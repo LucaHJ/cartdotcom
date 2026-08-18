@@ -117,7 +117,10 @@ test("renders verified media links, artwork, and selectable YouTube candidates",
     },
   });
   assert.match(detail, /class="resource-hero"/);
-  assert.match(detail, /Open on Spotify/);
+  assert.match(detail, /class="spotify-brand-link"/);
+  assert.match(detail, /data-spotify-uri="spotify:track:example"/);
+  assert.match(detail, /aria-label="Open Referenced media in Spotify"/);
+  assert.doesNotMatch(detail, />Open (?:on|in) Spotify</);
   assert.equal((detail.match(/class="youtube-match"/g) || []).length, 2);
   assert.match(detail, /youtube\.com\/embed\/M7lc1UVf-VE/);
   assert.match(detail, /Possible YouTube matches/);
@@ -142,6 +145,15 @@ test("adds deterministic YouTube, Spotify, and article fallbacks", () => {
     canonical_url: "https://example.com/report",
   }, null);
   assert.deepEqual(article.article_links, [{ title: "Mentioned investigation", publisher: "example.com", url: "https://example.com/report" }]);
+});
+
+test("upgrades Spotify artwork renditions and derives native app URIs", () => {
+  assert.equal(
+    domain.highResolutionSpotifyArtworkUrl("https://image-cdn-ak.spotifycdn.com/image/ab67616d00001e02a50279e4210b0f3820bc5378"),
+    "https://image-cdn-ak.spotifycdn.com/image/ab67616d0000b273a50279e4210b0f3820bc5378",
+  );
+  assert.equal(domain.spotifyUriFromUrl("https://open.spotify.com/album/4xGTfawtEfy5f2yGYtRqlr?si=abc"), "spotify:album:4xGTfawtEfy5f2yGYtRqlr");
+  assert.equal(domain.spotifyUriFromUrl("https://example.com/album/4xGTfawtEfy5f2yGYtRqlr"), "");
 });
 
 test("routes Instagram text into retrieval, note, status, help, and emoji commands", () => {

@@ -11,6 +11,7 @@ import {
   instagramDedupeKey,
   instagramDirectCarousels,
   instagramPostUrlFromCdnUrl,
+  highResolutionSpotifyArtworkUrl,
   isValidInstagramReaction,
   normalizeArtifactType,
   normalizeInstagramReaction,
@@ -1486,17 +1487,20 @@ async function enrichSynthesisResourceMedia(resources: SynthesisResource[]): Pro
     const kind = normalizeResourceKind(resource.kind, resource.name, resource.summary);
     const artifactType = normalizeArtifactType(resource.artifact_type, kind, resource.name, resource.summary);
     const media = applyMediaLinkFallbacks(resource, artifactType);
+    if (artifactType === "music" && media.hero_image_url) {
+      media.hero_image_url = highResolutionSpotifyArtworkUrl(media.hero_image_url);
+    }
     const resolvedArtwork = artwork.get(index);
     if (resolvedArtwork && !media.hero_image_url) {
       media.hero_image_url = resolvedArtwork.url;
       media.hero_image_alt = resolvedArtwork.alt;
     }
-    if (media.spotify_url && !media.hero_image_url && /^https:\/\/open\.spotify\.com\/(track|album|episode|show)\//i.test(media.spotify_url)) {
+    if (media.spotify_url && /^https:\/\/open\.spotify\.com\/(track|album|episode|show)\//i.test(media.spotify_url)) {
       try {
         const response = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(media.spotify_url)}`);
         const spotify = response.ok ? await response.json<{ thumbnail_url?: string }>() : {};
-        if (spotify.thumbnail_url?.startsWith("https://")) {
-          media.hero_image_url = spotify.thumbnail_url;
+        if (spotify.thumbnail_url?.startsWith("https://") && (artifactType === "music" || !media.hero_image_url)) {
+          media.hero_image_url = highResolutionSpotifyArtworkUrl(spotify.thumbnail_url);
           media.hero_image_alt = `${resource.name} Spotify artwork`;
         }
       } catch (error) {
@@ -3444,7 +3448,9 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
     return json({ error: "Unauthorised" }, { status: 401 });
   }
   const jobs = await env.REEL_DB.prepare(
-    "SELECT j.* FROM jobs j WHERE j.status='complete' AND j.synthesis_json_key IS NOT NULL AND EXISTS (SELECT 1 FROM resources r WHERE r.job_id=j.id AND r.guide_text IS NULL) ORDER BY j.completed_at,j.created_at LIMIT 8",
+    `SELECT j.* FROM jobs j WHERE j.status='complete' AND j.synthesis_json_key IS NOT NULL AND EXISTS (
+      SELECT 1 FROM resources r WHERE r.job_id=j.id AND (r.guide_text IS NULL OR r.artifact_type='music')
+    ) ORDER BY j.completed_at,j.created_at LIMIT 24`,
   ).all<JobRow>();
   const results: Array<{ job_id: string; ok: boolean; error?: string }> = [];
   for (const job of jobs.results) {
@@ -3452,6 +3458,8 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
       const object = await env.REEL_ARCHIVE.get(job.synthesis_json_key!);
       const payload = object ? await object.json<SynthesisPayload>().catch(() => null) : null;
       if (!payload?.metadata?.title || !Array.isArray(payload.resources)) throw new Error("Stored synthesis is unavailable or invalid");
+      payload.resources = await enrichSynthesisResourceMedia(payload.resources);
+      await env.REEL_ARCHIVE.put(job.synthesis_json_key!, JSON.stringify(payload, null, 2), { httpMetadata: { contentType: "application/json" } });
       await publishSynthesisHtml(env, job, payload, { deferIndexRefresh: true });
       results.push({ job_id: job.id, ok: true });
     } catch (error) {

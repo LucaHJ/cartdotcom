@@ -653,6 +653,39 @@ function safeHttpUrl(value: unknown): string {
   }
 }
 
+export function spotifyUriFromUrl(value: unknown): string {
+  const url = safeHttpUrl(value);
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.toLowerCase() !== "open.spotify.com") return "";
+    const match = parsed.pathname.match(/^\/(track|album|episode|show|playlist|artist)\/([A-Za-z0-9]+)\/?$/i);
+    return match ? `spotify:${match[1].toLowerCase()}:${match[2]}` : "";
+  } catch {
+    return "";
+  }
+}
+
+export function highResolutionSpotifyArtworkUrl(value: unknown): string {
+  const url = safeHttpUrl(value);
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (host !== "i.scdn.co" && !host.endsWith(".spotifycdn.com")) return url;
+    const imageId = parsed.pathname.match(/^\/image\/(ab6761(?:6d|61|63)[A-Za-z0-9]+)$/i)?.[1] || "";
+    if (!imageId) return url;
+    const highResolutionId = imageId
+      .replace(/^ab67616d0000(?:4851|1e02)/i, "ab67616d0000b273")
+      .replace(/^ab6761610000(?:f178|5174)/i, "ab6761610000e5eb")
+      .replace(/^ab6765630000(?:f68d|5f1f)/i, "ab6765630000ba8a");
+    parsed.pathname = `/image/${highResolutionId}`;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function youtubeVideoId(value: unknown): string {
   const url = safeHttpUrl(value);
   if (!url) return "";
@@ -834,6 +867,7 @@ export function renderResourceHtml(input: {
   const canonicalUrl = safeHttpUrl(input.canonicalUrl);
   const heroImageUrl = safeHttpUrl(input.media?.hero_image_url);
   const spotifyUrl = safeHttpUrl(input.media?.spotify_url);
+  const spotifyUri = spotifyUriFromUrl(spotifyUrl);
   const youtubeCandidates = (input.media?.youtube_candidates || []).slice(0, 3).flatMap((candidate) => {
     const id = youtubeVideoId(candidate.url);
     const url = safeHttpUrl(candidate.url);
@@ -866,7 +900,7 @@ export function renderResourceHtml(input: {
   <header class="document-header">
     <p class="document-kicker">${escapeHtml(definition.label)} · ${escapeHtml(definition.folder)}/</p>
     <h1>${escapeHtml(input.name)}</h1>
-    <div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button>${collectionPath ? `<a href="#${encodeURIComponent(collectionPath)}" data-library-path="${escapeHtml(collectionPath)}">View all ${escapeHtml(artifactCollection!.title.toLowerCase())}</a>` : ""}${backToReel}${canonicalUrl ? `<a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noopener noreferrer">Official or canonical link</a>` : ""}${spotifyUrl ? `<a href="${escapeHtml(spotifyUrl)}" target="_blank" rel="noopener noreferrer">Open on Spotify</a>` : ""}</div>
+    <div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button>${collectionPath ? `<a href="#${encodeURIComponent(collectionPath)}" data-library-path="${escapeHtml(collectionPath)}">View all ${escapeHtml(artifactCollection!.title.toLowerCase())}</a>` : ""}${backToReel}${canonicalUrl ? `<a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noopener noreferrer">Official or canonical link</a>` : ""}${spotifyUrl ? `<a class="spotify-brand-link" href="${escapeHtml(spotifyUrl)}"${spotifyUri ? ` data-spotify-uri="${escapeHtml(spotifyUri)}"` : ""} aria-label="Open ${escapeHtml(input.name)} in Spotify" title="Open in Spotify"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="12"></circle><path d="M6.4 8.6c3.7-1.1 8.2-.8 11.4 1a1 1 0 0 1-.9 1.8c-2.8-1.6-6.7-1.9-9.9-.9a1 1 0 1 1-.6-1.9Zm.5 3.2c3.1-.9 6.9-.6 9.6.9a.84.84 0 0 1-.8 1.5c-2.3-1.3-5.6-1.6-8.3-.8a.84.84 0 1 1-.5-1.6Zm.5 2.9c2.7-.7 5.8-.5 8.1.8a.7.7 0 0 1-.7 1.3c-1.9-1.1-4.7-1.3-7-.7a.7.7 0 1 1-.4-1.4Z"></path></svg></a>` : ""}</div>
   </header>
   ${heroImageUrl ? `<figure class="resource-hero"><img src="${escapeHtml(heroImageUrl)}" alt="${escapeHtml(input.media?.hero_image_alt || `${input.name} artwork`)}" loading="lazy" referrerpolicy="no-referrer"><figcaption>${escapeHtml(input.media?.hero_image_alt || input.name)}</figcaption></figure>` : ""}
   <section><h2>Profile</h2>${renderProse(input.summary)}</section>
