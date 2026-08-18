@@ -481,9 +481,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .youtube-match-actions > a:not(.youtube-brand-link) { border: 1px solid var(--line); border-radius: 999px; padding: 7px 12px; text-decoration: none; }
 .youtube-match-detail .youtube-brand-link { display: inline-grid; width: 48px; height: 34px; place-items: center; color: #ff0033; border: 0; border-radius: 9px; background: transparent; }
 .youtube-match-detail .youtube-brand-link:hover { color: #e6002e; transform: translateY(-1px); }
-.youtube-brand-link svg { display: block; width: 48px; height: 34px; }
-.youtube-brand-link rect { fill: currentColor; }
-.youtube-brand-link path { fill: #fff; }
+.youtube-brand-link img { display: block; width: 34px; height: 34px; border-radius: 7px; object-fit: contain; }
 .youtube-embed { position: relative; width: 100%; aspect-ratio: 16 / 9; margin: 12px 0; overflow: hidden; border-radius: 7px; background: #111; }
 .youtube-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .youtube-profile-embed { position: relative; width: 100%; aspect-ratio: 16 / 9; margin: 28px 0; overflow: hidden; border-radius: 9px; background: #111; }

@@ -13,6 +13,7 @@ import {
   instagramPostUrlFromCdnUrl,
   highResolutionMusicArtworkUrl,
   isValidInstagramReaction,
+  isYoutubeNativeCandidate,
   normalizeArtifactType,
   normalizeInstagramReaction,
   normalizeResourceKind,
@@ -1346,17 +1347,17 @@ async function refreshArtifactCollectionPages(env: Env): Promise<void> {
   }
 }
 
-async function refreshYoutubeCollectionPages(env: Env, onlyVideoIds?: Set<string>): Promise<{ videos: number; published: number }> {
-  if (!env.REEL_LIBRARY_KV) return { videos: 0, published: 0 };
+async function refreshYoutubeCollectionPages(env: Env, onlyVideoIds?: Set<string>): Promise<{ videos: number; published: number; removed: number }> {
+  if (!env.REEL_LIBRARY_KV) return { videos: 0, published: 0, removed: 0 };
   const rows = await env.REEL_DB.prepare(
     `SELECT r.name AS resource_name,r.library_path AS resource_path,r.media_json,
-      j.library_path AS reel_path,j.title AS reel_title,j.author_username
+      r.artifact_type,j.library_path AS reel_path,j.title AS reel_title,j.author_username
      FROM resources r JOIN jobs j ON j.id=r.job_id
      WHERE r.library_path IS NOT NULL
        AND json_array_length(json_extract(r.media_json,'$.youtube_candidates')) > 0
      ORDER BY r.name,j.completed_at,j.created_at`,
   ).all<{
-    resource_name: string; resource_path: string; media_json: string;
+    resource_name: string; resource_path: string; media_json: string; artifact_type: string | null;
     reel_path: string | null; reel_title: string | null; author_username: string | null;
   }>();
   const grouped = new Map<string, YoutubeVideoProfile>();
@@ -1366,7 +1367,12 @@ async function refreshYoutubeCollectionPages(env: Env, onlyVideoIds?: Set<string
     try { media = JSON.parse(row.media_json || "{}") as ResourceMedia; } catch { continue; }
     for (const candidate of media.youtube_candidates || []) {
       const id = youtubeVideoId(candidate.url);
-      if (!id) continue;
+      if (!id || !isYoutubeNativeCandidate({
+        artifactType: row.artifact_type,
+        resourceName: row.resource_name,
+        candidateTitle: candidate.title,
+        matchReason: candidate.match_reason,
+      })) continue;
       let profile = grouped.get(id);
       if (!profile) {
         profile = {
@@ -1423,10 +1429,23 @@ async function refreshYoutubeCollectionPages(env: Env, onlyVideoIds?: Set<string
     resource_kind: "media",
     resource_folder: "youtube",
     artifact_type: "",
-    summary: `${videos.length} distinct YouTube video${videos.length === 1 ? "" : "s"}, deduplicated by video ID`,
+    summary: `${videos.length} creator-made YouTube work${videos.length === 1 ? "" : "s"}, deduplicated by video ID`,
     source_count: videos.length,
   });
-  return { videos: videos.length, published: selected.length };
+  const retainedPaths = new Set(["youtube/index.html", ...videos.map((video) => `youtube/${video.id}.html`)]);
+  let removed = 0;
+  let cursor: string | undefined;
+  do {
+    const result = await env.REEL_LIBRARY_KV.list({ prefix: `${REEL_LIBRARY_FILE_PREFIX}youtube/`, cursor });
+    const stale = result.keys.filter((key) => {
+      const path = String(((key.metadata || {}) as Record<string, unknown>).path || "");
+      return path && !retainedPaths.has(path);
+    });
+    if (stale.length) await Promise.all(stale.map((key) => env.REEL_LIBRARY_KV!.delete(key.name)));
+    removed += stale.length;
+    cursor = result.list_complete ? undefined : result.cursor;
+  } while (cursor);
+  return { videos: videos.length, published: selected.length, removed };
 }
 
 function routeSynthesisResources(job: JobRow, payload: SynthesisPayload): RoutedSynthesisResource[] {
@@ -3632,7 +3651,7 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
   await refreshArtifactCollectionPages(env);
   await refreshReelLibraryManifest(env);
   const repaired = results.filter((result) => result.ok).length;
-  return json({ ok: repaired === results.length, repaired, artwork_upgraded: artworkUpgraded, youtube_profiles_rebuilt: profileKeys.length + youtubeResourceRows.results.length, youtube_videos: youtubeCollection.videos, youtube_video_pages_rebuilt: youtubeCollection.published, failed: results.length - repaired, results });
+  return json({ ok: repaired === results.length, repaired, artwork_upgraded: artworkUpgraded, youtube_profiles_rebuilt: profileKeys.length + youtubeResourceRows.results.length, youtube_videos: youtubeCollection.videos, youtube_video_pages_rebuilt: youtubeCollection.published, youtube_video_pages_removed: youtubeCollection.removed, failed: results.length - repaired, results });
 }
 
 async function handleSignedThumbnailDownload(request: Request, env: Env, jobId: string): Promise<Response> {

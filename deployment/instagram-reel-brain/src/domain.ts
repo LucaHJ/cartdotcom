@@ -18,6 +18,22 @@ export type ResourceMedia = {
   }>;
 };
 
+const YOUTUBE_NON_NATIVE_TITLE = /\b(?:trailer|teaser|tv spot|movie clip|film clip|deleted scene|official audio|official music video|lyric video|soundtrack|full movie|full film)\b/i;
+
+export function isYoutubeNativeCandidate(input: {
+  artifactType?: string | null;
+  resourceName?: string | null;
+  candidateTitle?: string | null;
+  matchReason?: string | null;
+}): boolean {
+  if (String(input.artifactType || "").trim()) return false;
+  return !YOUTUBE_NON_NATIVE_TITLE.test(`${input.resourceName || ""} ${input.candidateTitle || ""} ${input.matchReason || ""}`);
+}
+
+function youtubeBrandIcon(): string {
+  return `<img src="https://www.gstatic.com/youtube/img/branding/favicon/favicon_144x144.png" alt="" loading="lazy" referrerpolicy="no-referrer">`;
+}
+
 type MediaLinkResource = ResourceMedia & {
   name: string;
   kind?: string | null;
@@ -887,8 +903,17 @@ export function renderResourceHtml(input: {
     const url = safeHttpUrl(candidate.url);
     return id && url ? [{ ...candidate, id, url }] : [];
   });
-  const youtubeMatches = youtubeCandidates.length
-    ? `<section class="resource-media-section"><h2>${youtubeCandidates.length === 1 ? "YouTube video" : "Possible YouTube matches"}</h2>${youtubeCandidates.length > 1 ? "<p>The source was ambiguous. Expand a candidate to preview it and choose the correct video.</p>" : ""}<div class="youtube-match-grid">${youtubeCandidates.map((candidate, index) => `<details class="youtube-match"${youtubeCandidates.length === 1 ? " open" : ""}><summary><img src="https://i.ytimg.com/vi/${escapeHtml(candidate.id)}/hqdefault.jpg" alt="${escapeHtml(candidate.title)} thumbnail" loading="lazy" referrerpolicy="no-referrer"><span><small>${escapeHtml(candidate.confidence)} confidence${youtubeCandidates.length > 1 ? ` · candidate ${index + 1}` : ""}</small><strong>${escapeHtml(candidate.title)}</strong><span>${escapeHtml(candidate.channel)}</span></span></summary><div class="youtube-match-detail"><p>${escapeHtml(candidate.match_reason)}</p><div class="youtube-embed"><iframe src="https://www.youtube.com/embed/${escapeHtml(candidate.id)}" title="${escapeHtml(candidate.title)}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div><div class="youtube-match-actions"><a href="#${encodeURIComponent(`youtube/${candidate.id}.html`)}" data-library-path="${escapeHtml(`youtube/${candidate.id}.html`)}">Saved video profile</a><a class="youtube-brand-link" href="${escapeHtml(candidate.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(candidate.title)} in YouTube" title="Open in YouTube"><svg viewBox="0 0 48 34" aria-hidden="true" focusable="false"><rect x="0" y="0" width="48" height="34" rx="9"></rect><path d="M20 10.5 32 17 20 23.5Z"></path></svg></a></div></div></details>`).join("")}</div></section>`
+  const youtubeNativeIds = new Set(youtubeCandidates.filter((candidate) => isYoutubeNativeCandidate({
+    artifactType,
+    resourceName: input.name,
+    candidateTitle: candidate.title,
+    matchReason: candidate.match_reason,
+  })).map((candidate) => candidate.id));
+  const visibleYoutubeCandidates = artifactType === "film" || artifactType === "tv_show"
+    ? []
+    : youtubeCandidates.filter((candidate) => !YOUTUBE_NON_NATIVE_TITLE.test(`${candidate.title} ${candidate.match_reason}`));
+  const youtubeMatches = visibleYoutubeCandidates.length
+    ? `<section class="resource-media-section"><h2>${visibleYoutubeCandidates.length === 1 ? "YouTube video" : "Possible YouTube matches"}</h2>${visibleYoutubeCandidates.length > 1 ? "<p>The source was ambiguous. Expand a candidate to preview it and choose the correct video.</p>" : ""}<div class="youtube-match-grid">${visibleYoutubeCandidates.map((candidate, index) => `<details class="youtube-match"${visibleYoutubeCandidates.length === 1 ? " open" : ""}><summary><img src="https://i.ytimg.com/vi/${escapeHtml(candidate.id)}/hqdefault.jpg" alt="${escapeHtml(candidate.title)} thumbnail" loading="lazy" referrerpolicy="no-referrer"><span><small>${escapeHtml(candidate.confidence)} confidence${visibleYoutubeCandidates.length > 1 ? ` · candidate ${index + 1}` : ""}</small><strong>${escapeHtml(candidate.title)}</strong><span>${escapeHtml(candidate.channel)}</span></span></summary><div class="youtube-match-detail"><p>${escapeHtml(candidate.match_reason)}</p><div class="youtube-embed"><iframe src="https://www.youtube.com/embed/${escapeHtml(candidate.id)}" title="${escapeHtml(candidate.title)}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div><div class="youtube-match-actions">${youtubeNativeIds.has(candidate.id) ? `<a href="#${encodeURIComponent(`youtube/${candidate.id}.html`)}" data-library-path="${escapeHtml(`youtube/${candidate.id}.html`)}">Saved video profile</a>` : ""}<a class="youtube-brand-link" href="${escapeHtml(candidate.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(candidate.title)} in YouTube" title="Open in YouTube">${youtubeBrandIcon()}</a></div></div></details>`).join("")}</div></section>`
     : "";
   const articleLinks = (input.media?.article_links || []).flatMap((article) => {
     const url = safeHttpUrl(article.url);
@@ -914,7 +939,7 @@ export function renderResourceHtml(input: {
   <header class="document-header">
     <p class="document-kicker">${escapeHtml(definition.label)} · ${escapeHtml(definition.folder)}/</p>
     <h1>${escapeHtml(input.name)}</h1>
-    <div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button>${collectionPath ? `<a href="#${encodeURIComponent(collectionPath)}" data-library-path="${escapeHtml(collectionPath)}">View all ${escapeHtml(artifactCollection!.title.toLowerCase())}</a>` : ""}${youtubeCandidates.length ? `<a href="#${encodeURIComponent("youtube/index.html")}" data-library-path="youtube/index.html">View all YouTube videos</a>` : ""}${backToReel}${canonicalUrl ? `<a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noopener noreferrer">Official or canonical link</a>` : ""}${spotifyUrl ? `<a class="spotify-brand-link" href="${escapeHtml(spotifyUrl)}"${spotifyUri ? ` data-spotify-uri="${escapeHtml(spotifyUri)}"` : ""} aria-label="Open ${escapeHtml(input.name)} in Spotify" title="Open in Spotify"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="12"></circle><path d="M6.4 8.6c3.7-1.1 8.2-.8 11.4 1a1 1 0 0 1-.9 1.8c-2.8-1.6-6.7-1.9-9.9-.9a1 1 0 1 1-.6-1.9Zm.5 3.2c3.1-.9 6.9-.6 9.6.9a.84.84 0 0 1-.8 1.5c-2.3-1.3-5.6-1.6-8.3-.8a.84.84 0 1 1-.5-1.6Zm.5 2.9c2.7-.7 5.8-.5 8.1.8a.7.7 0 0 1-.7 1.3c-1.9-1.1-4.7-1.3-7-.7a.7.7 0 1 1-.4-1.4Z"></path></svg></a>` : ""}</div>
+    <div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button>${collectionPath ? `<a href="#${encodeURIComponent(collectionPath)}" data-library-path="${escapeHtml(collectionPath)}">View all ${escapeHtml(artifactCollection!.title.toLowerCase())}</a>` : ""}${youtubeNativeIds.size ? `<a href="#${encodeURIComponent("youtube/index.html")}" data-library-path="youtube/index.html">View all YouTube videos</a>` : ""}${backToReel}${canonicalUrl ? `<a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noopener noreferrer">Official or canonical link</a>` : ""}${spotifyUrl ? `<a class="spotify-brand-link" href="${escapeHtml(spotifyUrl)}"${spotifyUri ? ` data-spotify-uri="${escapeHtml(spotifyUri)}"` : ""} aria-label="Open ${escapeHtml(input.name)} in Spotify" title="Open in Spotify"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="12"></circle><path d="M6.4 8.6c3.7-1.1 8.2-.8 11.4 1a1 1 0 0 1-.9 1.8c-2.8-1.6-6.7-1.9-9.9-.9a1 1 0 1 1-.6-1.9Zm.5 3.2c3.1-.9 6.9-.6 9.6.9a.84.84 0 0 1-.8 1.5c-2.3-1.3-5.6-1.6-8.3-.8a.84.84 0 1 1-.5-1.6Zm.5 2.9c2.7-.7 5.8-.5 8.1.8a.7.7 0 0 1-.7 1.3c-1.9-1.1-4.7-1.3-7-.7a.7.7 0 1 1-.4-1.4Z"></path></svg></a>` : ""}</div>
   </header>
   ${heroImageUrl ? `<figure class="resource-hero"><img src="${escapeHtml(heroImageUrl)}" alt="${escapeHtml(input.media?.hero_image_alt || `${input.name} artwork`)}" loading="lazy" referrerpolicy="no-referrer"><figcaption>${escapeHtml(input.media?.hero_image_alt || input.name)}</figcaption></figure>` : ""}
   <section><h2>Profile</h2>${renderProse(input.summary)}</section>
@@ -971,7 +996,7 @@ export type YoutubeVideoProfile = {
 };
 
 function youtubeLogoLink(video: YoutubeVideoProfile): string {
-  return `<a class="youtube-brand-link" href="${escapeHtml(video.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(video.title)} in YouTube" title="Open in YouTube"><svg viewBox="0 0 48 34" aria-hidden="true" focusable="false"><rect x="0" y="0" width="48" height="34" rx="9"></rect><path d="M20 10.5 32 17 20 23.5Z"></path></svg></a>`;
+  return `<a class="youtube-brand-link" href="${escapeHtml(video.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${escapeHtml(video.title)} in YouTube" title="Open in YouTube">${youtubeBrandIcon()}</a>`;
 }
 
 export function renderYoutubeVideoHtml(video: YoutubeVideoProfile): string {
@@ -996,7 +1021,7 @@ export function renderYoutubeCollectionHtml(videos: YoutubeVideoProfile[]): stri
     ? `<div class="youtube-library-grid">${videos.map((video) => `<button class="youtube-library-card" type="button" data-library-path="youtube/${escapeHtml(video.id)}.html"><img src="https://i.ytimg.com/vi/${escapeHtml(video.id)}/hqdefault.jpg" alt="" loading="lazy" referrerpolicy="no-referrer"><span class="reel-card-shade" aria-hidden="true"></span><span class="reel-card-copy"><small>YouTube</small><strong>${escapeHtml(video.title)}</strong><span>${escapeHtml(video.channel || "Channel not recorded")}</span></span></button>`).join("")}</div>`
     : "<p>No YouTube videos have been recorded yet.</p>";
   return `<article class="reel-document youtube-index-document" data-document-kind="youtube-index">
-  <header class="document-header"><p class="document-kicker">Central video collection</p><h1>YouTube</h1><p>Every distinct YouTube video stored during Reel research, deduplicated by video ID.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button></div></header>
+  <header class="document-header"><p class="document-kicker">Creator-made video collection</p><h1>YouTube</h1><p>Standalone work created and released for YouTube. Films, television, trailers, clips, and music stay in their own collections.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button></div></header>
   <section><h2>${videos.length} saved video${videos.length === 1 ? "" : "s"}</h2>${cards}</section>
 </article>`;
 }

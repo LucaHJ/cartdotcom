@@ -161,6 +161,45 @@ test("renders a central YouTube folder with deduplicated video profiles and sour
   assert.match(detail, /data-library-path="learning-resources\/youtube-api\.html"/);
   assert.match(detail, /data-library-path="reels\/example\/index\.html"/);
   assert.match(detail, /class="youtube-brand-link"/);
+  assert.match(detail, /www\.gstatic\.com\/youtube\/img\/branding\/favicon\/favicon_144x144\.png/);
+});
+
+test("keeps trailers, film, television, and music out of the creator-made YouTube collection", () => {
+  assert.equal(domain.isYoutubeNativeCandidate({
+    resourceName: "Sean Carroll: Einstein’s most radical thought",
+    candidateTitle: "Sean Carroll: Einstein’s most radical thought",
+    matchReason: "Exact channel match.",
+  }), true);
+  assert.equal(domain.isYoutubeNativeCandidate({
+    artifactType: "film",
+    resourceName: "The Notebook",
+    candidateTitle: "The Notebook - Official Trailer",
+  }), false);
+  assert.equal(domain.isYoutubeNativeCandidate({
+    resourceName: "The Perks of Being a Wallflower",
+    candidateTitle: "Full Deleted Scene",
+  }), false);
+  assert.equal(domain.isYoutubeNativeCandidate({
+    artifactType: "music",
+    resourceName: "Earrings",
+    candidateTitle: "Earrings",
+  }), false);
+
+  const film = domain.renderResourceHtml({
+    rootId: "film-job",
+    rootPath: "reels/example/index.html",
+    name: "The Notebook",
+    kind: "media",
+    artifactType: "film",
+    canonicalUrl: "https://example.com/notebook",
+    summary: "Film profile.",
+    whyUseful: "Reference.",
+    guide: "Watch the film.",
+    sources: [],
+    media: { youtube_candidates: [{ title: "The Notebook - Official Trailer", channel: "Studio", url: "https://www.youtube.com/watch?v=M7lc1UVf-VE", confidence: "high", match_reason: "Official trailer." }] },
+  });
+  assert.doesNotMatch(film, /youtube-match/);
+  assert.doesNotMatch(film, /View all YouTube videos/);
 });
 
 test("adds deterministic YouTube, Spotify, and article fallbacks", () => {
