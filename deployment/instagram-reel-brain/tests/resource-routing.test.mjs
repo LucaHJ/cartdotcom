@@ -124,6 +124,9 @@ test("renders verified media links, artwork, and selectable YouTube candidates",
   assert.equal((detail.match(/class="youtube-match"/g) || []).length, 2);
   assert.match(detail, /youtube\.com\/embed\/M7lc1UVf-VE/);
   assert.match(detail, /Possible YouTube matches/);
+  assert.equal((detail.match(/class="youtube-brand-link"/g) || []).length, 2);
+  assert.match(detail, /aria-label="Open Candidate one in YouTube"/);
+  assert.doesNotMatch(detail, />Open on YouTube</);
   assert.match(detail, /Original article/);
 });
 

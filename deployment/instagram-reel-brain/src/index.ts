@@ -3481,22 +3481,67 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
     } catch {
       continue;
     }
-    if (row.canonical_key) refreshedMusicKeys.add(row.canonical_key);
     const currentUrl = String(media.hero_image_url || "");
     const upgradedUrl = highResolutionMusicArtworkUrl(currentUrl);
     if (!currentUrl || !upgradedUrl || currentUrl === upgradedUrl) continue;
     media.hero_image_url = upgradedUrl;
     await env.REEL_DB.prepare("UPDATE resources SET media_json=? WHERE id=?").bind(JSON.stringify(media), row.id).run();
+    if (row.canonical_key) refreshedMusicKeys.add(row.canonical_key);
     artworkUpgraded += 1;
   }
-  const musicKeys = [...refreshedMusicKeys];
-  for (let offset = 0; offset < musicKeys.length; offset += 6) {
-    await Promise.all(musicKeys.slice(offset, offset + 6).map((canonicalKey) => refreshCanonicalArtifactPage(env, canonicalKey)));
+  const youtubeCanonicalRows = await env.REEL_DB.prepare(
+    `SELECT DISTINCT canonical_key FROM resources WHERE canonical_key IS NOT NULL
+      AND json_array_length(json_extract(media_json,'$.youtube_candidates')) > 0`,
+  ).all<{ canonical_key: string }>();
+  const profileKeys = [...new Set([...refreshedMusicKeys, ...youtubeCanonicalRows.results.map((row) => row.canonical_key)])];
+  for (let offset = 0; offset < profileKeys.length; offset += 12) {
+    await Promise.all(profileKeys.slice(offset, offset + 12).map((canonicalKey) => refreshCanonicalArtifactPage(env, canonicalKey)));
+  }
+  const youtubeResourceRows = await env.REEL_DB.prepare(
+    `SELECT r.id,r.job_id,r.name,r.kind,r.canonical_url,r.summary,r.why_useful,r.guide_text,r.evidence_json,r.media_json,
+      r.library_path,j.library_path AS root_path,j.author_username
+     FROM resources r JOIN jobs j ON j.id=r.job_id
+     WHERE r.canonical_key IS NULL AND r.library_path IS NOT NULL
+       AND json_array_length(json_extract(r.media_json,'$.youtube_candidates')) > 0`,
+  ).all<{
+    id: string; job_id: string; name: string; kind: string | null; canonical_url: string | null;
+    summary: string | null; why_useful: string | null; guide_text: string | null; evidence_json: string | null;
+    media_json: string; library_path: string; root_path: string | null; author_username: string | null;
+  }>();
+  for (const row of youtubeResourceRows.results) {
+    let media: ResourceMedia = {};
+    let sources: string[] = [];
+    try { media = JSON.parse(row.media_json || "{}") as ResourceMedia; } catch { /* retain empty media */ }
+    try {
+      const values = JSON.parse(row.evidence_json || "[]");
+      if (Array.isArray(values)) sources = values.map((value) => String(value || "").trim()).filter(Boolean);
+    } catch { /* retain empty sources */ }
+    const html = renderResourceHtml({
+      rootId: row.job_id,
+      rootPath: row.root_path || "",
+      name: row.name,
+      kind: row.kind,
+      canonicalUrl: row.canonical_url,
+      summary: row.summary || "Not recorded.",
+      whyUseful: row.why_useful || "Not recorded.",
+      guide: row.guide_text || "Not recorded.",
+      sources,
+      media,
+    });
+    const key = `library/${row.library_path}`;
+    await Promise.all([
+      env.REEL_ARCHIVE.put(key, html, { httpMetadata: { contentType: "text/html; charset=utf-8" } }),
+      putReelLibraryHtml(env, row.library_path, html, {
+        kind: "resource", job_id: row.job_id, parent_path: row.root_path || "", title: row.name,
+        author: row.author_username || "", video_available: false, resource_kind: row.kind || "media",
+        resource_folder: row.library_path.split("/", 1)[0] || "media", artifact_type: "", summary: row.summary || "",
+      }),
+    ]);
   }
   await refreshArtifactCollectionPages(env);
   await refreshReelLibraryManifest(env);
   const repaired = results.filter((result) => result.ok).length;
-  return json({ ok: repaired === results.length, repaired, artwork_upgraded: artworkUpgraded, failed: results.length - repaired, results });
+  return json({ ok: repaired === results.length, repaired, artwork_upgraded: artworkUpgraded, youtube_profiles_rebuilt: profileKeys.length + youtubeResourceRows.results.length, failed: results.length - repaired, results });
 }
 
 async function handleSignedThumbnailDownload(request: Request, env: Env, jobId: string): Promise<Response> {
