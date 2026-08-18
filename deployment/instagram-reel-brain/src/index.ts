@@ -3452,8 +3452,8 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
   }
   const jobs = await env.REEL_DB.prepare(
     `SELECT j.* FROM jobs j WHERE j.status='complete' AND j.synthesis_json_key IS NOT NULL AND EXISTS (
-      SELECT 1 FROM resources r WHERE r.job_id=j.id AND (r.guide_text IS NULL OR r.artifact_type='music')
-    ) ORDER BY j.completed_at,j.created_at LIMIT 24`,
+      SELECT 1 FROM resources r WHERE r.job_id=j.id AND r.guide_text IS NULL
+    ) ORDER BY j.completed_at,j.created_at LIMIT 8`,
   ).all<JobRow>();
   const results: Array<{ job_id: string; ok: boolean; error?: string }> = [];
   for (const job of jobs.results) {
@@ -3481,12 +3481,12 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
     } catch {
       continue;
     }
+    if (row.canonical_key) refreshedMusicKeys.add(row.canonical_key);
     const currentUrl = String(media.hero_image_url || "");
     const upgradedUrl = highResolutionMusicArtworkUrl(currentUrl);
     if (!currentUrl || !upgradedUrl || currentUrl === upgradedUrl) continue;
     media.hero_image_url = upgradedUrl;
     await env.REEL_DB.prepare("UPDATE resources SET media_json=? WHERE id=?").bind(JSON.stringify(media), row.id).run();
-    if (row.canonical_key) refreshedMusicKeys.add(row.canonical_key);
     artworkUpgraded += 1;
   }
   for (const canonicalKey of refreshedMusicKeys) await refreshCanonicalArtifactPage(env, canonicalKey);
