@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Reel Research Library</title>
-    <link rel="stylesheet" href="/reel-library.css?v=20260818-youtube-native-only">
+    <link rel="stylesheet" href="/reel-library.css?v=20260818-mobile-dark-folders">
 </head>
 <body>
     <main class="library-app">
-        <aside class="library-sidebar" aria-label="Reel research files">
+        <aside id="librarySidebar" class="library-sidebar" aria-label="Reel research files">
             <header class="library-brand">
                 <p class="eyebrow">private research archive</p>
                 <h1>Reel Library</h1>
@@ -17,6 +17,7 @@
                     <a href="/home.html">Home</a>
                     <a href="/backend/instagram.html">Instagram</a>
                     <a href="/backend/second-brain.html">Second Brain</a>
+                    <button id="themeToggle" type="button" aria-pressed="false">Dark mode</button>
                     <button id="logoutButton" type="button">Logout</button>
                 </nav>
             </header>
@@ -35,6 +36,7 @@
 
         <section class="reader-pane" aria-label="Persistent HTML reader">
             <header class="reader-bar">
+                <button id="navigationToggle" class="navigation-toggle" type="button" aria-expanded="true" aria-controls="librarySidebar">Hide files</button>
                 <button id="galleryButton" class="gallery-back-button" type="button" hidden>&larr; Gallery</button>
                 <span id="readerPath" class="reader-path">Select a file</span>
                 <span id="readerStatus" class="reader-status" aria-live="polite">Loading library…</span>
@@ -97,6 +99,9 @@
         const reelDescription = document.getElementById("reelDescription");
         const commentsStatus = document.getElementById("commentsStatus");
         const commentsList = document.getElementById("commentsList");
+        const libraryApp = document.querySelector(".library-app");
+        const navigationToggle = document.getElementById("navigationToggle");
+        const themeToggle = document.getElementById("themeToggle");
         let files = [];
         let selectedPath = "";
         let activeAudio = null;
@@ -105,8 +110,45 @@
         let carouselSwipeStart = null;
         const thumbnailCache = new Map();
         const treeStateStorageKey = "reel-library-tree-state-v1";
+        const themeStorageKey = "reel-library-theme-v1";
+        const navigationStorageKey = "reel-library-navigation-v1";
         let rememberedTreeState = loadTreeState();
         let treeStateSaveFrame = null;
+
+        function applyTheme(dark) {
+            document.documentElement.classList.toggle("dark-mode", dark);
+            themeToggle.textContent = dark ? "Light mode" : "Dark mode";
+            themeToggle.setAttribute("aria-pressed", String(dark));
+            try { localStorage.setItem(themeStorageKey, dark ? "dark" : "light"); } catch { /* Storage is optional. */ }
+        }
+
+        function initialDarkMode() {
+            try {
+                const stored = localStorage.getItem(themeStorageKey);
+                if (stored === "dark") return true;
+                if (stored === "light") return false;
+            } catch { /* Storage is optional. */ }
+            return window.matchMedia?.("(prefers-color-scheme: dark)").matches || false;
+        }
+
+        function setNavigationCollapsed(collapsed) {
+            libraryApp.classList.toggle("nav-collapsed", collapsed);
+            navigationToggle.textContent = collapsed ? "☰ Files" : "Hide files";
+            navigationToggle.setAttribute("aria-expanded", String(!collapsed));
+            try { localStorage.setItem(navigationStorageKey, collapsed ? "collapsed" : "open"); } catch { /* Storage is optional. */ }
+        }
+
+        function initialNavigationCollapsed() {
+            try {
+                const stored = localStorage.getItem(navigationStorageKey);
+                if (stored === "collapsed") return true;
+                if (stored === "open") return false;
+            } catch { /* Storage is optional. */ }
+            return window.matchMedia?.("(max-width: 760px)").matches || false;
+        }
+
+        applyTheme(initialDarkMode());
+        setNavigationCollapsed(initialNavigationCollapsed());
 
         function statusClass(ok) { return ok ? "is-ok" : "is-error"; }
 
@@ -356,7 +398,8 @@
             return `${folders.map(([name, child]) => {
                 const folderPath = parentPath ? `${parentPath}/${name}` : name;
                 const displayName = name.toLowerCase() === "youtube" ? "YouTube" : name;
-                return `<details data-folder-path="${escapeHtml(folderPath)}" ${depth < 3 ? "open" : ""}><summary>${escapeHtml(displayName)}</summary><div class="tree-children">${renderNode(child, depth + 1, folderPath)}</div></details>`;
+                const folderIndex = child.files.find(file => file.name === "index.html")?.path || "";
+                return `<details data-folder-path="${escapeHtml(folderPath)}" ${depth < 3 ? "open" : ""}><summary data-folder-path="${escapeHtml(folderPath)}" data-folder-index="${escapeHtml(folderIndex)}" title="Open ${escapeHtml(displayName)} index">${escapeHtml(displayName)}</summary><div class="tree-children">${renderNode(child, depth + 1, folderPath)}</div></details>`;
             }).join("")}${childFiles.map(file => `<button class="file-entry ${file.path === selectedPath ? "is-selected" : ""}" type="button" data-file-path="${escapeHtml(file.path)}"><span class="file-entry-name">${escapeHtml(file.name)}</span><span class="file-entry-title">${escapeHtml(file.title || file.kind || "HTML file")}</span></button>`).join("")}`;
         }
 
@@ -468,6 +511,50 @@
             return template.innerHTML;
         }
 
+        function folderPages(folderPath) {
+            const prefix = `${folderPath.replace(/\/+$/, "")}/`;
+            return files
+                .filter(file => file.path.startsWith(prefix) && file.path !== `${prefix}index.html`)
+                .sort((left, right) => String(left.title || left.path).localeCompare(String(right.title || right.path)) || left.path.localeCompare(right.path));
+        }
+
+        function folderPagePicker(folderPath, pages) {
+            if (!pages.length) return "";
+            const options = pages.map(file => `<option value="${escapeHtml(file.path)}">${escapeHtml(file.title || file.path.slice(folderPath.length + 1))}</option>`).join("");
+            return `<div class="folder-page-picker"><label for="folderPageSelect"><span class="eyebrow">Pages in ${escapeHtml(folderPath)}</span><select id="folderPageSelect" data-folder-page-select><option value="">Choose a page…</option>${options}</select></label></div>`;
+        }
+
+        function enhanceFolderIndexPage(path) {
+            if (!/\/index\.html$/i.test(path)) return;
+            const folderPath = path.slice(0, -"/index.html".length);
+            const pages = folderPages(folderPath);
+            if (!pages.length || readerContent.querySelector("[data-folder-page-select]")) return;
+            const header = readerContent.querySelector(".document-header") || readerContent.firstElementChild;
+            if (!header) return;
+            const picker = document.createElement("div");
+            picker.innerHTML = folderPagePicker(folderPath, pages);
+            if (picker.firstElementChild) header.append(picker.firstElementChild);
+        }
+
+        function showFolderIndex(folderPath, options = {}) {
+            const cleanPath = String(folderPath || "").replace(/^\/+|\/+$/g, "");
+            if (!cleanPath) return showGallery(options);
+            closeVideoPlayer();
+            closeAudioPlayer();
+            readerWorkspace.classList.remove("has-reel-media");
+            reelMediaPanel.hidden = true;
+            selectedPath = `folder:${cleanPath}`;
+            galleryButton.hidden = false;
+            readerPath.textContent = `${cleanPath}/`;
+            const pages = folderPages(cleanPath);
+            readerContent.classList.remove("is-gallery");
+            readerContent.innerHTML = `<article class="reel-document folder-index-document"><header class="document-header"><p class="document-kicker">Folder index</p><h1>${escapeHtml(cleanPath)}</h1><p>Choose a page from this folder. The file browser remains available on the left.</p>${folderPagePicker(cleanPath, pages)}</header><section><h2>${pages.length} page${pages.length === 1 ? "" : "s"}</h2>${pages.length ? `<div class="folder-page-grid">${pages.map(file => `<button class="folder-page-card" type="button" data-file-path="${escapeHtml(file.path)}"><span class="folder-page-card-name">${escapeHtml(file.title || file.path.split("/").at(-1))}</span><span class="folder-page-card-path">${escapeHtml(file.path.slice(cleanPath.length + 1))}</span></button>`).join("")}</div>` : `<p class="empty-artifact">This folder has no pages yet.</p>`}</section></article>`;
+            readerStatus.textContent = `${pages.length} folder page${pages.length === 1 ? "" : "s"}`;
+            markTreeSelection();
+            readerScroll.scrollTop = 0;
+            if (!options.preserveHash) history.replaceState(null, "", `#folder:${encodeURIComponent(cleanPath)}`);
+        }
+
         function openSpotify(link) {
             const webUrl = link.getAttribute("href") || "";
             const appUri = link.dataset.spotifyUri || "";
@@ -528,6 +615,7 @@
 
         async function loadFile(path, options = {}) {
             if (!path) return;
+            if (window.matchMedia?.("(max-width: 760px)").matches) setNavigationCollapsed(true);
             readerStatus.textContent = "Loading…";
             try {
                 const payload = await api(`/api/reel-library/file?path=${encodeURIComponent(path)}`);
@@ -536,6 +624,7 @@
                 readerPath.textContent = selectedPath;
                 readerContent.classList.remove("is-gallery");
                 readerContent.innerHTML = sanitizeArticle(payload.file.html);
+                enhanceFolderIndexPage(selectedPath);
                 readerStatus.textContent = payload.file.metadata?.kind === "resource"
                     ? `${payload.file.metadata?.resource_kind || "Resource"} profile`
                     : "Reel research";
@@ -557,7 +646,8 @@
                 renderTree();
                 readerStatus.textContent = `${files.length} HTML files`;
                 const requested = decodeURIComponent(location.hash.replace(/^#/, ""));
-                if (requested && files.some(file => file.path === requested)) await loadFile(requested, { preserveHash: true });
+                if (requested.startsWith("folder:")) showFolderIndex(requested.slice("folder:".length), { preserveHash: true });
+                else if (requested && files.some(file => file.path === requested)) await loadFile(requested, { preserveHash: true });
                 else showGallery({ preserveHash: requested === "gallery" });
             } catch (error) {
                 fileTree.innerHTML = `<p class="empty-message error-message">${escapeHtml(error.message)}</p>`;
@@ -677,6 +767,13 @@
         window.addEventListener("resize", syncMediaColumnWidth);
 
         fileTree.addEventListener("click", event => {
+            const summary = event.target.closest("summary[data-folder-path]");
+            if (summary) {
+                const folderIndex = summary.dataset.folderIndex || "";
+                if (folderIndex) loadFile(folderIndex);
+                else showFolderIndex(summary.dataset.folderPath || "");
+                return;
+            }
             const button = event.target.closest("[data-file-path]");
             if (button) loadFile(button.dataset.filePath);
         });
@@ -690,6 +787,10 @@
             const fileLink = event.target.closest("[data-library-path]");
             if (fileLink) { event.preventDefault(); loadFile(fileLink.dataset.libraryPath); return; }
         });
+        readerContent.addEventListener("change", event => {
+            const select = event.target.closest("[data-folder-page-select]");
+            if (select?.value) loadFile(select.value);
+        });
         fileSearch.addEventListener("input", () => renderTree({ resetScroll: true }));
         fileTree.addEventListener("scroll", scheduleTreeStateSave, { passive: true });
         fileTree.addEventListener("toggle", scheduleTreeStateSave, true);
@@ -698,8 +799,10 @@
         galleryButton.addEventListener("click", () => showGallery());
         document.getElementById("collapseTree").addEventListener("click", () => { fileTree.querySelectorAll("details").forEach(item => item.open = false); captureTreeState(); });
         document.getElementById("openTree").addEventListener("click", () => { fileTree.querySelectorAll("details").forEach(item => item.open = true); captureTreeState(); });
+        navigationToggle.addEventListener("click", () => setNavigationCollapsed(!libraryApp.classList.contains("nav-collapsed")));
+        themeToggle.addEventListener("click", () => applyTheme(!document.documentElement.classList.contains("dark-mode")));
         document.getElementById("logoutButton").addEventListener("click", async () => { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined); location.href = "/login.html"; });
-        window.addEventListener("hashchange", () => { const path = decodeURIComponent(location.hash.replace(/^#/, "")); if (!path || path === "gallery") showGallery({ preserveHash: true }); else if (path !== selectedPath) loadFile(path, { preserveHash: true }); });
+        window.addEventListener("hashchange", () => { const path = decodeURIComponent(location.hash.replace(/^#/, "")); if (!path || path === "gallery") showGallery({ preserveHash: true }); else if (path.startsWith("folder:")) showFolderIndex(path.slice("folder:".length), { preserveHash: true }); else if (path !== selectedPath) loadFile(path, { preserveHash: true }); });
         loadLibrary();
     </script>
 </body>
