@@ -1349,7 +1349,10 @@ function routeSynthesisResources(job: JobRow, payload: SynthesisPayload): Routed
     const kind = normalizeResourceKind(resource.kind, resource.name, resource.summary);
     const artifactType = normalizeArtifactType(resource.artifact_type, kind, resource.name, resource.summary);
     const canonicalKey = artifactType ? canonicalArtifactKey(artifactType, resource.name) : null;
-    return { ...resource, slug, kind, artifactType, canonicalKey, documentSlug: artifactType ? slug : `${slug}-${sourceSuffix}` };
+    const heroImageUrl = artifactType === "music" && resource.hero_image_url
+      ? highResolutionMusicArtworkUrl(resource.hero_image_url)
+      : resource.hero_image_url;
+    return { ...resource, hero_image_url: heroImageUrl, slug, kind, artifactType, canonicalKey, documentSlug: artifactType ? slug : `${slug}-${sourceSuffix}` };
   });
 }
 
