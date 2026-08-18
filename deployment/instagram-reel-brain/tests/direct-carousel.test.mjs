@@ -58,8 +58,8 @@ test("matches a media_share shortcode by the webhook media id", () => {
     timestampMs: webhookTime,
   }), {
     sourceUrl: "https://www.instagram.com/p/DExample001/",
-    score: 180,
-    matchedBy: ["media_id", "title", "timestamp_10m"],
+    score: 195,
+    matchedBy: ["media_id", "title_exact", "timestamp_15s"],
     itemType: "media_share",
     mediaPayload: null,
   });
@@ -169,7 +169,81 @@ test("allows title plus close timestamp when Direct omits the attachment media i
     timestampMs: webhookTime,
   });
   assert.equal(match?.sourceUrl, "https://www.instagram.com/p/DTitleTime3/");
-  assert.deepEqual(match?.matchedBy, ["title", "timestamp_10m"]);
+  assert.deepEqual(match?.matchedBy, ["title_exact", "timestamp_1m"]);
+});
+
+test("matches multiline webhook captions against structured Direct text without JSON escape corruption", () => {
+  const caption = "Six underrated movies\nthat deserve more attention\nSave this list for later";
+  const payload = { thread: { items: [{
+    item_id: "message-multiline",
+    item_type: "xma_media_share",
+    timestamp: webhookTime * 1000,
+    xma_media_share: [{
+      target_url: "https://www.instagram.com/p/DMultiline6/",
+      title_text: caption,
+    }],
+  }] } };
+  const match = findInstagramDirectPermalink(payload, {
+    mediaId: "18113134456932485",
+    title: caption,
+    timestampMs: webhookTime,
+  });
+  assert.equal(match?.sourceUrl, "https://www.instagram.com/p/DMultiline6/");
+  assert.deepEqual(match?.matchedBy, ["title_exact", "timestamp_15s"]);
+});
+
+test("matches a uniquely truncated Direct caption only with a close timestamp", () => {
+  const fullCaption = "These are six underrated movies that deserve much more attention from people who love independent cinema and careful visual storytelling.";
+  const payload = { inbox: { threads: [{ items: [{
+    item_id: "message-truncated",
+    item_type: "xma_media_share",
+    timestamp: webhookTime + 20_000,
+    xma_media_share: [{
+      target_url: "https://www.instagram.com/p/DTruncate7/",
+      title_text: "These are six underrated movies that deserve much more attention",
+    }],
+  }] }] } };
+  const match = findInstagramDirectPermalink(payload, {
+    mediaId: "18113134456932485",
+    title: fullCaption,
+    timestampMs: webhookTime,
+  });
+  assert.equal(match?.sourceUrl, "https://www.instagram.com/p/DTruncate7/");
+  assert.deepEqual(match?.matchedBy, ["title_partial", "timestamp_1m"]);
+});
+
+test("does not accept a partial caption match without a close timestamp", () => {
+  const payload = { thread: { items: [{
+    item_id: "message-old-partial",
+    item_type: "xma_media_share",
+    timestamp: webhookTime - (2 * 60 * 60_000),
+    xma_media_share: [{
+      target_url: "https://www.instagram.com/p/DOldPartial8/",
+      title_text: "These are six underrated movies that deserve much more attention",
+    }],
+  }] } };
+  assert.equal(findInstagramDirectPermalink(payload, {
+    mediaId: "18113134456932485",
+    title: "These are six underrated movies that deserve much more attention from people who love independent cinema and careful visual storytelling.",
+    timestampMs: webhookTime,
+  }), null);
+});
+
+test("fails closed when two nearby Direct items have the same partial caption identity", () => {
+  const item = (code) => ({
+    item_id: code,
+    item_type: "xma_media_share",
+    timestamp: webhookTime + 20_000,
+    xma_media_share: [{
+      target_url: `https://www.instagram.com/p/${code}/`,
+      title_text: "These are six underrated movies that deserve much more attention",
+    }],
+  });
+  assert.equal(findInstagramDirectPermalink({ thread: { items: [item("DAmbiguous1"), item("DAmbiguous2")] } }, {
+    mediaId: "18113134456932485",
+    title: "These are six underrated movies that deserve much more attention from people who love independent cinema and careful visual storytelling.",
+    timestampMs: webhookTime,
+  }), null);
 });
 
 test("fails closed on equally strong conflicting candidates", () => {

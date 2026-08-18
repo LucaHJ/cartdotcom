@@ -353,6 +353,48 @@ function directComparableText(value: unknown): string {
     .trim();
 }
 
+function directItemTextValues(value: unknown, path: string[] = [], found = new Set<string>()): Set<string> {
+  if (typeof value === "string") {
+    const key = path.at(-1)?.toLowerCase() || "";
+    const isTextField = /(?:^|_)(?:text|title|subtitle|caption|description|message)(?:$|_)/i.test(key);
+    if (isTextField && !/^https?:\/\//i.test(value)) {
+      const comparable = directComparableText(value);
+      if (comparable.length >= 12) found.add(comparable);
+    }
+    return found;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) directItemTextValues(item, path, found);
+    return found;
+  }
+  if (!value || typeof value !== "object") return found;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    directItemTextValues(child, [...path, key], found);
+  }
+  return found;
+}
+
+function directTextMatch(title: string, texts: Set<string>): "exact" | "partial" | null {
+  if (title.length < 12) return null;
+  for (const text of texts) {
+    if (text === title || text.includes(title)) return "exact";
+  }
+  const titleTokens = new Set(title.split(" ").filter((token) => token.length >= 3));
+  for (const text of texts) {
+    const shorterLength = Math.min(title.length, text.length);
+    if (shorterLength >= 24 && (title.startsWith(text) || text.startsWith(title))) return "partial";
+    const textTokens = new Set(text.split(" ").filter((token) => token.length >= 3));
+    const smaller = Math.min(titleTokens.size, textTokens.size);
+    if (smaller < 4) continue;
+    let shared = 0;
+    for (const token of titleTokens) if (textTokens.has(token)) shared += 1;
+    const smallerCoverage = shared / smaller;
+    const largerCoverage = shared / Math.max(titleTokens.size, textTokens.size);
+    if (shared >= 4 && smallerCoverage >= 0.8 && largerCoverage >= 0.25) return "partial";
+  }
+  return null;
+}
+
 function directItemTimestamp(item: Record<string, unknown>): number | null {
   for (const key of ["timestamp", "taken_at", "created_at", "client_context_timestamp"]) {
     const timestamp = directTimestampMs(item[key]);
@@ -491,22 +533,35 @@ export function findInstagramDirectPermalink(
       const permalinks = [...directItemPermalinks(record)];
       if (permalinks.length) {
         const serialised = JSON.stringify(record);
-        const comparable = directComparableText(serialised);
         let score = 0;
         const matchedBy: string[] = [];
         if (mediaId && serialised.includes(mediaId)) {
           score += 100;
           matchedBy.push("media_id");
         }
-        if (title.length >= 12 && comparable.includes(title)) {
-          score += 50;
-          matchedBy.push("title");
+        const textMatch = directTextMatch(title, directItemTextValues(record));
+        if (textMatch === "exact") {
+          score += 55;
+          matchedBy.push("title_exact");
+        } else if (textMatch === "partial") {
+          score += 40;
+          matchedBy.push("title_partial");
         }
         const itemTimestamp = directItemTimestamp(record);
+        let closeTimestamp = false;
         if (lookup.timestampMs && itemTimestamp) {
           const distance = Math.abs(lookup.timestampMs - itemTimestamp);
-          if (distance <= 10 * 60_000) {
+          if (distance <= 15_000) {
+            score += 40;
+            closeTimestamp = true;
+            matchedBy.push("timestamp_15s");
+          } else if (distance <= 60_000) {
+            score += 35;
+            closeTimestamp = true;
+            matchedBy.push("timestamp_1m");
+          } else if (distance <= 10 * 60_000) {
             score += 30;
+            closeTimestamp = true;
             matchedBy.push("timestamp_10m");
           } else if (distance <= 60 * 60_000) {
             score += 15;
@@ -517,7 +572,8 @@ export function findInstagramDirectPermalink(
           }
         }
         const strongIdentity = matchedBy.includes("media_id")
-          || (matchedBy.includes("title") && matchedBy.some((reason) => reason.startsWith("timestamp_")));
+          || (matchedBy.includes("title_exact") && matchedBy.some((reason) => reason.startsWith("timestamp_")))
+          || (matchedBy.includes("title_partial") && closeTimestamp);
         if (strongIdentity) {
           const mediaPayload = findInstagramCarouselMediaPayload(record);
           candidates.push({

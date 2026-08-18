@@ -756,62 +756,82 @@ async function resolveInstagramMediaFromDirect(
   lookup: { mediaId: string; title?: string | null; timestampMs?: number | null },
   cookies: InstagramBrowserCookie[],
 ): Promise<{ sourceUrl: string | null; method: string; detail?: string; sourceMediaJson?: string | null }> {
-  const inboxUrl = new URL("https://www.instagram.com/api/v1/direct_v2/inbox/");
-  inboxUrl.searchParams.set("visual_message_return_type", "unseen");
-  inboxUrl.searchParams.set("thread_message_limit", "20");
-  inboxUrl.searchParams.set("persistentBadging", "true");
-  inboxUrl.searchParams.set("limit", "20");
-
   let inspectedThreads = 0;
-  let inspectedPages = 0;
-  let cursor = "";
-  const threadIds = new Set<string>();
-  while (inspectedPages < 2) {
-    if (cursor) inboxUrl.searchParams.set("cursor", cursor);
-    const inbox = await fetchInstagramDirectJson(inboxUrl.toString(), cookies);
-    inspectedPages += 1;
-    if (!inbox.ok) {
-      return { sourceUrl: null, method: "instagram_direct_http", detail: `inbox_HTTP_${inbox.status || "network"}` };
+  let inspectedInboxPages = 0;
+  let inspectedThreadPages = 0;
+  let lastHttpFailure = "";
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const inboxUrl = new URL("https://www.instagram.com/api/v1/direct_v2/inbox/");
+    inboxUrl.searchParams.set("visual_message_return_type", "unseen");
+    inboxUrl.searchParams.set("thread_message_limit", "50");
+    inboxUrl.searchParams.set("persistentBadging", "true");
+    inboxUrl.searchParams.set("limit", "20");
+    let inboxCursor = "";
+    const threadIds = new Set<string>();
+    for (let pageNumber = 0; pageNumber < 2; pageNumber += 1) {
+      if (inboxCursor) inboxUrl.searchParams.set("cursor", inboxCursor);
+      const inbox = await fetchInstagramDirectJson(inboxUrl.toString(), cookies);
+      inspectedInboxPages += 1;
+      if (!inbox.ok) {
+        lastHttpFailure = `inbox_HTTP_${inbox.status || "network"}`;
+        break;
+      }
+      const match = findInstagramDirectPermalink(inbox.payload, lookup);
+      if (match) {
+        return {
+          sourceUrl: match.sourceUrl,
+          method: "instagram_direct_http",
+          detail: [...match.matchedBy, `direct_attempt_${attempt}`].join("+"),
+          sourceMediaJson: match.mediaPayload ? JSON.stringify(match.mediaPayload) : null,
+        };
+      }
+      const threads = instagramDirectThreads(inbox.payload);
+      for (const thread of threads.slice(0, 10)) {
+        const threadId = String(thread.thread_id || thread.id || "").trim();
+        if (threadId) threadIds.add(threadId);
+      }
+      const root = inbox.payload as { inbox?: { oldest_cursor?: unknown; has_older?: unknown } } | null;
+      const nextCursor = String(root?.inbox?.oldest_cursor || "").trim();
+      if (!nextCursor || root?.inbox?.has_older === false || nextCursor === inboxCursor) break;
+      inboxCursor = nextCursor;
     }
-    const match = findInstagramDirectPermalink(inbox.payload, lookup);
-    if (match) {
-      return {
-        sourceUrl: match.sourceUrl,
-        method: "instagram_direct_http",
-        detail: match.matchedBy.join("+"),
-        sourceMediaJson: match.mediaPayload ? JSON.stringify(match.mediaPayload) : null,
-      };
-    }
-    const threads = instagramDirectThreads(inbox.payload);
-    for (const thread of threads.slice(0, 10)) {
-      const threadId = String(thread.thread_id || thread.id || "").trim();
-      if (threadId) threadIds.add(threadId);
-    }
-    const root = inbox.payload as { inbox?: { oldest_cursor?: unknown; has_older?: unknown } } | null;
-    const nextCursor = String(root?.inbox?.oldest_cursor || "").trim();
-    if (!nextCursor || root?.inbox?.has_older === false || nextCursor === cursor) break;
-    cursor = nextCursor;
-  }
 
-  for (const threadId of [...threadIds].slice(0, 10)) {
-    const threadUrl = `https://www.instagram.com/api/v1/direct_v2/threads/${encodeURIComponent(threadId)}/?limit=50`;
-    const thread = await fetchInstagramDirectJson(threadUrl, cookies);
-    inspectedThreads += 1;
-    if (!thread.ok) continue;
-    const match = findInstagramDirectPermalink(thread.payload, lookup);
-    if (match) {
-      return {
-        sourceUrl: match.sourceUrl,
-        method: "instagram_direct_http",
-        detail: match.matchedBy.join("+"),
-        sourceMediaJson: match.mediaPayload ? JSON.stringify(match.mediaPayload) : null,
-      };
+    for (const threadId of [...threadIds].slice(0, 10)) {
+      inspectedThreads += 1;
+      let threadCursor = "";
+      for (let pageNumber = 0; pageNumber < 3; pageNumber += 1) {
+        const threadUrl = new URL(`https://www.instagram.com/api/v1/direct_v2/threads/${encodeURIComponent(threadId)}/`);
+        threadUrl.searchParams.set("limit", "100");
+        if (threadCursor) threadUrl.searchParams.set("cursor", threadCursor);
+        const thread = await fetchInstagramDirectJson(threadUrl.toString(), cookies);
+        inspectedThreadPages += 1;
+        if (!thread.ok) {
+          lastHttpFailure = `thread_HTTP_${thread.status || "network"}`;
+          break;
+        }
+        const match = findInstagramDirectPermalink(thread.payload, lookup);
+        if (match) {
+          return {
+            sourceUrl: match.sourceUrl,
+            method: "instagram_direct_http",
+            detail: [...match.matchedBy, `direct_attempt_${attempt}`].join("+"),
+            sourceMediaJson: match.mediaPayload ? JSON.stringify(match.mediaPayload) : null,
+          };
+        }
+        const root = thread.payload as { thread?: { oldest_cursor?: unknown; has_older?: unknown }; oldest_cursor?: unknown; has_older?: unknown } | null;
+        const nextCursor = String(root?.thread?.oldest_cursor || root?.oldest_cursor || "").trim();
+        const hasOlder = root?.thread?.has_older ?? root?.has_older;
+        if (!nextCursor || hasOlder === false || nextCursor === threadCursor) break;
+        threadCursor = nextCursor;
+      }
     }
+    if (attempt < maxAttempts) await new Promise<void>((resolve) => setTimeout(resolve, attempt * 1_000));
   }
   return {
     sourceUrl: null,
     method: "instagram_direct_http",
-    detail: `no_matching_direct_item:${inspectedPages}_pages:${inspectedThreads}_threads`,
+    detail: `no_matching_direct_item:${inspectedInboxPages}_inbox_pages:${inspectedThreads}_threads:${inspectedThreadPages}_thread_pages:${maxAttempts}_attempts${lastHttpFailure ? `;${lastHttpFailure}` : ""}`,
   };
 }
 
