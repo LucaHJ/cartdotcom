@@ -3469,10 +3469,31 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
       results.push({ job_id: job.id, ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   }
+  const musicRows = await env.REEL_DB.prepare(
+    "SELECT id,canonical_key,media_json FROM resources WHERE artifact_type='music' AND media_json IS NOT NULL",
+  ).all<{ id: string; canonical_key: string | null; media_json: string }>();
+  const refreshedMusicKeys = new Set<string>();
+  let artworkUpgraded = 0;
+  for (const row of musicRows.results) {
+    let media: ResourceMedia;
+    try {
+      media = JSON.parse(row.media_json || "{}") as ResourceMedia;
+    } catch {
+      continue;
+    }
+    const currentUrl = String(media.hero_image_url || "");
+    const upgradedUrl = highResolutionMusicArtworkUrl(currentUrl);
+    if (!currentUrl || !upgradedUrl || currentUrl === upgradedUrl) continue;
+    media.hero_image_url = upgradedUrl;
+    await env.REEL_DB.prepare("UPDATE resources SET media_json=? WHERE id=?").bind(JSON.stringify(media), row.id).run();
+    if (row.canonical_key) refreshedMusicKeys.add(row.canonical_key);
+    artworkUpgraded += 1;
+  }
+  for (const canonicalKey of refreshedMusicKeys) await refreshCanonicalArtifactPage(env, canonicalKey);
   await refreshArtifactCollectionPages(env);
   await refreshReelLibraryManifest(env);
   const repaired = results.filter((result) => result.ok).length;
-  return json({ ok: repaired === results.length, repaired, failed: results.length - repaired, results });
+  return json({ ok: repaired === results.length, repaired, artwork_upgraded: artworkUpgraded, failed: results.length - repaired, results });
 }
 
 async function handleSignedThumbnailDownload(request: Request, env: Env, jobId: string): Promise<Response> {
