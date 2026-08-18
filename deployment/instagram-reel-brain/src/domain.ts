@@ -686,6 +686,20 @@ export function highResolutionSpotifyArtworkUrl(value: unknown): string {
   }
 }
 
+export function highResolutionMusicArtworkUrl(value: unknown): string {
+  const spotifyArtwork = highResolutionSpotifyArtworkUrl(value);
+  if (!spotifyArtwork) return "";
+  try {
+    const parsed = new URL(spotifyArtwork);
+    if (parsed.hostname.toLowerCase().endsWith(".bcbits.com")) {
+      parsed.pathname = parsed.pathname.replace(/_1x1_120\.(jpe?g|png|webp)$/i, "_10.$1");
+    }
+    return parsed.toString();
+  } catch {
+    return spotifyArtwork;
+  }
+}
+
 function youtubeVideoId(value: unknown): string {
   const url = safeHttpUrl(value);
   if (!url) return "";

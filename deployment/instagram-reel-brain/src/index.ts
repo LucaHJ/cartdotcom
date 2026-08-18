@@ -11,7 +11,7 @@ import {
   instagramDedupeKey,
   instagramDirectCarousels,
   instagramPostUrlFromCdnUrl,
-  highResolutionSpotifyArtworkUrl,
+  highResolutionMusicArtworkUrl,
   isValidInstagramReaction,
   normalizeArtifactType,
   normalizeInstagramReaction,
@@ -1488,7 +1488,7 @@ async function enrichSynthesisResourceMedia(resources: SynthesisResource[]): Pro
     const artifactType = normalizeArtifactType(resource.artifact_type, kind, resource.name, resource.summary);
     const media = applyMediaLinkFallbacks(resource, artifactType);
     if (artifactType === "music" && media.hero_image_url) {
-      media.hero_image_url = highResolutionSpotifyArtworkUrl(media.hero_image_url);
+      media.hero_image_url = highResolutionMusicArtworkUrl(media.hero_image_url);
     }
     const resolvedArtwork = artwork.get(index);
     if (resolvedArtwork && !media.hero_image_url) {
@@ -1500,7 +1500,7 @@ async function enrichSynthesisResourceMedia(resources: SynthesisResource[]): Pro
         const response = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(media.spotify_url)}`);
         const spotify = response.ok ? await response.json<{ thumbnail_url?: string }>() : {};
         if (spotify.thumbnail_url?.startsWith("https://") && (artifactType === "music" || !media.hero_image_url)) {
-          media.hero_image_url = highResolutionSpotifyArtworkUrl(spotify.thumbnail_url);
+          media.hero_image_url = highResolutionMusicArtworkUrl(spotify.thumbnail_url);
           media.hero_image_alt = `${resource.name} Spotify artwork`;
         }
       } catch (error) {

@@ -156,6 +156,13 @@ test("upgrades Spotify artwork renditions and derives native app URIs", () => {
   assert.equal(domain.spotifyUriFromUrl("https://example.com/album/4xGTfawtEfy5f2yGYtRqlr"), "");
 });
 
+test("upgrades small Bandcamp music artwork", () => {
+  assert.equal(
+    domain.highResolutionMusicArtworkUrl("https://f4.bcbits.com/img/a393988977_1x1_120.jpg"),
+    "https://f4.bcbits.com/img/a393988977_10.jpg",
+  );
+});
+
 test("routes Instagram text into retrieval, note, status, help, and emoji commands", () => {
   assert.deepEqual(domain.parseMessageCommand("send me the video about robot arms that mentions MoveIt"), {
     intent: "retrieval",
