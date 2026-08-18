@@ -355,7 +355,8 @@
             const childFiles = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
             return `${folders.map(([name, child]) => {
                 const folderPath = parentPath ? `${parentPath}/${name}` : name;
-                return `<details data-folder-path="${escapeHtml(folderPath)}" ${depth < 3 ? "open" : ""}><summary>${escapeHtml(name)}</summary><div class="tree-children">${renderNode(child, depth + 1, folderPath)}</div></details>`;
+                const displayName = name.toLowerCase() === "youtube" ? "YouTube" : name;
+                return `<details data-folder-path="${escapeHtml(folderPath)}" ${depth < 3 ? "open" : ""}><summary>${escapeHtml(displayName)}</summary><div class="tree-children">${renderNode(child, depth + 1, folderPath)}</div></details>`;
             }).join("")}${childFiles.map(file => `<button class="file-entry ${file.path === selectedPath ? "is-selected" : ""}" type="button" data-file-path="${escapeHtml(file.path)}"><span class="file-entry-name">${escapeHtml(file.name)}</span><span class="file-entry-title">${escapeHtml(file.title || file.kind || "HTML file")}</span></button>`).join("")}`;
         }
 

@@ -20,6 +20,8 @@ import {
   ARTIFACT_COLLECTION_DEFINITIONS,
   RESOURCE_KIND_DEFINITIONS,
   renderArtifactCollectionHtml,
+  renderYoutubeCollectionHtml,
+  renderYoutubeVideoHtml,
   renderResourceHtml,
   renderResourceMarkdown,
   renderRootHtml,
@@ -27,12 +29,14 @@ import {
   formatProcessingDuration,
   shouldReactToStage,
   slugify,
+  youtubeVideoId,
   type EmojiSetting,
   type InstagramReaction,
   type CapturedComment,
   type ArtifactType,
   type ResourceKind,
   type ResourceMedia,
+  type YoutubeVideoProfile,
 } from "./domain";
 
 type ReelJobMessage = { jobId: string } | { type: "carousel_resolve"; sourceMessageId: string };
@@ -1342,6 +1346,89 @@ async function refreshArtifactCollectionPages(env: Env): Promise<void> {
   }
 }
 
+async function refreshYoutubeCollectionPages(env: Env, onlyVideoIds?: Set<string>): Promise<{ videos: number; published: number }> {
+  if (!env.REEL_LIBRARY_KV) return { videos: 0, published: 0 };
+  const rows = await env.REEL_DB.prepare(
+    `SELECT r.name AS resource_name,r.library_path AS resource_path,r.media_json,
+      j.library_path AS reel_path,j.title AS reel_title,j.author_username
+     FROM resources r JOIN jobs j ON j.id=r.job_id
+     WHERE r.library_path IS NOT NULL
+       AND json_array_length(json_extract(r.media_json,'$.youtube_candidates')) > 0
+     ORDER BY r.name,j.completed_at,j.created_at`,
+  ).all<{
+    resource_name: string; resource_path: string; media_json: string;
+    reel_path: string | null; reel_title: string | null; author_username: string | null;
+  }>();
+  const grouped = new Map<string, YoutubeVideoProfile>();
+  const sourceKeys = new Map<string, Set<string>>();
+  for (const row of rows.results) {
+    let media: ResourceMedia;
+    try { media = JSON.parse(row.media_json || "{}") as ResourceMedia; } catch { continue; }
+    for (const candidate of media.youtube_candidates || []) {
+      const id = youtubeVideoId(candidate.url);
+      if (!id) continue;
+      let profile = grouped.get(id);
+      if (!profile) {
+        profile = {
+          id,
+          title: candidate.title || row.resource_name || "Untitled YouTube video",
+          channel: candidate.channel || "Channel not recorded",
+          url: candidate.url,
+          confidence: candidate.confidence,
+          matchReason: candidate.match_reason || "Stored during Reel research.",
+          sources: [],
+        };
+        grouped.set(id, profile);
+        sourceKeys.set(id, new Set());
+      }
+      const sourceKey = `${row.resource_path}|${row.reel_path || ""}`;
+      if (sourceKeys.get(id)?.has(sourceKey)) continue;
+      sourceKeys.get(id)?.add(sourceKey);
+      profile.sources.push({
+        resourceName: row.resource_name,
+        resourcePath: row.resource_path,
+        reelTitle: row.reel_title || "Untitled Instagram research",
+        reelPath: row.reel_path || "",
+        author: row.author_username || "unknown",
+      });
+    }
+  }
+  const videos = [...grouped.values()].sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
+  const selected = onlyVideoIds ? videos.filter((video) => onlyVideoIds.has(video.id)) : videos;
+  for (let offset = 0; offset < selected.length; offset += 12) {
+    await Promise.all(selected.slice(offset, offset + 12).map((video) => {
+      const path = `youtube/${video.id}.html`;
+      return putReelLibraryHtml(env, path, renderYoutubeVideoHtml(video), {
+        kind: "youtube-video",
+        job_id: "",
+        parent_path: "youtube/index.html",
+        title: video.title,
+        author: video.channel,
+        video_available: false,
+        resource_kind: "media",
+        resource_folder: "youtube",
+        artifact_type: "",
+        summary: `${video.channel} · referenced by ${video.sources.length} stored profile${video.sources.length === 1 ? "" : "s"}`,
+        source_count: video.sources.length,
+      });
+    }));
+  }
+  await putReelLibraryHtml(env, "youtube/index.html", renderYoutubeCollectionHtml(videos), {
+    kind: "youtube-index",
+    job_id: "",
+    parent_path: "",
+    title: "YouTube",
+    author: "",
+    video_available: false,
+    resource_kind: "media",
+    resource_folder: "youtube",
+    artifact_type: "",
+    summary: `${videos.length} distinct YouTube video${videos.length === 1 ? "" : "s"}, deduplicated by video ID`,
+    source_count: videos.length,
+  });
+  return { videos: videos.length, published: selected.length };
+}
+
 function routeSynthesisResources(job: JobRow, payload: SynthesisPayload): RoutedSynthesisResource[] {
   const sourceSuffix = slugify(payload.metadata.shortcode || job.shortcode || job.id.slice(0, 8));
   return payload.resources.map((resource) => {
@@ -1800,6 +1887,8 @@ async function publishSynthesisHtml(
   await env.REEL_DB.batch(statements);
   for (const canonicalKey of canonicalArtifactKeys) await refreshCanonicalArtifactPage(env, canonicalKey);
   if (!options.deferIndexRefresh) {
+    const youtubeIds = new Set(resources.flatMap((resource) => (resource.youtube_candidates || []).map((candidate) => youtubeVideoId(candidate.url)).filter((id): id is string => Boolean(id))));
+    await refreshYoutubeCollectionPages(env, youtubeIds);
     await refreshArtifactCollectionPages(env);
     await refreshReelLibraryManifest(env);
   }
@@ -2459,6 +2548,7 @@ async function handleMediaEnrich(request: Request, env: Env): Promise<Response> 
       articles: payload.resources.filter((resource) => Boolean(resource.article_links?.length)).length,
     });
   }
+  await refreshYoutubeCollectionPages(env);
   await refreshArtifactCollectionPages(env);
   await refreshReelLibraryManifest(env);
   return json({ ok: true, results });
@@ -3538,10 +3628,11 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
       }),
     ]);
   }
+  const youtubeCollection = await refreshYoutubeCollectionPages(env);
   await refreshArtifactCollectionPages(env);
   await refreshReelLibraryManifest(env);
   const repaired = results.filter((result) => result.ok).length;
-  return json({ ok: repaired === results.length, repaired, artwork_upgraded: artworkUpgraded, youtube_profiles_rebuilt: profileKeys.length + youtubeResourceRows.results.length, failed: results.length - repaired, results });
+  return json({ ok: repaired === results.length, repaired, artwork_upgraded: artworkUpgraded, youtube_profiles_rebuilt: profileKeys.length + youtubeResourceRows.results.length, youtube_videos: youtubeCollection.videos, youtube_video_pages_rebuilt: youtubeCollection.published, failed: results.length - repaired, results });
 }
 
 async function handleSignedThumbnailDownload(request: Request, env: Env, jobId: string): Promise<Response> {

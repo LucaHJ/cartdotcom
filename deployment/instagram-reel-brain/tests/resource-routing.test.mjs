@@ -126,8 +126,41 @@ test("renders verified media links, artwork, and selectable YouTube candidates",
   assert.match(detail, /Possible YouTube matches/);
   assert.equal((detail.match(/class="youtube-brand-link"/g) || []).length, 2);
   assert.match(detail, /aria-label="Open Candidate one in YouTube"/);
+  assert.match(detail, /data-library-path="youtube\/M7lc1UVf-VE\.html"/);
+  assert.match(detail, /Saved video profile/);
+  assert.match(detail, /View all YouTube videos/);
   assert.doesNotMatch(detail, />Open on YouTube</);
   assert.match(detail, /Original article/);
+});
+
+test("renders a central YouTube folder with deduplicated video profiles and source links", () => {
+  const profile = {
+    id: "M7lc1UVf-VE",
+    title: "YouTube Developers Live",
+    channel: "Google for Developers",
+    url: "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+    confidence: "high",
+    matchReason: "Exact title and channel match.",
+    sources: [{
+      resourceName: "YouTube API demonstration",
+      resourcePath: "learning-resources/youtube-api.html",
+      reelTitle: "Useful web design videos",
+      reelPath: "reels/example/index.html",
+      author: "creator",
+    }],
+  };
+  const collection = domain.renderYoutubeCollectionHtml([profile]);
+  assert.match(collection, /<h1>YouTube<\/h1>/);
+  assert.match(collection, /class="youtube-library-grid"/);
+  assert.equal((collection.match(/data-library-path="youtube\/M7lc1UVf-VE\.html"/g) || []).length, 1);
+  assert.match(collection, /i\.ytimg\.com\/vi\/M7lc1UVf-VE\/hqdefault\.jpg/);
+
+  const detail = domain.renderYoutubeVideoHtml(profile);
+  assert.match(detail, /youtube\.com\/embed\/M7lc1UVf-VE/);
+  assert.match(detail, /data-library-path="youtube\/index\.html"/);
+  assert.match(detail, /data-library-path="learning-resources\/youtube-api\.html"/);
+  assert.match(detail, /data-library-path="reels\/example\/index\.html"/);
+  assert.match(detail, /class="youtube-brand-link"/);
 });
 
 test("adds deterministic YouTube, Spotify, and article fallbacks", () => {

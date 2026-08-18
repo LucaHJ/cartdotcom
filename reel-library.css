@@ -477,6 +477,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .youtube-match summary strong { font-size: 19px; line-height: 1.25; }
 .youtube-match-detail { padding: 0 12px 15px; }
 .youtube-match-detail > p { color: var(--muted); font-size: 14px; }
+.youtube-match-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; font-family: Inter, ui-sans-serif, sans-serif; font-size: 12px; }
+.youtube-match-actions > a:not(.youtube-brand-link) { border: 1px solid var(--line); border-radius: 999px; padding: 7px 12px; text-decoration: none; }
 .youtube-match-detail .youtube-brand-link { display: inline-grid; width: 48px; height: 34px; place-items: center; color: #ff0033; border: 0; border-radius: 9px; background: transparent; }
 .youtube-match-detail .youtube-brand-link:hover { color: #e6002e; transform: translateY(-1px); }
 .youtube-brand-link svg { display: block; width: 48px; height: 34px; }
@@ -484,6 +486,32 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .youtube-brand-link path { fill: #fff; }
 .youtube-embed { position: relative; width: 100%; aspect-ratio: 16 / 9; margin: 12px 0; overflow: hidden; border-radius: 7px; background: #111; }
 .youtube-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.youtube-profile-embed { position: relative; width: 100%; aspect-ratio: 16 / 9; margin: 28px 0; overflow: hidden; border-radius: 9px; background: #111; }
+.youtube-profile-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.youtube-library-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.youtube-library-card {
+    position: relative;
+    min-width: 0;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 0;
+    background: #373a37;
+    color: white;
+    text-align: left;
+    cursor: pointer;
+}
+.youtube-library-card:hover, .youtube-library-card:focus-visible { border-color: var(--accent); transform: translateY(-2px); outline: none; }
+.youtube-library-card img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform 180ms ease; }
+.youtube-library-card:hover img { transform: scale(1.025); }
+.youtube-library-card .reel-card-copy { gap: 3px; padding: 12px; }
+.youtube-library-card small { color: #d9eee5; font-family: Inter, ui-sans-serif, sans-serif; font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.youtube-library-card strong { overflow: hidden; font-size: 16px; font-weight: 500; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
+.youtube-library-card .reel-card-copy > span { overflow: hidden; color: rgba(255,255,255,.86); font-family: Inter, ui-sans-serif, sans-serif; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.youtube-source-list { display: grid; gap: 1px; padding: 0 !important; border: 1px solid var(--line); background: var(--line); list-style: none; }
+.youtube-source-list li { display: grid; gap: 3px; padding: 13px 15px; background: var(--panel); }
+.youtube-source-list span { color: var(--muted); font-family: Inter, ui-sans-serif, sans-serif; font-size: 11px; }
 .article-link-list { display: grid; gap: 1px; padding: 0 !important; border: 1px solid var(--line); background: var(--line); list-style: none; }
 .article-link-list li { display: grid; gap: 3px; padding: 13px 15px; background: var(--panel); }
 .article-link-list span { color: var(--muted); font-family: Inter, ui-sans-serif, sans-serif; font-size: 11px; }
@@ -570,6 +598,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
     .reader-bar { padding: 10px 14px; }
     .reader-content { padding: 28px 18px 70px; }
     .reel-gallery-grid { grid-template-columns: 1fr; }
+    .youtube-library-grid { grid-template-columns: 1fr; }
     .artifact-reel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .reel-document { font-size: 16px; }
     .reel-document h1 { font-size: 34px; }
@@ -581,4 +610,5 @@ button, a { -webkit-tap-highlight-color: transparent; }
 
 @media (min-width: 761px) and (max-width: 1120px) {
     .reel-gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .youtube-library-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
