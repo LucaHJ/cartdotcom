@@ -3489,7 +3489,10 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
     await env.REEL_DB.prepare("UPDATE resources SET media_json=? WHERE id=?").bind(JSON.stringify(media), row.id).run();
     artworkUpgraded += 1;
   }
-  for (const canonicalKey of refreshedMusicKeys) await refreshCanonicalArtifactPage(env, canonicalKey);
+  const musicKeys = [...refreshedMusicKeys];
+  for (let offset = 0; offset < musicKeys.length; offset += 6) {
+    await Promise.all(musicKeys.slice(offset, offset + 6).map((canonicalKey) => refreshCanonicalArtifactPage(env, canonicalKey)));
+  }
   await refreshArtifactCollectionPages(env);
   await refreshReelLibraryManifest(env);
   const repaired = results.filter((result) => result.ok).length;
