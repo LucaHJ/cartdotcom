@@ -5,8 +5,8 @@ Last updated: 2026-08-19
 This is the primary server-local reference. It contains no passwords, private
 keys, authentication tokens, or provider credentials.
 
-Read `MIGRATION_STATE.md` first to determine which system is authoritative and
-which services are intentionally disabled.
+Read `MIGRATION_STATE.md` first for the current processing authority, latest
+verified counts, backup, and observation status.
 
 ## Access
 
@@ -65,10 +65,17 @@ free -h
 systemctl --failed
 ```
 
-## Staging dashboard
+## Dashboard access
 
-The dashboard is deliberately bound to server loopback until public cutover.
-From the configured Windows workstation, create an SSH tunnel:
+The public dashboard remains at:
+
+```text
+https://cartdotcom-news-signal-container.lucajeannin.workers.dev/dashboard
+```
+
+Cloudflare proxies authenticated requests to the loopback-only gateway through
+the private VPC Service and Tunnel. For direct local diagnostics from the
+configured Windows workstation, create an SSH tunnel:
 
 ```powershell
 ssh -N -L 18080:127.0.0.1:8080 cartdotcom-server
@@ -109,9 +116,10 @@ its manifest can be retrieved. Periodically test the complete off-site copy:
 /srv/platform/scripts/verify-postgres-offsite.sh YYYYMMDDTHHMMSSZ
 ```
 
-Local backups protect against application mistakes, but not disk failure. Before
-production cutover, replicate them to an encrypted external disk or another
-machine and test a restore into a temporary database.
+Local backups protect against application mistakes, but not disk failure. Each
+successful backup is also uploaded in hash-addressed chunks to private R2. Test
+the complete offsite copy periodically rather than relying only on upload
+success.
 
 Article corpus files are separate from PostgreSQL and must be included in the
 off-host backup. Their relative paths must match `article_corpus_objects.object_key`.
@@ -124,8 +132,11 @@ docker compose up -d
 docker compose stop
 ```
 
-Use `stop` for maintenance. Do not use `docker compose down -v`; `-v` deletes
-named data volumes. Do not run broad Docker prune commands on this server.
+Stopping the production stack pauses ingestion, synthesis, price tracking, and
+live dashboard APIs. Cloudflare serves the last dashboard snapshot while the
+origin is unavailable. Use `stop` for maintenance. Do not use
+`docker compose down -v`; `-v` deletes named data volumes. Do not run broad
+Docker prune commands on this server.
 
 ## Upgrades
 
@@ -151,7 +162,8 @@ major versions.
 ## Recovery priorities
 
 1. Preserve PostgreSQL data and article files.
-2. Keep Cloudflare production active until self-hosted parity is verified.
+2. Preserve the Cloudflare snapshot and private ingress while local recovery is
+   in progress.
 3. Restore the platform database before workers to prevent duplicate jobs.
 4. Start ingestion only after queue and deduplication state are consistent.
 
@@ -162,7 +174,8 @@ and the remaining single-machine risks.
 ## Runtime mode
 
 The news scheduler, database worker, and Codex runner are independently guarded
-and default to disabled. View the current setting with:
+by both environment flags and the database authority record. Production is
+currently active. View the environment settings with:
 
 ```bash
 cat /srv/cartdotcom/news/.env
@@ -174,6 +187,12 @@ Return to staging at any time:
 /srv/platform/scripts/set-runtime-mode.sh staging
 ```
 
-Active mode is reserved for the final Cloudflare cutover and requires both a
-Codex login and an explicit confirmation argument. Follow `MIGRATION_RUNBOOK.md`;
-do not enable it merely to test the dashboard.
+Returning from staging requires confirming that Cloudflare processing is still
+disabled:
+
+```bash
+/srv/platform/scripts/set-runtime-mode.sh active --confirm-cloudflare-disabled
+```
+
+Never activate both Cloudflare and self-hosted processing. The public dashboard
+proxy and the processing authority are separate controls.

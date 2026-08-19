@@ -15,9 +15,11 @@ the server-only origin token before forwarding a live API or WebSocket request.
   deployed.
 - The server publisher is running and refreshes the snapshot every five minutes
   on exact five-minute boundaries.
-- The public gateway is not yet proxying to the server because
-  `SELF_HOSTED_API_ORIGIN` is intentionally unset during staging.
-- Cloudflare remains the production processing authority until final cutover.
+- The public gateway proxies authenticated requests through the
+  `SELF_HOSTED_API` Workers VPC binding.
+- The Ubuntu server is the production processing authority.
+- Live-to-snapshot-to-live recovery was exercised successfully on 2026-08-19
+  by stopping and restarting only the private tunnel.
 
 ## Snapshot contents
 

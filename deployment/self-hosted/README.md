@@ -1,20 +1,20 @@
 # Cartdotcom Self-Hosted Platform
 
-This directory contains the single-server replacement for the Cloudflare-hosted
-Cartdotcom services. Cloudflare remains production until the parity and cutover
-checks in `docs/MIGRATION_RUNBOOK.md` have passed.
+This directory contains the production self-hosted News Signal backend.
+Cloudflare remains the public gateway, private tunnel endpoint, dashboard
+snapshot fallback, and offsite backup store; news processing runs on Ubuntu.
 
-## Current stage
+## Current production state
 
-The current shadow stage provides:
+The deployed system provides:
 
 - Docker Engine and Docker Compose on Ubuntu Server 24.04 LTS.
 - A private PostgreSQL database for durable application state.
-- A Caddy gateway bound to server loopback while the deployment is staged.
+- A Caddy gateway bound to server loopback and a private Cloudflare Tunnel.
 - A root-owned secrets area and separate `/srv` directories for each workload.
 - Server-local operating and application-onboarding documentation.
-- A durable scheduler, eight-slot Codex worker/runner split, and market tracker,
-  all guarded off while Cloudflare remains authoritative.
+- A durable scheduler, eight-slot Codex worker/runner split, and market tracker
+  guarded by a database-backed single-writer authority record.
 - A full-page article extractor, filesystem corpus archiver, isolated Codex
   credential rotator, and database-backed single-writer authority guard.
 - The existing dashboard, token authentication, live WebSocket signals, and
@@ -22,8 +22,9 @@ The current shadow stage provides:
 - A five-minute, private Cloudflare dashboard snapshot that preserves the
   latest tables and charts when the physical server is unavailable.
 
-It does not redirect production traffic. A verified D1 snapshot and all 76,248
-stored R2 article corpus objects are imported into the self-hosted staging stack.
+Production dashboard API traffic is routed through a private Workers VPC
+Service. The final D1 state and 77,670 verified R2 article corpus objects were
+imported before local processing authority was enabled.
 
 ## Layout on the server
 
@@ -49,8 +50,8 @@ docker compose up -d
 ./scripts/verify-platform.sh
 ```
 
-The gateway initially listens only on `127.0.0.1:8080`. Public or LAN ingress is
-enabled only during the cutover stage.
+The gateway listens only on `127.0.0.1:8080`. Public access is provided through
+the private Tunnel and Workers VPC Service; no LAN or router port is opened.
 
 ## Documentation
 

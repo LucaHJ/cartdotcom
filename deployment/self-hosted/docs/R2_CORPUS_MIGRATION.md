@@ -20,11 +20,12 @@ each JSON object and compares the SHA-256 of `content.plaintext` with
 
 ## Installed snapshot
 
-- Object count: 76,248
+- Initial object count: 76,248
+- Final verified migration count: 77,670
 - Server archive: `/srv/cartdotcom/imports/cartdotcom-article-corpus-20260819T1708.tar`
 - Archive SHA-256: `e52536fef29c4f8e2c2bdd9819af82abac1eb2db228777a38c0bcd7136dd3b35`
 - Extracted corpus: `/srv/cartdotcom/article-corpus`
 
-The temporary Wrangler process must be stopped and `.dev.vars` erased after an
-export. Cloudflare remains authoritative until the separate cutover runbook is
-completed.
+The temporary Wrangler process was stopped, its credential file was removed,
+and the authenticated corpus export window is closed. New corpus objects are
+written by the local archiver after cutover.

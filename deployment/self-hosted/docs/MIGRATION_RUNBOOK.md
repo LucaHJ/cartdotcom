@@ -1,8 +1,9 @@
 # Cloudflare Migration Runbook
 
-Cloudflare remains authoritative until every cutover gate below passes. The
-self-hosted system must never create duplicate research calls while shadowing
-production.
+The authority and traffic cutovers completed on 2026-08-19. This document is
+retained as the rollback and repeatable migration procedure. Current production
+state is recorded in `MIGRATION_STATE.md`. Never activate Cloudflare and local
+news processing at the same time.
 
 ## Stages
 

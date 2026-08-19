@@ -2,6 +2,23 @@
 
 ## 2026-08-19
 
+- Completed the final Cloudflare D1 export after disabling Cloudflare
+  processing, imported all 32 known tables, applied the final R2 corpus delta,
+  and reconciled the durable local queue.
+- Activated the Ubuntu server as the sole `self_hosted` processing authority
+  with eight Codex worker slots, aligned source checks, market tracking, and
+  corpus archiving.
+- Enabled the public Worker proxy through the private Workers VPC Service and
+  verified authenticated REST, WebSocket updates, charts, tables, and outcome
+  pagination against the local backend.
+- Exercised a controlled tunnel outage: Cloudflare served the latest private R2
+  dashboard snapshot, mutations remained disabled, and the dashboard returned
+  to live data after tunnel recovery.
+- Created and restored the first post-cutover offsite PostgreSQL backup:
+  `cartdotcom-20260819T142941Z.dump` (285,499,674 bytes in nine verified chunks).
+- Removed three superseded D1 SQL migration exports after the verified backup,
+  reclaiming approximately 4 GB while retaining the corpus migration archive.
+
 - Added a PostgreSQL-backed single-writer authority guard enforced by the API,
   source scheduler, Codex worker, market tracker, and corpus archiver.
 - Added Cloudflare processing and proxy flags so compute handoff and dashboard

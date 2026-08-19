@@ -52,7 +52,7 @@ Do not store the API token or tunnel token in Git. The tunnel token belongs at
    "vpc_services": [
      {
        "binding": "SELF_HOSTED_API",
-     "service_id": "01a01a1d-431d-7fe3-8615-ae2145a219e4",
+       "service_id": "01a01a1d-431d-7fe3-8615-ae2145a219e4",
        "remote": true
      }
    ]
@@ -66,6 +66,10 @@ Do not store the API token or tunnel token in Git. The tunnel token belongs at
    status, and latency for external availability monitoring.
 7. Enable the proxy only after data reconciliation and local processing
    activation have passed the cutover runbook.
+
+Steps 1-7 were completed on 2026-08-19. External readiness is available at
+`/health/self-hosted`; it reports only configuration, upstream status, and
+latency and does not expose credentials or application data.
 
 ## Failure behavior
 
