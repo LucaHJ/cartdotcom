@@ -62,6 +62,8 @@ Do not store the API token or tunnel token in Git. The tunnel token belongs at
    does not move traffic.
    The authenticated `/api/internal/self-hosted-status` route performs a live
    Worker-to-VPC-to-server readiness check without enabling the proxy.
+   `/health/self-hosted` exposes only the connection status, upstream HTTP
+   status, and latency for external availability monitoring.
 7. Enable the proxy only after data reconciliation and local processing
    activation have passed the cutover runbook.
 

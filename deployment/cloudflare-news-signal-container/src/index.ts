@@ -5021,13 +5021,11 @@ async function selfHostedConnectivityStatus(env: Env): Promise<Response> {
         : undefined,
     });
     const upstream = await env.SELF_HOSTED_API.fetch(request, { signal: controller.signal });
-    const body = await upstream.json().catch(() => null);
     return json({
       ok: upstream.ok,
       configured: true,
       upstream_status: upstream.status,
       latency_ms: Date.now() - startedAt,
-      upstream: body,
     }, { status: upstream.ok ? 200 : 503 });
   } catch (error) {
     return json({
@@ -9607,6 +9605,10 @@ export default {
     if (url.pathname === "/api/internal/self-hosted-status" && request.method === "GET") {
       const unauthorized = requireAuthorized(request, env);
       if (unauthorized) return unauthorized;
+      return selfHostedConnectivityStatus(env);
+    }
+
+    if (url.pathname === "/health/self-hosted" && request.method === "GET") {
       return selfHostedConnectivityStatus(env);
     }
 
