@@ -2,6 +2,18 @@
 
 ## 2026-08-19
 
+- Added a PostgreSQL-backed single-writer authority guard enforced by the API,
+  source scheduler, Codex worker, market tracker, and corpus archiver.
+- Added Cloudflare processing and proxy flags so compute handoff and dashboard
+  traffic cutover remain separate operations.
+- Added full-page article extraction before synthesis and atomic structured
+  article corpus storage for future local jobs.
+- Added durable manual source-check commands, queue reconciliation and recovery,
+  article archive mutations, and isolated Codex authentication rotation.
+- Added private Workers VPC ingress support and a profiled cloudflared service;
+  Cloudflare permissions are still required before provisioning it.
+- Added SHA-256 verified, chunked PostgreSQL uploads with 30-day R2 retention
+  and retryable mirroring for future local article corpus objects.
 - Created the self-hosted platform definition and operating handbook.
 - Defined isolated directories for Cartdotcom, media, and additional Codex apps.
 - Added a loopback-only Caddy staging gateway and private PostgreSQL service.

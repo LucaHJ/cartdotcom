@@ -1,13 +1,16 @@
 # Current Migration State
 
-Last verified: 2026-08-19T08:25:38Z
+Last verified: 2026-08-19T12:25:44Z
 
 ## Authority and safety state
 
 - Cloudflare remains the production authority.
 - The self-hosted database is a read-only staging snapshot.
-- Local source ingestion, queue dispatch, Codex execution, prediction price
-  updates, email, and public ingress are disabled.
+- Local source ingestion, API mutations, queue dispatch, Codex execution,
+  prediction price updates, corpus writes, and private ingress are disabled.
+- A database-backed single-writer authority record defaults to `cloudflare`.
+  Every local writer checks it independently, so enable flags alone cannot
+  activate local processing.
 - The local scheduler runs in disabled staging mode and publishes a heartbeat.
   Its durable run history and isolated lease queue are installed, but it does
   not fetch sources until the explicit cutover setting is changed.
@@ -17,6 +20,12 @@ Last verified: 2026-08-19T08:25:38Z
 - A four-slot market tracker is deployed in disabled staging mode. It records
   fixed prediction intervals and monotonically growing daily histories from
   Yahoo Finance without applying opposite-call exclusion rules.
+- Full article pages are fetched before Codex synthesis, with feed text retained
+  as the fallback. A filesystem corpus archiver writes atomic, structured JSON
+  documents for future completed jobs and is disabled until cutover.
+- Codex authentication can be replaced through an isolated internal rotator
+  that has no database or Docker access. The API control remains authority
+  gated while staging.
 - The Caddy gateway listens on server loopback only (`127.0.0.1:8080`).
 - The current dashboard HTML is served through that loopback gateway with a
   server-held token. Authenticated WebSocket updates are backed by PostgreSQL
@@ -27,6 +36,10 @@ Last verified: 2026-08-19T08:25:38Z
 - Cloudflare snapshot support is deployed, but `SELF_HOSTED_API_ORIGIN` is not
   set. Cloudflare therefore remains authoritative and the outage fallback path
   stays dormant until the final traffic cutover.
+- The preferred ingress is now a private Workers VPC Service binding rather
+  than a public hostname. The current deployment token can deploy Workers but
+  does not yet have Cloudflare Tunnel Write or Connectivity Directory Admin,
+  so tunnel and VPC service creation still require that permission update.
 
 ## Imported D1 snapshot
 
@@ -98,7 +111,8 @@ the import.
 - `/api/source-stats`, `/api/source-activity`, `/api/diagnostics/ticker-pipeline`
 - `/api/events` (authenticated WebSocket)
 
-All mutating `/api/*` calls currently return `503 migration_read_only`.
+All mutating `/api/*` calls currently return `503 migration_read_only` because
+the API mutation flag is false and processing authority remains Cloudflare.
 
 ## Dashboard verification
 
@@ -116,11 +130,13 @@ overflowing heatmap cells at either viewport.
 
 ## Next work
 
-1. Implement the dashboard's cutover-only mutation controls behind the runtime
-   safety flags, including manual ingestion and queue administration.
-2. Configure off-host PostgreSQL and corpus backups and test a full restore.
-3. Repeat a fresh snapshot/delta import immediately before cutover.
-4. Run shadow comparisons, then enable local ingestion and workers gradually.
-5. Establish the authenticated Cloudflare Tunnel origin, set
-   `SELF_HOSTED_API_ORIGIN`, and exercise live-to-snapshot-to-live recovery.
-6. Move dashboard traffic only after the rollback procedure is exercised.
+1. Add Cloudflare Tunnel Write and Connectivity Directory Admin to the
+   deployment credential, then create the Tunnel and private VPC Service.
+2. Complete the first off-host PostgreSQL upload and test a full restore. The
+   chunked R2 upload and future corpus mirroring paths are implemented.
+3. Repeat a fresh D1 merge and R2 delta sync, then reconcile the durable local
+   queue while Cloudflare remains authoritative.
+4. Run a bounded local ingestion/Codex/market/corpus shadow test.
+5. Disable Cloudflare processing, activate local authority, and enable the VPC
+   proxy in that order.
+6. Exercise live-to-snapshot-to-live recovery and the reverse rollback order.

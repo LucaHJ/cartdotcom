@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import process from "node:process";
 import pg from "pg";
 import { claimJobs, extendLease, releaseForRetry } from "../common/queue.js";
+import { hasLocalProcessingAuthority, processingAuthority } from "../common/authority.js";
+import { captureArticleContent } from "../common/content.js";
 import { normalizeResult, researchPrompt } from "./prompt.js";
 
 const { Pool } = pg;
@@ -25,6 +27,7 @@ const runtime = {
   completed: 0,
   failed: 0,
   lastError: null,
+  authority: "unknown",
 };
 
 async function databaseConfig() {
@@ -173,11 +176,11 @@ async function storeSuccess(pool, queueJob, article, fields, durationSeconds) {
       [article.id, fields.symbols.length ? "analyzed" : "archived"],
     );
     await client.query(
-      `INSERT INTO article_corpus_objects (article_id, storage_status, updated_at)
-       VALUES ($1, 'pending', CURRENT_TIMESTAMP)
+      `INSERT INTO article_corpus_objects (article_id, storage_status, offsite_status, updated_at)
+       VALUES ($1, 'pending', 'pending', CURRENT_TIMESTAMP)
        ON CONFLICT (article_id) DO UPDATE SET
-         storage_status = CASE WHEN article_corpus_objects.storage_status = 'stored'
-           THEN article_corpus_objects.storage_status ELSE 'pending' END,
+         storage_status = 'pending', offsite_status = 'pending',
+         last_error = NULL, offsite_error = NULL,
          updated_at = CURRENT_TIMESTAMP`,
       [article.id],
     );
@@ -232,6 +235,7 @@ async function processJob(pool, queueJob) {
     await markStarted(pool, queueJob);
     article = await loadJob(pool, queueJob.research_job_id);
     if (!article) throw new Error("Article not found for research job.");
+    article = await captureArticleContent(pool, article);
     const fields = normalizeResult(await runCodex(researchPrompt(article)));
     await storeSuccess(pool, queueJob, article, fields, Math.max(0, Math.round((Date.now() - startedAt) / 1000)));
     runtime.completed += 1;
@@ -263,8 +267,12 @@ function startHealthServer() {
 async function main() {
   const pool = new Pool(await databaseConfig());
   startHealthServer();
-  if (WORKERS_ENABLED) {
+  const authority = await processingAuthority(pool);
+  runtime.authority = authority.owner;
+  if (WORKERS_ENABLED && authority.owner === "self_hosted") {
     runtime.status = "idle";
+  } else if (WORKERS_ENABLED) {
+    runtime.status = "standby-authority";
   } else {
     runtime.status = "disabled";
   }
@@ -273,6 +281,13 @@ async function main() {
   const pollTimer = setInterval(async () => {
     if (!WORKERS_ENABLED || runtime.active >= CONCURRENCY) return;
     try {
+      if (!await hasLocalProcessingAuthority(pool)) {
+        runtime.authority = "cloudflare";
+        runtime.status = runtime.active ? "working" : "standby-authority";
+        return;
+      }
+      runtime.authority = "self_hosted";
+      if (!runtime.active) runtime.status = "idle";
       const jobs = await claimJobs(pool, {
         owner: INSTANCE_ID,
         limit: CONCURRENCY - runtime.active,

@@ -368,10 +368,18 @@ export interface Env {
   EXPERIMENT_REPORT_EMAIL_TO?: string;
   RESEND_API_KEY?: string;
   SNAPSHOT_UPLOAD_TOKEN?: string;
+  OFFSITE_BACKUP_TOKEN?: string;
   SELF_HOSTED_API_ORIGIN?: string;
+  SELF_HOSTED_API?: Fetcher;
+  SELF_HOSTED_PROXY_ENABLED?: string;
   SELF_HOSTED_API_TOKEN?: string;
   TUNNEL_ACCESS_CLIENT_ID?: string;
   TUNNEL_ACCESS_CLIENT_SECRET?: string;
+  PROCESSING_AUTHORITY?: string;
+}
+
+function cloudflareHasProcessingAuthority(env: Env): boolean {
+  return String(env.PROCESSING_AUTHORITY || "cloudflare").trim().toLowerCase() === "cloudflare";
 }
 
 type DashboardSnapshotEntry = {
@@ -4751,6 +4759,61 @@ function snapshotUploadAuthorized(request: Request, env: Env): boolean {
   return Boolean(env.SNAPSHOT_UPLOAD_TOKEN) && authorization === `Bearer ${env.SNAPSHOT_UPLOAD_TOKEN}`;
 }
 
+function offsiteUploadAuthorized(request: Request, env: Env): boolean {
+  const authorization = request.headers.get("authorization") || "";
+  return Boolean(env.OFFSITE_BACKUP_TOKEN) && authorization === `Bearer ${env.OFFSITE_BACKUP_TOKEN}`;
+}
+
+async function sha256Bytes(value: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", value);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function prunePostgresBackups(env: Env, retentionDays = 30): Promise<number> {
+  const cutoff = Date.now() - retentionDays * 86400_000;
+  let cursor: string | undefined;
+  let deleted = 0;
+  do {
+    const page = await env.ARTICLE_CORPUS.list({ prefix: "_backups/postgres/", limit: 1000, cursor });
+    const expired = page.objects.filter((object) => object.uploaded.getTime() < cutoff).map((object) => object.key);
+    if (expired.length) {
+      await env.ARTICLE_CORPUS.delete(expired);
+      deleted += expired.length;
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return deleted;
+}
+
+async function storeOffsiteObject(request: Request, env: Env): Promise<Response> {
+  if (!env.OFFSITE_BACKUP_TOKEN) return json({ error: "Off-site backup upload is not configured" }, { status: 503 });
+  if (!offsiteUploadAuthorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
+  const objectKey = (request.headers.get("x-object-key") || "").trim();
+  const corpusObject = /^articles\/\d{4}\/\d{2}\/\d{2}\/[a-zA-Z0-9_-]+\/[a-f0-9]{64}\.json$/.test(objectKey);
+  const postgresObject = /^_backups\/postgres\/\d{8}T\d{6}Z\/(part-\d{4}|manifest\.json)$/.test(objectKey);
+  if (!corpusObject && !postgresObject) return json({ error: "Object key is not permitted" }, { status: 400 });
+  const maxBytes = corpusObject ? 4 * 1024 * 1024 : 36 * 1024 * 1024;
+  const contentLength = Number(request.headers.get("content-length") || 0);
+  if (contentLength > maxBytes) return json({ error: "Backup object is too large" }, { status: 413 });
+  const body = await request.arrayBuffer();
+  if (body.byteLength > maxBytes) return json({ error: "Backup object is too large" }, { status: 413 });
+  const expectedHash = (request.headers.get("x-content-sha256") || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(expectedHash)) return json({ error: "A SHA-256 digest is required" }, { status: 400 });
+  const actualHash = await sha256Bytes(body);
+  if (actualHash !== expectedHash) return json({ error: "Backup object hash does not match" }, { status: 400 });
+  await env.ARTICLE_CORPUS.put(objectKey, body, {
+    httpMetadata: { contentType: request.headers.get("content-type") || "application/octet-stream" },
+    customMetadata: {
+      contentSha256: actualHash,
+      backupKind: corpusObject ? "article-corpus" : "postgres",
+    },
+  });
+  const pruned = postgresObject && objectKey.endsWith("/manifest.json")
+    ? await prunePostgresBackups(env)
+    : 0;
+  return json({ ok: true, object_key: objectKey, bytes: body.byteLength, content_sha256: actualHash, pruned });
+}
+
 function validateDashboardSnapshot(value: unknown): DashboardSnapshot {
   if (!value || typeof value !== "object") throw new Error("Snapshot body must be an object");
   const snapshot = value as Partial<DashboardSnapshot>;
@@ -4867,11 +4930,20 @@ function selfHostedApiOrigin(env: Env): URL | null {
   return origin;
 }
 
+function selfHostedApiConfigured(env: Env): boolean {
+  const explicit = String(env.SELF_HOSTED_PROXY_ENABLED || "").trim();
+  if (explicit) return /^(1|true|yes)$/i.test(explicit)
+    && Boolean(env.SELF_HOSTED_API || String(env.SELF_HOSTED_API_ORIGIN || "").trim());
+  return Boolean(String(env.SELF_HOSTED_API_ORIGIN || "").trim());
+}
+
 async function proxySelfHostedApi(request: Request, env: Env): Promise<Response> {
   const origin = selfHostedApiOrigin(env);
-  if (!origin) throw new Error("Self-hosted API origin is not configured");
+  if (!origin && !env.SELF_HOSTED_API) throw new Error("Self-hosted API origin is not configured");
   const requestedUrl = new URL(request.url);
-  const target = new URL(requestedUrl.pathname + requestedUrl.search, origin);
+  const target = origin
+    ? new URL(requestedUrl.pathname + requestedUrl.search, origin)
+    : new URL(requestedUrl.pathname + requestedUrl.search, "http://news-api:3000");
   const upstreamRequest = new Request(target.toString(), request);
   upstreamRequest.headers.set("x-forwarded-host", requestedUrl.host);
   if (env.SELF_HOSTED_API_TOKEN) {
@@ -4884,7 +4956,9 @@ async function proxySelfHostedApi(request: Request, env: Env): Promise<Response>
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
-    const upstream = await fetch(upstreamRequest, { signal: controller.signal });
+    const upstream = env.SELF_HOSTED_API
+      ? await env.SELF_HOSTED_API.fetch(upstreamRequest, { signal: controller.signal })
+      : await fetch(upstreamRequest, { signal: controller.signal });
     if (upstream.status >= 500 && request.method === "GET") {
       const fallback = await serveDashboardSnapshot(request, env);
       if (fallback) return fallback;
@@ -9000,9 +9074,12 @@ function predictionFiltersFromUrl(url: URL): PredictionOutcomeFilters {
 async function handleApi(request: Request, env: Env): Promise<Response> {
   const unauthorized = requireAuthorized(request, env);
   if (unauthorized) return unauthorized;
+  const url = new URL(request.url);
+  if (request.method !== "GET" && !url.pathname.startsWith("/api/simulation") && !cloudflareHasProcessingAuthority(env)) {
+    return json({ error: "processing_authority_moved", processing_authority: "self_hosted" }, { status: 503 });
+  }
   await ensureArticleStorageSchema(env.NEWS_DB);
 
-  const url = new URL(request.url);
   const limit = Number(url.searchParams.get("limit") || 25);
 
   if (url.pathname === "/api/status") {
@@ -9461,6 +9538,10 @@ export default {
       return storeDashboardSnapshot(request, env);
     }
 
+    if (url.pathname === "/api/internal/offsite-object" && request.method === "POST") {
+      return storeOffsiteObject(request, env);
+    }
+
     if (url.pathname === "/api/snapshot/status" && request.method === "GET") {
       const unauthorized = requireAuthorized(request, env);
       if (unauthorized) return unauthorized;
@@ -9471,6 +9552,9 @@ export default {
       return json({
         ok: true,
         service: "cartdotcom-news-signal-container",
+        processing_authority: cloudflareHasProcessingAuthority(env) ? "cloudflare" : "self_hosted",
+        self_hosted_proxy_enabled: selfHostedApiConfigured(env),
+        self_hosted_binding_configured: Boolean(env.SELF_HOSTED_API),
         routes: [
           "/dashboard",
           "/health",
@@ -9527,13 +9611,13 @@ export default {
       if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
         return json({ error: "WebSocket upgrade required" }, { status: 426 });
       }
-      if (env.SELF_HOSTED_API_ORIGIN?.trim()) return proxySelfHostedApi(request, env);
+      if (selfHostedApiConfigured(env)) return proxySelfHostedApi(request, env);
       const id = env.DASHBOARD_EVENTS.idFromName("news-signal-dashboard");
       return env.DASHBOARD_EVENTS.get(id).fetch(new Request("https://dashboard-events.internal/subscribe", request));
     }
 
     if (url.pathname.startsWith("/api/")) {
-      if (env.SELF_HOSTED_API_ORIGIN?.trim()) {
+      if (selfHostedApiConfigured(env)) {
         const unauthorized = requireAuthorized(request, env);
         if (unauthorized) return unauthorized;
         return proxySelfHostedApi(request, env);
@@ -9546,6 +9630,10 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (!cloudflareHasProcessingAuthority(env)) {
+      console.log("Scheduled processing skipped because authority is self-hosted.");
+      return;
+    }
     const scheduledAt = Math.floor(event.scheduledTime / SOURCE_CHECK_INTERVAL_MS) * SOURCE_CHECK_INTERVAL_MS;
     ctx.waitUntil(
       ingestFeeds(env, scheduledAt).then(async () => {
@@ -9565,6 +9653,11 @@ export default {
   },
 
   async queue(batch: MessageBatch<ResearchJobMessage>, env: Env): Promise<void> {
+    if (!cloudflareHasProcessingAuthority(env)) {
+      for (const message of batch.messages) message.ack();
+      console.log(`Discarded ${batch.messages.length} migrated queue message(s) after authority moved to self-hosted.`);
+      return;
+    }
     for (const message of batch.messages) {
       try {
         if (message.body.kind === "model_experiment") {

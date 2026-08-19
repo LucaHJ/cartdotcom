@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 const baseUrl = String(process.env.SNAPSHOT_TEST_BASE_URL || "http://127.0.0.1:8791").replace(/\/+$/, "");
 const dashboardToken = process.env.SNAPSHOT_TEST_DASHBOARD_TOKEN || "test-dashboard";
 const uploadToken = process.env.SNAPSHOT_TEST_UPLOAD_TOKEN || "test-upload";
+const offsiteToken = process.env.SNAPSHOT_TEST_OFFSITE_TOKEN || "test-offsite";
 const entries = [
   ["status", "/api/status"],
   ["status_live", "/api/status/live"],
@@ -71,5 +72,32 @@ response = await request("/api/ingest", {
   headers: { authorization: `Bearer ${dashboardToken}` },
 });
 assert.equal(response.status, 503, "mutations must never be answered from a snapshot");
+
+const corpusBody = Buffer.from(JSON.stringify({ content: { plaintext: "off-site fixture" } }));
+const corpusHash = createHash("sha256").update(corpusBody).digest("hex");
+const corpusKey = `articles/2026/08/19/test/${corpusHash}.json`;
+response = await request("/api/internal/offsite-object", {
+  method: "POST",
+  headers: {
+    authorization: "Bearer wrong",
+    "content-type": "application/json",
+    "x-object-key": corpusKey,
+    "x-content-sha256": corpusHash,
+  },
+  body: corpusBody,
+});
+assert.equal(response.status, 401, "off-site storage must reject the wrong credential");
+
+response = await request("/api/internal/offsite-object", {
+  method: "POST",
+  headers: {
+    authorization: `Bearer ${offsiteToken}`,
+    "content-type": "application/json",
+    "x-object-key": corpusKey,
+    "x-content-sha256": corpusHash,
+  },
+  body: corpusBody,
+});
+assert.equal(response.status, 200, await response.text());
 
 console.log("Dashboard snapshot gateway checks passed.");

@@ -65,3 +65,26 @@ The importer reports unknown tables and row counts. `merge` and especially
 3. Record local in-flight job IDs without deleting them.
 4. Reconcile completed results before requeueing any job.
 5. Diagnose from retained logs and database snapshots.
+
+## News processing authority handoff
+
+The two authority controls are deliberately independent. Never set both sides
+active at once.
+
+1. Confirm the latest PostgreSQL backup and Cloudflare dashboard snapshot.
+2. Deploy Cloudflare with `PROCESSING_AUTHORITY=self_hosted` while leaving
+   `SELF_HOSTED_PROXY_ENABLED=false`. This stops cron work, queue consumers, and
+   Cloudflare mutation controls without changing dashboard reads.
+3. Wait for Cloudflare in-flight work to settle, export D1, merge it into
+   PostgreSQL, download the R2 corpus delta, and run
+   `/srv/platform/scripts/reconcile-news-runtime.sh`.
+4. Run `/srv/platform/scripts/set-runtime-mode.sh active
+   --confirm-cloudflare-disabled`. This starts enabled containers first and
+   changes the database authority record last.
+5. Verify source checks, eight Codex slots, prediction prices, corpus files, and
+   snapshots. Then deploy `SELF_HOSTED_PROXY_ENABLED=true` to move dashboard API
+   reads through the private Workers VPC binding.
+
+Rollback reverses the order: disable the Worker proxy, set local runtime to
+staging, reconcile local completions back to Cloudflare if required, and only
+then restore `PROCESSING_AUTHORITY=cloudflare`.

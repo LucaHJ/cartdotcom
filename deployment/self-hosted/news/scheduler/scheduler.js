@@ -2,9 +2,11 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import pg from "pg";
 import { fetchSource, hashText, mapWithConcurrency } from "./feed.js";
 import { NEW_ARTICLE_PRIORITY } from "../common/queue.js";
+import { hasLocalProcessingAuthority, processingAuthority } from "../common/authority.js";
 import { floorToInterval, millisecondsUntilNextBoundary } from "./time.js";
 
 const { Pool } = pg;
@@ -16,6 +18,7 @@ const INSTANCE_ID = process.env.INSTANCE_ID || process.env.HOSTNAME || randomUUI
 const STARTED_AT = new Date();
 const RUN_LEASE_SECONDS = Math.max(600, Number(process.env.SCHEDULER_LEASE_SECONDS || 900));
 const HEALTH_PORT = Number(process.env.HEALTH_PORT || 3001);
+const COMMAND_LEASE_SECONDS = 600;
 
 const runtime = {
   enabled: INGESTION_ENABLED,
@@ -24,6 +27,7 @@ const runtime = {
   lastRunAt: null,
   lastSuccessAt: null,
   lastError: null,
+  authority: "unknown",
 };
 
 async function databaseConfig() {
@@ -59,13 +63,13 @@ async function heartbeat(pool, status = runtime.status) {
   );
 }
 
-async function claimRun(pool, scheduledFor) {
+export async function claimRun(pool, scheduledFor, taskName = "source-check") {
   const id = randomUUID();
   const result = await pool.query(
     `INSERT INTO scheduler_runs
        (id, task_name, scheduled_for, status, lease_owner, lease_expires_at, started_at)
-     VALUES ($1, 'source-check', $2, 'running', $3,
-       CURRENT_TIMESTAMP + ($4 * interval '1 second'), CURRENT_TIMESTAMP)
+     VALUES ($1, $2, $3, 'running', $4,
+       CURRENT_TIMESTAMP + ($5 * interval '1 second'), CURRENT_TIMESTAMP)
      ON CONFLICT (task_name, scheduled_for) DO UPDATE SET
        status = 'running',
        lease_owner = EXCLUDED.lease_owner,
@@ -76,7 +80,7 @@ async function claimRun(pool, scheduledFor) {
      WHERE scheduler_runs.status = 'failed'
         OR (scheduler_runs.status = 'running' AND scheduler_runs.lease_expires_at < CURRENT_TIMESTAMP)
      RETURNING id`,
-    [id, scheduledFor, INSTANCE_ID, RUN_LEASE_SECONDS],
+    [id, taskName, scheduledFor, INSTANCE_ID, RUN_LEASE_SECONDS],
   );
   return result.rows[0]?.id || null;
 }
@@ -312,8 +316,14 @@ async function persistSourceCheck(pool, { runId, scheduledFor, fetched, startedA
   }
 }
 
-async function runSourceCheck(pool, scheduledFor) {
-  const runId = await claimRun(pool, scheduledFor);
+async function runSourceCheck(pool, scheduledFor, taskName = "source-check") {
+  if (!await hasLocalProcessingAuthority(pool)) {
+    runtime.authority = "cloudflare";
+    runtime.status = "standby-authority";
+    return null;
+  }
+  runtime.authority = "self_hosted";
+  const runId = await claimRun(pool, scheduledFor, taskName);
   if (!runId) return null;
   const startedAt = new Date();
   runtime.status = "checking";
@@ -342,6 +352,55 @@ async function runSourceCheck(pool, scheduledFor) {
   }
 }
 
+async function claimManualSourceCheck(pool) {
+  const result = await pool.query(
+    `WITH candidate AS (
+       SELECT id FROM runtime_commands
+       WHERE command = 'source_check'
+         AND (status = 'pending' OR (status = 'running' AND lease_expires_at < CURRENT_TIMESTAMP))
+       ORDER BY requested_at, id
+       FOR UPDATE SKIP LOCKED
+       LIMIT 1
+     )
+     UPDATE runtime_commands AS commands
+     SET status = 'running', started_at = CURRENT_TIMESTAMP,
+         lease_owner = $1,
+         lease_expires_at = CURRENT_TIMESTAMP + ($2 * interval '1 second'),
+         error = NULL
+     FROM candidate
+     WHERE commands.id = candidate.id
+     RETURNING commands.id`,
+    [INSTANCE_ID, COMMAND_LEASE_SECONDS],
+  );
+  return result.rows[0]?.id || null;
+}
+
+async function processManualSourceCheck(pool) {
+  if (!INGESTION_ENABLED || runtime.status === "checking") return;
+  if (!await hasLocalProcessingAuthority(pool)) return;
+  const commandId = await claimManualSourceCheck(pool);
+  if (!commandId) return;
+  try {
+    const result = await runSourceCheck(pool, new Date(), "source-check-manual");
+    if (!result) throw new Error(runtime.lastError || "Manual source check did not complete.");
+    await pool.query(
+      `UPDATE runtime_commands
+       SET status = 'succeeded', completed_at = CURRENT_TIMESTAMP,
+           lease_owner = NULL, lease_expires_at = NULL, result_json = $2::jsonb
+       WHERE id = $1 AND lease_owner = $3`,
+      [commandId, JSON.stringify(result || {}), INSTANCE_ID],
+    );
+  } catch (error) {
+    await pool.query(
+      `UPDATE runtime_commands
+       SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+           lease_owner = NULL, lease_expires_at = NULL, error = $2
+       WHERE id = $1 AND lease_owner = $3`,
+      [commandId, String(error).slice(0, 4000), INSTANCE_ID],
+    );
+  }
+}
+
 function startHealthServer() {
   return createServer((request, response) => {
     if (request.url !== "/healthz") {
@@ -359,7 +418,11 @@ async function main() {
   const leaderClient = await pool.connect();
   const lock = await leaderClient.query("SELECT pg_try_advisory_lock(68421937) AS acquired");
   runtime.leader = Boolean(lock.rows[0]?.acquired);
-  runtime.status = runtime.leader ? (INGESTION_ENABLED ? "idle" : "disabled") : "standby";
+  const authority = await processingAuthority(pool);
+  runtime.authority = authority.owner;
+  runtime.status = runtime.leader
+    ? (INGESTION_ENABLED && authority.owner === "self_hosted" ? "idle" : (INGESTION_ENABLED ? "standby-authority" : "disabled"))
+    : "standby";
   startHealthServer();
 
   await pool.query(
@@ -372,6 +435,20 @@ async function main() {
   const heartbeatTimer = setInterval(() => heartbeat(pool).catch((error) => {
     runtime.lastError = error instanceof Error ? error.message : String(error);
   }), 30000);
+  const authorityTimer = setInterval(async () => {
+    const current = await processingAuthority(pool);
+    runtime.authority = current.owner;
+    if (runtime.status !== "checking" && runtime.status !== "degraded") {
+      runtime.status = !INGESTION_ENABLED
+        ? "disabled"
+        : (current.owner === "self_hosted" ? "idle" : "standby-authority");
+    }
+  }, 5000);
+  const commandTimer = setInterval(() => {
+    processManualSourceCheck(pool).catch((error) => {
+      runtime.lastError = error instanceof Error ? error.message : String(error);
+    });
+  }, 2000);
 
   let boundaryTimer;
   const scheduleNext = () => {
@@ -390,6 +467,8 @@ async function main() {
   const shutdown = async (signal) => {
     runtime.status = "stopping";
     clearInterval(heartbeatTimer);
+    clearInterval(authorityTimer);
+    clearInterval(commandTimer);
     clearTimeout(boundaryTimer);
     await heartbeat(pool).catch(() => {});
     if (runtime.leader) await leaderClient.query("SELECT pg_advisory_unlock(68421937)").catch(() => {});
@@ -403,7 +482,9 @@ async function main() {
   console.log(JSON.stringify({ event: "scheduler_started", instanceId: INSTANCE_ID, ...runtime }));
 }
 
-main().catch((error) => {
-  console.error("Scheduler failed to start", error);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error("Scheduler failed to start", error);
+    process.exit(1);
+  });
+}

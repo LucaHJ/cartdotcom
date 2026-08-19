@@ -15,7 +15,7 @@ docker compose up -d --wait
 
 cd /srv/cartdotcom/news
 docker compose run --rm migrate
-docker compose up -d --wait news-api news-scheduler news-worker codex-runner market-tracker
+docker compose up -d --wait news-api news-scheduler news-worker codex-runner auth-rotator market-tracker corpus-archiver
 docker compose up -d dashboard-snapshot
 
 curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null

@@ -1,0 +1,12 @@
+{
+  "name": "cartdotcom-self-hosted-corpus-archiver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node archiver.js",
+    "check": "node --check archiver.js && node --check healthcheck.js"
+  },
+  "dependencies": { "pg": "^8.16.3" }
+}

@@ -15,6 +15,8 @@ The current shadow stage provides:
 - Server-local operating and application-onboarding documentation.
 - A durable scheduler, eight-slot Codex worker/runner split, and market tracker,
   all guarded off while Cloudflare remains authoritative.
+- A full-page article extractor, filesystem corpus archiver, isolated Codex
+  credential rotator, and database-backed single-writer authority guard.
 - The existing dashboard, token authentication, live WebSocket signals, and
   PostgreSQL-backed compatibility read APIs.
 - A five-minute, private Cloudflare dashboard snapshot that preserves the
@@ -60,6 +62,8 @@ enabled only during the cutover stage.
   queue semantics, and remaining single-host risks.
 - `docs/DASHBOARD_SNAPSHOTS.md`: Cloudflare snapshot publishing, outage mode,
   recovery behavior, security boundaries, and verification commands.
+- `docs/PRIVATE_INGRESS.md`: private Tunnel and Workers VPC binding setup,
+  permissions, cutover guard, and failure behavior.
 
 Never commit files from `secrets/`, `.env`, database dumps, Codex credentials,
 dashboard tokens, or provider API keys.

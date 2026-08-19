@@ -6,6 +6,7 @@ import pg from "pg";
 import {
   baselinePoint, buildDailyPoints, buildIntervals, fetchYahooChart, nextCheckAt, unixSeconds,
 } from "./prices.js";
+import { hasLocalProcessingAuthority, processingAuthority } from "../common/authority.js";
 
 const { Pool } = pg;
 const ENABLED = /^(1|true|yes)$/i.test(process.env.MARKET_TRACKER_ENABLED || "false");
@@ -14,7 +15,7 @@ const STARTED_AT = new Date();
 const CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.MARKET_TRACKER_CONCURRENCY || 4)));
 const HEALTH_PORT = Number(process.env.HEALTH_PORT || 3003);
 const LEASE_SECONDS = 180;
-const runtime = { enabled: ENABLED, status: "starting", active: 0, completed: 0, failed: 0, lastError: null };
+const runtime = { enabled: ENABLED, status: "starting", authority: "unknown", active: 0, completed: 0, failed: 0, lastError: null };
 
 async function databaseConfig() {
   const password = process.env.PGPASSWORD_FILE
@@ -205,13 +206,24 @@ function startHealthServer() {
 async function main() {
   const pool = new Pool(await databaseConfig());
   startHealthServer();
-  runtime.status = ENABLED ? "idle" : "disabled";
+  const authority = await processingAuthority(pool);
+  runtime.authority = authority.owner;
+  runtime.status = ENABLED
+    ? (authority.owner === "self_hosted" ? "idle" : "standby-authority")
+    : "disabled";
   await heartbeat(pool);
   const heartbeatTimer = setInterval(() => heartbeat(pool).catch(() => {}), 30000);
   let lastReconcile = 0;
   const pollTimer = setInterval(async () => {
     if (!ENABLED || runtime.active >= CONCURRENCY) return;
     try {
+      if (!await hasLocalProcessingAuthority(pool)) {
+        runtime.authority = "cloudflare";
+        runtime.status = runtime.active ? "working" : "standby-authority";
+        return;
+      }
+      runtime.authority = "self_hosted";
+      if (!runtime.active) runtime.status = "idle";
       if (Date.now() - lastReconcile > 60000) {
         await reconcileOutcomes(pool);
         lastReconcile = Date.now();

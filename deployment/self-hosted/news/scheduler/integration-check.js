@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { claimJobs, NEW_ARTICLE_PRIORITY, RESYNTHESIS_PRIORITY } from "../common/queue.js";
+import { claimRun } from "./scheduler.js";
 
 const password = process.env.PGPASSWORD_FILE
   ? (await readFile(process.env.PGPASSWORD_FILE, "utf8")).trim()
@@ -19,6 +20,8 @@ await client.connect();
 try {
   await client.query("BEGIN");
   const suffix = randomUUID();
+  const runId = await claimRun(client, new Date(), `source-check-integration-${suffix}`);
+  assert.ok(runId, "Scheduler run lease was not acquired");
   const sourceId = `__lease_test_source_${suffix}`;
   await client.query(
     "INSERT INTO sources (id, name, url, category) VALUES ($1, 'Lease test', $2, 'test')",

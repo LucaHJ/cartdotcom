@@ -1,18 +1,22 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import pg from "pg";
 import { WebSocketServer } from "ws";
 import { createPredictionApi } from "./predictions.js";
 import { createAnalyticsApi } from "./analytics.js";
+import { processingAuthority } from "./common/authority.js";
 
 const { Pool } = pg;
 const port = Number.parseInt(process.env.PORT || "3000", 10);
 const passwordFile = process.env.PGPASSWORD_FILE;
 const dashboardTokenFile = process.env.DASHBOARD_TOKEN_FILE;
+const runtimeControlTokenFile = process.env.RUNTIME_CONTROL_TOKEN_FILE;
+const codexAuthRotatorUrl = process.env.CODEX_AUTH_ROTATOR_URL || "http://auth-rotator:3011/rotate";
 const corpusRoot = path.resolve(process.env.ARTICLE_CORPUS_ROOT || "/data/article-corpus");
+const mutationsEnabled = /^(1|true|yes)$/i.test(process.env.API_MUTATIONS_ENABLED || "false");
 
 if (!passwordFile) {
   throw new Error("PGPASSWORD_FILE is required");
@@ -20,6 +24,7 @@ if (!passwordFile) {
 
 const password = (await readFile(passwordFile, "utf8")).trim();
 const dashboardToken = dashboardTokenFile ? (await readFile(dashboardTokenFile, "utf8")).trim() : null;
+const runtimeControlToken = runtimeControlTokenFile ? (await readFile(runtimeControlTokenFile, "utf8")).trim() : null;
 const dashboardHtml = await readFile(new URL("./dashboard.html", import.meta.url), "utf8");
 const pool = new Pool({
   host: process.env.PGHOST,
@@ -189,7 +194,7 @@ async function runtimeServices() {
 }
 
 async function compatibilityStatus() {
-  const [articles, jobs, results, predictions, content, operations, sourceCheck, sourceCount, services] = await Promise.all([
+  const [articles, jobs, results, predictions, content, operations, sourceCheck, sourceCount, services, authority] = await Promise.all([
     pool.query("SELECT status, count(*)::integer AS count FROM articles WHERE status != 'archived' GROUP BY status"),
     pool.query(`
       SELECT research_jobs.status, count(*)::integer AS count
@@ -218,6 +223,7 @@ async function compatibilityStatus() {
     latestSourceCheck(),
     pool.query("SELECT count(*)::integer AS count FROM sources WHERE enabled != 0"),
     runtimeServices(),
+    processingAuthority(pool),
   ]);
 
   return {
@@ -231,7 +237,175 @@ async function compatibilityStatus() {
     latest_source_check: sourceCheck,
     configured_source_count: sourceCount.rows[0].count,
     runtime_services: services,
+    processing_authority: authority,
   };
+}
+
+async function readJsonBody(request, maxBytes = 100_000) {
+  let body = "";
+  for await (const chunk of request) {
+    body += chunk;
+    if (Buffer.byteLength(body) > maxBytes) {
+      const error = new Error("Request body is too large");
+      error.statusCode = 413;
+      throw error;
+    }
+  }
+  if (!body) return {};
+  try {
+    return JSON.parse(body);
+  } catch {
+    const error = new Error("Request body must be valid JSON");
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+async function mutationAuthority() {
+  const authority = await processingAuthority(pool);
+  return { authority, allowed: mutationsEnabled && authority.owner === "self_hosted" };
+}
+
+async function queuePendingResearchJobs(limit) {
+  const result = await pool.query(
+    `WITH pending AS (
+       SELECT jobs.id, jobs.article_id
+       FROM research_jobs AS jobs
+       INNER JOIN articles ON articles.id = jobs.article_id
+       WHERE jobs.status = 'pending' AND articles.status != 'archived'
+       ORDER BY jobs.queued_at, jobs.id
+       LIMIT $1
+     )
+     INSERT INTO local_job_queue
+       (id, research_job_id, kind, priority, status, payload_json)
+     SELECT concat('production:', pending.id), pending.id, 'production', 100, 'pending',
+       jsonb_build_object('jobId', pending.id, 'articleId', pending.article_id)
+     FROM pending
+     ON CONFLICT (research_job_id) DO UPDATE SET
+       status = CASE WHEN local_job_queue.status IN ('failed', 'cancelled') THEN 'pending' ELSE local_job_queue.status END,
+       available_at = CASE WHEN local_job_queue.status IN ('failed', 'cancelled') THEN CURRENT_TIMESTAMP ELSE local_job_queue.available_at END,
+       lease_owner = CASE WHEN local_job_queue.status IN ('failed', 'cancelled') THEN NULL ELSE local_job_queue.lease_owner END,
+       lease_expires_at = CASE WHEN local_job_queue.status IN ('failed', 'cancelled') THEN NULL ELSE local_job_queue.lease_expires_at END,
+       last_error = CASE WHEN local_job_queue.status IN ('failed', 'cancelled') THEN NULL ELSE local_job_queue.last_error END,
+       finished_at = CASE WHEN local_job_queue.status IN ('failed', 'cancelled') THEN NULL ELSE local_job_queue.finished_at END,
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING research_job_id`,
+    [limit],
+  );
+  return result.rowCount;
+}
+
+async function recoverResearchQueue(limit, includeFailed = false) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const expired = await client.query(
+      `UPDATE local_job_queue
+       SET status = 'pending', available_at = CURRENT_TIMESTAMP,
+           lease_owner = NULL, lease_expires_at = NULL,
+           last_error = COALESCE(last_error, 'Recovered expired local lease'),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'running' AND lease_expires_at < CURRENT_TIMESTAMP
+       RETURNING research_job_id`,
+    );
+    if (expired.rowCount) {
+      await client.query(
+        `UPDATE research_jobs SET status = 'pending', research_slot = NULL,
+           started_at = NULL, finished_at = NULL
+         WHERE id = ANY($1::text[])`,
+        [expired.rows.map((row) => row.research_job_id)],
+      );
+    }
+    let remediated = 0;
+    if (includeFailed) {
+      const failed = await client.query(
+        `WITH candidates AS (
+           SELECT jobs.id, jobs.article_id
+           FROM research_jobs AS jobs
+           INNER JOIN articles ON articles.id = jobs.article_id
+           WHERE jobs.status = 'failed'
+           ORDER BY jobs.finished_at DESC NULLS LAST
+           LIMIT $1
+         )
+         UPDATE research_jobs AS jobs
+         SET status = 'pending', last_error = NULL, started_at = NULL,
+             finished_at = NULL, synthesis_duration_seconds = NULL,
+             prediction_delay_seconds = NULL, research_slot = NULL
+         FROM candidates
+         WHERE jobs.id = candidates.id
+         RETURNING jobs.id, jobs.article_id`,
+        [limit],
+      );
+      remediated = failed.rowCount;
+      if (failed.rowCount) {
+        await client.query(
+          "UPDATE articles SET status = 'queued' WHERE id = ANY($1::text[])",
+          [failed.rows.map((row) => row.article_id)],
+        );
+        await client.query(
+          `UPDATE local_job_queue SET status = 'pending', attempts = 0,
+             available_at = CURRENT_TIMESTAMP, lease_owner = NULL,
+             lease_expires_at = NULL, last_error = NULL, finished_at = NULL,
+             updated_at = CURRENT_TIMESTAMP
+           WHERE research_job_id = ANY($1::text[])`,
+          [failed.rows.map((row) => row.id)],
+        );
+      }
+    }
+    await client.query("COMMIT");
+    const requeued = await queuePendingResearchJobs(limit);
+    return { recovered: expired.rowCount, remediated, requeued };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function recoverAuthenticationFailures(limit) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const failed = await client.query(
+      `WITH candidates AS (
+         SELECT jobs.id, jobs.article_id
+         FROM research_jobs AS jobs
+         WHERE jobs.status = 'failed'
+           AND jobs.last_error ~* 'authentication|access token|refresh token|log in|login'
+         ORDER BY jobs.finished_at DESC NULLS LAST
+         LIMIT $1
+       )
+       UPDATE research_jobs AS jobs
+       SET status = 'pending', attempts = 0, last_error = NULL,
+           started_at = NULL, finished_at = NULL, research_slot = NULL,
+           synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL
+       FROM candidates
+       WHERE jobs.id = candidates.id
+       RETURNING jobs.id, jobs.article_id`,
+      [limit],
+    );
+    if (failed.rowCount) {
+      const jobIds = failed.rows.map((row) => row.id);
+      await client.query("UPDATE articles SET status = 'queued' WHERE id = ANY($1::text[])", [failed.rows.map((row) => row.article_id)]);
+      await client.query(
+        `UPDATE local_job_queue SET status = 'pending', attempts = 0,
+           available_at = CURRENT_TIMESTAMP, lease_owner = NULL,
+           lease_expires_at = NULL, last_error = NULL, finished_at = NULL,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE research_job_id = ANY($1::text[])`,
+        [jobIds],
+      );
+    }
+    await client.query("COMMIT");
+    const requeued = await queuePendingResearchJobs(limit);
+    return { recovered: failed.rowCount, requeued };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function listQuery(sql, values = []) {
@@ -260,20 +434,35 @@ const server = createServer(async (request, response) => {
       return json(response, 401, { error: "Unauthorized" });
     }
 
+    if (url.pathname.startsWith("/api/") && request.method !== "GET" && !url.pathname.startsWith("/api/simulation")) {
+      const state = await mutationAuthority();
+      if (!state.allowed) {
+        return json(response, 503, {
+          error: "migration_read_only",
+          mutations_enabled: mutationsEnabled,
+          processing_authority: state.authority.owner,
+        });
+      }
+    }
+
     if (request.method === "GET" && url.pathname === "/status") {
+      const authority = await processingAuthority(pool);
       return json(response, 200, {
         service: "cartdotcom-self-hosted-news-api",
-        migration_stage: "foundation",
-        production_authority: "cloudflare",
+        migration_stage: authority.owner === "self_hosted" ? "active" : "shadow",
+        production_authority: authority.owner,
+        mutations_enabled: mutationsEnabled,
         counts: await databaseCounts(),
       });
     }
 
     if (request.method === "GET" && url.pathname === "/health") {
+      const authority = await processingAuthority(pool);
       return json(response, 200, {
         ok: true,
         service: "cartdotcom-self-hosted-news-api",
-        mode: "read-only-shadow",
+        mode: mutationsEnabled && authority.owner === "self_hosted" ? "active" : "read-only-shadow",
+        processing_authority: authority.owner,
       });
     }
 
@@ -398,8 +587,12 @@ const server = createServer(async (request, response) => {
           count(*) FILTER (WHERE storage_status = 'stored')::integer AS stored,
           count(*) FILTER (WHERE storage_status = 'pending')::integer AS pending,
           count(*) FILTER (WHERE storage_status = 'failed')::integer AS failed,
+          count(*) FILTER (WHERE offsite_status = 'stored')::integer AS offsite_stored,
+          count(*) FILTER (WHERE offsite_status = 'pending')::integer AS offsite_pending,
+          count(*) FILTER (WHERE offsite_status = 'failed')::integer AS offsite_failed,
           coalesce(sum(object_bytes) FILTER (WHERE storage_status = 'stored'), 0)::bigint AS stored_bytes,
-          max(stored_at) AS latest_stored_at
+          max(stored_at) AS latest_stored_at,
+          max(offsite_at) AS latest_offsite_at
         FROM article_corpus_objects
       `);
       return json(response, 200, { ok: true, ...result.rows[0] });
@@ -479,6 +672,101 @@ const server = createServer(async (request, response) => {
       });
     }
 
+    if (request.method === "POST" && url.pathname === "/api/ingest") {
+      const existing = await pool.query(
+        `SELECT id FROM runtime_commands
+         WHERE command = 'source_check' AND status IN ('pending', 'running')
+         ORDER BY requested_at LIMIT 1`,
+      );
+      if (existing.rowCount) {
+        return json(response, 202, { ok: true, queued: false, command_id: existing.rows[0].id });
+      }
+      const commandId = randomUUID();
+      await pool.query(
+        `INSERT INTO runtime_commands (id, command, requested_by)
+         VALUES ($1, 'source_check', 'dashboard')`,
+        [commandId],
+      );
+      return json(response, 202, { ok: true, queued: true, command_id: commandId });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/requeue-pending") {
+      const requeued = await queuePendingResearchJobs(requestLimit(url, 10));
+      return json(response, 200, { ok: true, requeued });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/research/recover") {
+      return json(response, 200, { ok: true, ...(await recoverResearchQueue(requestLimit(url, 100), false)) });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/research/remediate-failed") {
+      return json(response, 200, { ok: true, ...(await recoverResearchQueue(requestLimit(url, 100), true)) });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/articles/archive") {
+      const body = await readJsonBody(request);
+      const articleId = typeof body.article_id === "string" ? body.article_id.trim() : "";
+      if (!articleId) return json(response, 400, { error: "Missing article_id" });
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const article = await client.query("SELECT id FROM articles WHERE id = $1 FOR UPDATE", [articleId]);
+        if (!article.rowCount) {
+          await client.query("ROLLBACK");
+          return json(response, 404, { error: "Article not found" });
+        }
+        await client.query("DELETE FROM prediction_daily_points_v2 WHERE outcome_id IN (SELECT id FROM prediction_outcomes WHERE article_id = $1)", [articleId]);
+        await client.query("DELETE FROM market_tracking_jobs WHERE outcome_id IN (SELECT id FROM prediction_outcomes WHERE article_id = $1)", [articleId]);
+        const outcomes = await client.query("DELETE FROM prediction_outcomes WHERE article_id = $1 RETURNING id", [articleId]);
+        const results = await client.query("DELETE FROM research_results WHERE article_id = $1 RETURNING id", [articleId]);
+        await client.query("UPDATE articles SET status = 'archived' WHERE id = $1", [articleId]);
+        await client.query("COMMIT");
+        return json(response, 200, {
+          ok: true,
+          article_id: articleId,
+          removed_predictions: outcomes.rowCount,
+          removed_results: results.rowCount,
+        });
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/predictions/process") {
+      return json(response, 202, { ok: true, queued: true, owner: "market-tracker" });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/research/auth/rotate") {
+      if (!runtimeControlToken) return json(response, 503, { error: "runtime_control_unavailable" });
+      const body = await readJsonBody(request, 110_000);
+      const authJson = typeof body.auth_json === "string" ? body.auth_json.trim() : "";
+      if (!authJson) return json(response, 400, { error: "Select a Codex auth.json file." });
+      const rotated = await fetch(codexAuthRotatorUrl, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${runtimeControlToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ auth_json: authJson }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const rotation = await rotated.json().catch(() => ({}));
+      if (!rotated.ok) return json(response, rotated.status, { error: rotation.error || "Codex authentication rotation failed" });
+      const recovery = await recoverAuthenticationFailures(500);
+      return json(response, 200, { ok: true, recycled: 0, ...recovery });
+    }
+
+    if (request.method === "POST" && (
+      url.pathname.startsWith("/api/model-experiments/")
+      || url.pathname === "/api/process-next"
+      || url.pathname === "/api/process-batch"
+    )) {
+      return json(response, 501, { error: "local_control_not_implemented" });
+    }
+
     if (url.pathname.startsWith("/api/simulation")) {
       return json(response, 410, {
         error: "Paper trading simulation has been decommissioned. Use /api/predictions for prediction outcome measurement.",
@@ -486,13 +774,13 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname.startsWith("/api/") && request.method !== "GET") {
-      return json(response, 503, { error: "migration_read_only" });
+      return json(response, 404, { error: "not_found" });
     }
 
     return json(response, 404, { error: "not_found" });
   } catch (error) {
     console.error("request_failed", error);
-    return json(response, 503, { error: "service_unavailable" });
+    return json(response, Number(error?.statusCode || 503), { error: error?.message || "service_unavailable" });
   }
 });
 

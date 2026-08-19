@@ -39,14 +39,23 @@ APIs, sitemap history, or an external availability monitor are needed to close
 that gap. This is separate from queue durability: work already stored in
 PostgreSQL is retained.
 
-The current database backups are on the same physical SSD as PostgreSQL. They
-protect against application errors but not SSD loss, theft, fire, or severe
-filesystem corruption. Do not cut production over until PostgreSQL dumps and
-the article corpus are copied off-host and a restore has been tested.
+Verified PostgreSQL dumps are uploaded to private Cloudflare R2 in 32 MiB
+chunks after each local backup. A SHA-256 manifest is uploaded last, and objects
+older than 30 days are pruned after a successful manifest upload. New local
+article corpus documents are also mirrored to the pre-existing private R2
+bucket. Local backup retention remains 14 days.
+
+The upload path is deployed but must pass a complete dump upload and restore
+test before production cutover. The off-site credential is dedicated to the
+strict internal object-upload route; it is not the Cloudflare deployment token.
 
 The Cloudflare snapshot is a continuity view, not a database backup. It holds
 only the latest rendered API datasets and cannot resume ingestion, inference,
 or market-price collection while the server is offline.
+
+The off-site backup protects data but does not make processing available while
+the physical server is down. Cloudflare snapshot mode remains the availability
+mechanism for the dashboard during that period.
 
 ## Host settings
 

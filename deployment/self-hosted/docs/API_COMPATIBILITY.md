@@ -11,14 +11,14 @@ on Cloudflare until all required rows are marked verified.
 | `/api/snapshot/status` | Private Cloudflare snapshot metadata | Verified on Cloudflare |
 | `/api/events` | Near-real-time dashboard notifications | Verified authenticated WebSocket and PostgreSQL notifications |
 | `/api/sources`, `/api/source-*` | Sources, checks, statistics, and activity | Verified read paths |
-| `/api/articles*` | Article metadata, text, archive, and backfill | Read paths verified; mutations disabled in staging |
+| `/api/articles*` | Article metadata, text, archive, and backfill | Reads and manual archive implemented; full-page capture runs before local synthesis |
 | `/api/corpus*` | Full article object storage | Filesystem adapter and all 76,248 stored R2 objects verified |
 | `/api/jobs*`, `/api/results` | Queue state, failures, and analysis results | Verified read paths |
 | `/api/ticker-signals`, `/api/market-impacts` | Legacy aggregated analysis | Not called by the current dashboard; excluded from cutover scope |
 | `/api/predictions*` | Outcomes, accuracy matrix, and daily movement | Verified read paths; mutations owned by market tracker |
-| `/api/model-experiments*` | Luna/Terra experiment history and controls | History/report verified; new execution disabled in staging |
-| `/api/ingest`, `/api/process-*` | Feed checks and queue dispatch | Disabled during shadow stage |
-| `/api/research/*` | Recovery, authentication rotation, and reanalysis | Local worker pool deployed; controls pending |
+| `/api/model-experiments*` | Luna/Terra experiment history and controls | History/report verified; the completed one-off experiment is retained read-only |
+| `/api/ingest`, `/api/process-*` | Feed checks and queue dispatch | Manual ingestion command and pending-job dispatch implemented behind authority guard |
+| `/api/research/*` | Recovery, authentication rotation, and reanalysis | Queue recovery, failed-job remediation, and atomic Codex auth rotation implemented |
 | `/api/simulation*` | Decommissioned paper trading routes | Must continue returning HTTP 410 |
 | `/container/*` | Codex worker diagnostics and research | Replaced by isolated local worker/runner health services |
 
@@ -41,6 +41,11 @@ The executable dashboard contract check is
 `news/api/dashboard-contract-check.js`. The 2026-08-19 staging audit passed 20
 functional checks plus authenticated desktop and mobile visual checks. See
 `DASHBOARD_AUDIT.md` for the exact scope.
+
+All local mutations require both `API_MUTATIONS_ENABLED=true` and the durable
+`runtime_authority.owner = 'self_hosted'` record. The scheduler, research
+worker, market tracker, and corpus archiver independently enforce the same
+authority record before claiming work.
 
 During a self-hosted outage, Cloudflare can answer the dashboard's supported
 GET routes from the latest snapshot. Responses include

@@ -3,7 +3,8 @@ name: cartdotcom-news
 services:
   news-api:
     build:
-      context: ./api
+      context: .
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -14,14 +15,19 @@ services:
       PGUSER: cartdotcom
       PGPASSWORD_FILE: /run/secrets/postgres_password
       DASHBOARD_TOKEN_FILE: /run/secrets/dashboard_token
+      API_MUTATIONS_ENABLED: "${API_MUTATIONS_ENABLED:-false}"
+      RUNTIME_CONTROL_TOKEN_FILE: /run/secrets/runtime_control_token
+      CODEX_AUTH_ROTATOR_URL: http://auth-rotator:3011/rotate
     secrets:
       - postgres_password
       - dashboard_token
+      - runtime_control_token
     volumes:
       - /srv/cartdotcom/article-corpus:/data/article-corpus:ro
     networks:
       - edge
       - data
+      - runtime
     healthcheck:
       test: ["CMD", "node", "healthcheck.js"]
       interval: 10s
@@ -50,6 +56,7 @@ services:
       INGESTION_ENABLED: "${INGESTION_ENABLED:-false}"
       SOURCE_CHECK_INTERVAL_MS: "300000"
       SOURCE_FETCH_CONCURRENCY: "12"
+      PROCESSING_AUTHORITY_REQUIRED: "self_hosted"
     secrets:
       - postgres_password
     networks:
@@ -84,6 +91,7 @@ services:
       WORKERS_ENABLED: "${WORKERS_ENABLED:-false}"
       WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-8}"
       HEALTH_PORT: "3002"
+      PROCESSING_AUTHORITY_REQUIRED: "self_hosted"
     secrets:
       - postgres_password
     networks:
@@ -132,6 +140,33 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  auth-rotator:
+    build:
+      context: .
+      dockerfile: auth-rotator/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "3011"
+      CODEX_AUTH_FILE: /codex-auth/auth.json
+      RUNTIME_CONTROL_TOKEN_FILE: /run/secrets/runtime_control_token
+    secrets:
+      - runtime_control_token
+    volumes:
+      - /home/lucaj/.codex:/codex-auth
+    networks:
+      - runtime
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+
   market-tracker:
     build:
       context: .
@@ -146,6 +181,7 @@ services:
       MARKET_TRACKER_ENABLED: "${MARKET_TRACKER_ENABLED:-false}"
       MARKET_TRACKER_CONCURRENCY: "${MARKET_TRACKER_CONCURRENCY:-4}"
       HEALTH_PORT: "3003"
+      PROCESSING_AUTHORITY_REQUIRED: "self_hosted"
     secrets:
       - postgres_password
     networks:
@@ -159,6 +195,44 @@ services:
       start_period: 15s
     mem_limit: 512m
     cpus: 2.0
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+
+  corpus-archiver:
+    build:
+      context: .
+      dockerfile: corpus/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: cartdotcom
+      PGUSER: cartdotcom
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      CORPUS_ARCHIVER_ENABLED: "${CORPUS_ARCHIVER_ENABLED:-false}"
+      ARTICLE_CORPUS_ROOT: /data/article-corpus
+      CORPUS_ARCHIVER_BATCH_SIZE: "10"
+      CORPUS_MIRROR_URL: "${CORPUS_MIRROR_URL:-https://cartdotcom-news-signal-container.lucajeannin.workers.dev/api/internal/offsite-object}"
+      OFFSITE_BACKUP_TOKEN_FILE: /run/secrets/offsite_backup_token
+      HEALTH_PORT: "3005"
+      PROCESSING_AUTHORITY_REQUIRED: "self_hosted"
+    secrets:
+      - postgres_password
+      - offsite_backup_token
+    volumes:
+      - /srv/cartdotcom/article-corpus:/data/article-corpus
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD", "node", "corpus/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    mem_limit: 384m
+    cpus: 1.0
     pids_limit: 256
     security_opt:
       - no-new-privileges:true
@@ -193,6 +267,21 @@ services:
       start_period: 20s
     mem_limit: 256m
     cpus: 0.75
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["ingress"]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--protocol", "quic", "run", "--token-file", "/run/secrets/cloudflare_tunnel_token"]
+    secrets:
+      - cloudflare_tunnel_token
+    networks:
+      - edge
+    mem_limit: 256m
+    cpus: 0.5
     pids_limit: 128
     security_opt:
       - no-new-privileges:true
@@ -255,6 +344,12 @@ secrets:
     file: /srv/platform/secrets/dashboard_token
   snapshot_upload_token:
     file: /srv/platform/secrets/snapshot_upload_token
+  cloudflare_tunnel_token:
+    file: /srv/platform/secrets/cloudflare_tunnel_token
+  runtime_control_token:
+    file: /srv/platform/secrets/runtime_control_token
+  offsite_backup_token:
+    file: /srv/platform/secrets/offsite_backup_token
 
 networks:
   edge:

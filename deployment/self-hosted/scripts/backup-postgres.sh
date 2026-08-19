@@ -27,5 +27,8 @@ docker compose exec -T postgres pg_restore --list <"${temporary_path}" >/dev/nul
 mv "${temporary_path}" "${final_path}"
 trap - EXIT
 
+/srv/platform/scripts/upload-postgres-offsite.sh "${final_path}"
+
 find "${backup_dir}" -type f -name 'cartdotcom-*.dump' -mtime +14 -delete
+find "${backup_dir}" -type f -name 'cartdotcom-*.dump.offsite' -mtime +14 -delete
 echo "Created verified PostgreSQL backup: ${final_path}"
