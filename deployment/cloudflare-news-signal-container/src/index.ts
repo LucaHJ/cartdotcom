@@ -367,7 +367,59 @@ export interface Env {
   EXPERIMENT_REPORT_EMAIL_FROM?: string;
   EXPERIMENT_REPORT_EMAIL_TO?: string;
   RESEND_API_KEY?: string;
+  SNAPSHOT_UPLOAD_TOKEN?: string;
+  SELF_HOSTED_API_ORIGIN?: string;
+  TUNNEL_ACCESS_CLIENT_ID?: string;
+  TUNNEL_ACCESS_CLIENT_SECRET?: string;
 }
+
+type DashboardSnapshotEntry = {
+  request_path: string;
+  status: number;
+  body: unknown;
+};
+
+type DashboardSnapshot = {
+  version: number;
+  generated_at: string;
+  response_count: number;
+  content_sha256: string;
+  responses: Record<string, DashboardSnapshotEntry>;
+};
+
+const DASHBOARD_SNAPSHOT_OBJECT_KEY = "_system/dashboard/latest-v1.json";
+const DASHBOARD_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
+const DASHBOARD_SNAPSHOT_KEYS = [
+  "status",
+  "status_live",
+  "results",
+  "jobs",
+  "failed_jobs",
+  "model_experiments",
+  "prediction_outcomes",
+  "prediction_summary",
+  "prediction_daily",
+  "ticker_pipeline",
+  "source_activity",
+  "source_stats",
+] as const;
+const DASHBOARD_SNAPSHOT_ROUTE_KEYS: Record<string, typeof DASHBOARD_SNAPSHOT_KEYS[number]> = {
+  "/api/status": "status",
+  "/api/status/live": "status_live",
+  "/api/results": "results",
+  "/api/jobs": "jobs",
+  "/api/jobs/failures": "failed_jobs",
+  "/api/model-experiments": "model_experiments",
+  "/api/predictions/outcomes": "prediction_outcomes",
+  "/api/predictions": "prediction_outcomes",
+  "/api/predictions/summary": "prediction_summary",
+  "/api/predictions/daily": "prediction_daily",
+  "/api/diagnostics/ticker-pipeline": "ticker_pipeline",
+  "/api/source-activity": "source_activity",
+  "/api/source-stats": "source_stats",
+};
+
+let dashboardSnapshotCache: { loadedAt: number; snapshot: DashboardSnapshot } | null = null;
 
 function source(
   id: string,
@@ -1053,6 +1105,35 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    .snapshot-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 14px 0 0;
+      padding: 10px 12px;
+      border: 1px solid var(--amber);
+      border-radius: 6px;
+      background: var(--amber-bg);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .snapshot-banner[hidden] { display: none; }
+    .snapshot-banner strong { color: var(--amber); white-space: nowrap; }
+
+    body.snapshot-mode [data-heatmap-direction],
+    body.snapshot-mode [data-outcome-direction],
+    body.snapshot-mode [data-reset-prediction-filters],
+    body.snapshot-mode .source-view-button,
+    body.snapshot-mode #source-period-previous,
+    body.snapshot-mode #source-period-next,
+    body.snapshot-mode #prediction-confidence-filter,
+    body.snapshot-mode #prediction-sort {
+      pointer-events: none;
+      opacity: 0.58;
+    }
 
     .tokenbar {
       display: grid;
@@ -1746,7 +1827,7 @@ const DASHBOARD_HTML = `<!doctype html>
 
     .confidence-heatmap th:first-child,
     .confidence-heatmap td:first-child {
-      width: 132px;
+      width: 160px;
       text-align: center;
       font-weight: 700;
     }
@@ -2095,6 +2176,11 @@ const DASHBOARD_HTML = `<!doctype html>
       </div>
     </header>
 
+    <section class="snapshot-banner" id="snapshot-banner" role="status" hidden>
+      <strong>Offline snapshot</strong>
+      <span id="snapshot-banner-detail">The local server is unavailable.</span>
+    </section>
+
     <section class="tokenbar">
       <input id="token-input" type="password" autocomplete="off" placeholder="Bearer token">
       <button class="btn" id="save-token-btn" type="button">Save Token</button>
@@ -2251,6 +2337,8 @@ const DASHBOARD_HTML = `<!doctype html>
     const authState = document.getElementById("auth-state");
     const lastUpdated = document.getElementById("last-updated");
     const liveStatusUpdated = document.getElementById("live-status-updated");
+    const snapshotBannerEl = document.getElementById("snapshot-banner");
+    const snapshotBannerDetailEl = document.getElementById("snapshot-banner-detail");
     const metricsEl = document.getElementById("metrics");
     const resultsEl = document.getElementById("results");
     const jobsEl = document.getElementById("jobs");
@@ -2326,6 +2414,10 @@ const DASHBOARD_HTML = `<!doctype html>
     let predictionLoadedCount = 0;
     let predictionTotal = 0;
     let predictionLastArticleKey = null;
+    let snapshotMode = false;
+    let snapshotAt = null;
+    let snapshotRecoveryTimer = null;
+    let snapshotRecoveryLoading = false;
     let predictionObserver = null;
     let latestStatus = null;
     let modelExperimentId = null;
@@ -2418,6 +2510,7 @@ const DASHBOARD_HTML = `<!doctype html>
     sourcesPanel.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target : null;
       const viewButton = target?.closest("[data-source-view]");
+      if (snapshotMode && (viewButton || target?.closest("#source-period-previous") || target?.closest("#source-period-next"))) return;
       if (viewButton) {
         sourceActivityMode = viewButton.getAttribute("data-source-view") || "day";
         sourceActivityAnchor = brisbaneDateKey();
@@ -2432,12 +2525,14 @@ const DASHBOARD_HTML = `<!doctype html>
       if (target) setTab(target.getAttribute("data-open-tab") || "simulation");
     });
     predictionSummaryEl.addEventListener("click", (event) => {
+      if (snapshotMode) return;
       const target = event.target instanceof Element ? event.target.closest("[data-heatmap-direction]") : null;
       if (!target) return;
       const confidenceBin = target.getAttribute("data-confidence-bin");
       setPredictionFilters(target.getAttribute("data-heatmap-direction") || "all", confidenceBin === "all" ? null : Number(confidenceBin));
     });
     predictionsEl.addEventListener("click", (event) => {
+      if (snapshotMode) return;
       const target = event.target instanceof Element ? event.target : null;
       const directionButton = target?.closest("[data-outcome-direction]");
       if (directionButton) {
@@ -2447,6 +2542,7 @@ const DASHBOARD_HTML = `<!doctype html>
       if (target?.closest("[data-reset-prediction-filters]")) setPredictionFilters("all", null);
     });
     predictionsEl.addEventListener("change", (event) => {
+      if (snapshotMode) return;
       const select = event.target instanceof HTMLSelectElement ? event.target : null;
       if (!select) return;
       if (select.id === "prediction-confidence-filter") {
@@ -2545,6 +2641,93 @@ const DASHBOARD_HTML = `<!doctype html>
       }, "");
     }
 
+    const SNAPSHOT_CONTROL_SELECTOR = [
+      "#ingest-btn",
+      "#requeue-btn",
+      "#start-model-experiment-btn",
+      "#save-model-experiment-email-btn",
+      "#test-model-experiment-email-btn",
+      "#dispatch-model-experiment-btn",
+      "#rotate-codex-auth-btn",
+      "[data-heatmap-direction]",
+      "[data-outcome-direction]",
+      "[data-reset-prediction-filters]",
+      ".source-view-button",
+      "#source-period-previous",
+      "#source-period-next",
+      "#prediction-confidence-filter",
+      "#prediction-sort",
+    ].join(",");
+
+    function applySnapshotControlState() {
+      for (const control of document.querySelectorAll(SNAPSHOT_CONTROL_SELECTOR)) {
+        control.disabled = snapshotMode;
+        control.setAttribute("aria-disabled", snapshotMode ? "true" : "false");
+      }
+    }
+
+    function scheduleSnapshotRecovery() {
+      if (!snapshotMode || snapshotRecoveryTimer) return;
+      snapshotRecoveryTimer = setTimeout(checkSnapshotRecovery, 30000);
+    }
+
+    async function checkSnapshotRecovery() {
+      snapshotRecoveryTimer = null;
+      if (!snapshotMode || snapshotRecoveryLoading) return;
+      snapshotRecoveryLoading = true;
+      try {
+        const response = await fetch("/api/status/live", {
+          headers: headers(),
+          signal: AbortSignal.timeout(12000),
+          cache: "no-store",
+        });
+        if (response.ok && response.headers.get("x-news-signal-mode") === "live") {
+          deactivateSnapshotMode();
+          predictionsLoaded = false;
+          await loadAll();
+          if (!sourcesPanel.classList.contains("hidden")) await loadSourceStats();
+          return;
+        }
+      } catch (_) {
+        // The next scheduled probe will retry without disturbing the stored view.
+      } finally {
+        snapshotRecoveryLoading = false;
+      }
+      scheduleSnapshotRecovery();
+    }
+
+    function activateSnapshotMode(generatedAt) {
+      const firstActivation = !snapshotMode;
+      snapshotMode = true;
+      if (generatedAt && (!snapshotAt || Date.parse(generatedAt) > Date.parse(snapshotAt))) snapshotAt = generatedAt;
+      document.body.classList.add("snapshot-mode");
+      snapshotBannerEl.hidden = false;
+      snapshotBannerDetailEl.textContent = "Showing the last server snapshot from " + formatDate(snapshotAt) + ". Live controls will return automatically when the server reconnects.";
+      liveStatusUpdated.textContent = "Server offline";
+      if (firstActivation) {
+        predictionFilters.direction = "all";
+        predictionFilters.confidenceBin = null;
+        predictionFilters.sort = "newest";
+        sourceActivityMode = "day";
+        stopLiveStatusStream();
+      }
+      applySnapshotControlState();
+      scheduleSnapshotRecovery();
+    }
+
+    function deactivateSnapshotMode() {
+      if (!snapshotMode) return;
+      snapshotMode = false;
+      snapshotAt = null;
+      document.body.classList.remove("snapshot-mode");
+      snapshotBannerEl.hidden = true;
+      if (snapshotRecoveryTimer) clearTimeout(snapshotRecoveryTimer);
+      snapshotRecoveryTimer = null;
+      applySnapshotControlState();
+      liveStatusUpdated.textContent = "Live server restored";
+      startLiveStatusStream();
+    }
+
     function headers() {
       const token = tokenInput.value.trim() || storedToken();
       return token ? { Authorization: "Bearer " + token } : {};
@@ -2556,6 +2739,9 @@ const DASHBOARD_HTML = `<!doctype html>
         signal: options.signal || AbortSignal.timeout(20000),
         headers: { ...(options.headers || {}), ...headers() },
       });
+      const responseMode = response.headers.get("x-news-signal-mode");
+      if (responseMode === "snapshot") activateSnapshotMode(response.headers.get("x-news-signal-snapshot-at"));
+      if (responseMode === "live" && snapshotMode) deactivateSnapshotMode();
       const contentType = response.headers.get("content-type") || "";
       const body = await response.text();
       let payload = null;
@@ -2582,6 +2768,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     async function runAction(path) {
+      if (snapshotMode) return;
       setBusy(true);
       try {
         await api(path, { method: "POST" });
@@ -2697,6 +2884,10 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     async function refreshLiveStatus() {
+      if (snapshotMode) {
+        scheduleSnapshotRecovery();
+        return;
+      }
       if (liveStatusLoading) {
         liveStatusRefreshPending = true;
         return;
@@ -2885,7 +3076,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function startLiveStatusStream() {
-      if (!tokenInput.value.trim() || liveStatusSocket) return;
+      if (snapshotMode || !tokenInput.value.trim() || liveStatusSocket) return;
       if (liveStatusReconnectTimer) {
         clearTimeout(liveStatusReconnectTimer);
         liveStatusReconnectTimer = null;
@@ -2968,12 +3159,17 @@ const DASHBOARD_HTML = `<!doctype html>
 
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
+        if (snapshotMode) {
+          scheduleSnapshotRecovery();
+          return;
+        }
         startLiveStatusStream();
         scheduleLiveStatusRefresh(0);
       }
     });
 
     async function reloadPredictionOutcomes() {
+      if (snapshotMode) return;
       const requestVersion = ++predictionRequestVersion;
       predictionLoading = true;
       renderPredictionOutcomeShell(true);
@@ -2992,7 +3188,7 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     async function loadMorePredictions() {
-      if (predictionLoading || !predictionHasMore || !predictionNextCursor) return;
+      if (snapshotMode || predictionLoading || !predictionHasMore || !predictionNextCursor) return;
       const requestVersion = predictionRequestVersion;
       let loadFailed = false;
       predictionLoading = true;
@@ -3042,7 +3238,10 @@ const DASHBOARD_HTML = `<!doctype html>
     }
 
     function setBusy(isBusy) {
-      for (const button of document.querySelectorAll("button")) button.disabled = isBusy;
+      for (const button of document.querySelectorAll("button")) {
+        button.disabled = isBusy || (snapshotMode && button.matches(SNAPSHOT_CONTROL_SELECTOR));
+      }
+      if (!isBusy) applySnapshotControlState();
     }
 
     function predictionLoadingRows() {
@@ -3762,7 +3961,7 @@ const DASHBOARD_HTML = `<!doctype html>
     function observePredictionSentinel() {
       if (predictionObserver) predictionObserver.disconnect();
       predictionObserver = null;
-      if (!predictionHasMore || !("IntersectionObserver" in window)) return;
+      if (snapshotMode || !predictionHasMore || !("IntersectionObserver" in window)) return;
       const sentinel = document.getElementById("prediction-scroll-sentinel");
       if (!sentinel) return;
       predictionObserver = new IntersectionObserver((entries) => {
@@ -3795,7 +3994,8 @@ const DASHBOARD_HTML = `<!doctype html>
         const overall = aggregateHeatmapCells(cells);
         return '<tr>' + renderHeatmapCell(overall, direction, item.interval, null, scale) + '<th scope="row">' + escapeHtml(item.interval || "") + '</th>' + bands.map((band) => renderHeatmapCell(cells[band.index], direction, item.interval, band, scale)).join("") + '</tr>';
       }).join("");
-      const minimumWidth = 132 + 76 + bands.length * 132;
+      const heatmapCellWidth = 160;
+      const minimumWidth = heatmapCellWidth + 76 + bands.length * heatmapCellWidth;
       return '<section class="heatmap-section" aria-label="' + escapeAttr(heading + " accuracy by confidence and interval") + '">' +
         '<div class="heatmap-heading"><div class="heatmap-title">' + heading + '</div><div class="heatmap-axis-label">Prediction confidence (%)</div></div>' +
         '<div class="heatmap-scroll"><table class="confidence-heatmap" style="--heatmap-min-width:' + minimumWidth + 'px"><thead><tr>' + headers + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
@@ -4543,6 +4743,163 @@ function isAuthorized(request: Request, env: Env): boolean {
 
 function requireAuthorized(request: Request, env: Env): Response | null {
   return isAuthorized(request, env) ? null : json({ error: "Unauthorized" }, { status: 401 });
+}
+
+function snapshotUploadAuthorized(request: Request, env: Env): boolean {
+  const authorization = request.headers.get("authorization") || "";
+  return Boolean(env.SNAPSHOT_UPLOAD_TOKEN) && authorization === `Bearer ${env.SNAPSHOT_UPLOAD_TOKEN}`;
+}
+
+function validateDashboardSnapshot(value: unknown): DashboardSnapshot {
+  if (!value || typeof value !== "object") throw new Error("Snapshot body must be an object");
+  const snapshot = value as Partial<DashboardSnapshot>;
+  if (snapshot.version !== 1) throw new Error("Unsupported snapshot version");
+  const generatedAt = Date.parse(String(snapshot.generated_at || ""));
+  if (!Number.isFinite(generatedAt)) throw new Error("Snapshot generated_at is invalid");
+  if (generatedAt > Date.now() + 5 * 60 * 1000) throw new Error("Snapshot generated_at is in the future");
+  if (!snapshot.responses || typeof snapshot.responses !== "object") throw new Error("Snapshot responses are missing");
+  if (snapshot.response_count !== DASHBOARD_SNAPSHOT_KEYS.length) throw new Error("Snapshot response count is incomplete");
+  for (const key of DASHBOARD_SNAPSHOT_KEYS) {
+    const entry = snapshot.responses[key];
+    if (!entry || typeof entry !== "object" || entry.status !== 200 || !("body" in entry)) {
+      throw new Error(`Snapshot response ${key} is invalid`);
+    }
+  }
+  if (!/^[a-f0-9]{64}$/.test(String(snapshot.content_sha256 || ""))) {
+    throw new Error("Snapshot content hash is invalid");
+  }
+  return snapshot as DashboardSnapshot;
+}
+
+async function storeDashboardSnapshot(request: Request, env: Env): Promise<Response> {
+  if (!env.SNAPSHOT_UPLOAD_TOKEN) return json({ error: "Snapshot upload is not configured" }, { status: 503 });
+  if (!snapshotUploadAuthorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
+  const contentLength = Number(request.headers.get("content-length") || 0);
+  if (contentLength > DASHBOARD_SNAPSHOT_MAX_BYTES) return json({ error: "Snapshot is too large" }, { status: 413 });
+  const body = await request.text();
+  if (new TextEncoder().encode(body).byteLength > DASHBOARD_SNAPSHOT_MAX_BYTES) {
+    return json({ error: "Snapshot is too large" }, { status: 413 });
+  }
+  try {
+    const snapshot = validateDashboardSnapshot(JSON.parse(body));
+    const contentHash = await sha256Hex(JSON.stringify(snapshot.responses));
+    if (contentHash !== snapshot.content_sha256) return json({ error: "Snapshot content hash does not match" }, { status: 400 });
+    await env.ARTICLE_CORPUS.put(DASHBOARD_SNAPSHOT_OBJECT_KEY, JSON.stringify(snapshot), {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+      customMetadata: {
+        generatedAt: snapshot.generated_at,
+        contentSha256: snapshot.content_sha256,
+        responseCount: String(snapshot.response_count),
+      },
+    });
+    dashboardSnapshotCache = { loadedAt: Date.now(), snapshot };
+    return json({
+      ok: true,
+      generated_at: snapshot.generated_at,
+      response_count: snapshot.response_count,
+      bytes: new TextEncoder().encode(body).byteLength,
+    });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+  }
+}
+
+async function loadDashboardSnapshot(env: Env): Promise<DashboardSnapshot | null> {
+  if (dashboardSnapshotCache && Date.now() - dashboardSnapshotCache.loadedAt < 30_000) {
+    return dashboardSnapshotCache.snapshot;
+  }
+  const object = await env.ARTICLE_CORPUS.get(DASHBOARD_SNAPSHOT_OBJECT_KEY);
+  if (!object) return null;
+  try {
+    const snapshot = validateDashboardSnapshot(JSON.parse(await object.text()));
+    dashboardSnapshotCache = { loadedAt: Date.now(), snapshot };
+    return snapshot;
+  } catch (error) {
+    console.error("Stored dashboard snapshot is invalid", error);
+    return null;
+  }
+}
+
+async function dashboardSnapshotStatus(env: Env): Promise<Response> {
+  const snapshot = await loadDashboardSnapshot(env);
+  if (!snapshot) return json({ ok: true, available: false });
+  return json({
+    ok: true,
+    available: true,
+    version: snapshot.version,
+    generated_at: snapshot.generated_at,
+    age_seconds: Math.max(0, Math.floor((Date.now() - Date.parse(snapshot.generated_at)) / 1000)),
+    response_count: snapshot.response_count,
+    content_sha256: snapshot.content_sha256,
+  });
+}
+
+async function serveDashboardSnapshot(request: Request, env: Env): Promise<Response | null> {
+  if (request.method !== "GET") return null;
+  const url = new URL(request.url);
+  const key = DASHBOARD_SNAPSHOT_ROUTE_KEYS[url.pathname];
+  if (!key) return null;
+  const snapshot = await loadDashboardSnapshot(env);
+  const entry = snapshot?.responses[key];
+  if (!snapshot || !entry) return null;
+  return new Response(JSON.stringify(entry.body), {
+    status: entry.status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+      "x-news-signal-mode": "snapshot",
+      "x-news-signal-snapshot-at": snapshot.generated_at,
+      warning: '110 - "Response is a stored offline snapshot"',
+    },
+  });
+}
+
+function selfHostedApiOrigin(env: Env): URL | null {
+  const configured = String(env.SELF_HOSTED_API_ORIGIN || "").trim();
+  if (!configured) return null;
+  const origin = new URL(configured);
+  if (origin.protocol !== "https:") throw new Error("SELF_HOSTED_API_ORIGIN must use HTTPS");
+  return origin;
+}
+
+async function proxySelfHostedApi(request: Request, env: Env): Promise<Response> {
+  const origin = selfHostedApiOrigin(env);
+  if (!origin) throw new Error("Self-hosted API origin is not configured");
+  const requestedUrl = new URL(request.url);
+  const target = new URL(requestedUrl.pathname + requestedUrl.search, origin);
+  const upstreamRequest = new Request(target.toString(), request);
+  upstreamRequest.headers.set("x-forwarded-host", requestedUrl.host);
+  if (env.TUNNEL_ACCESS_CLIENT_ID && env.TUNNEL_ACCESS_CLIENT_SECRET) {
+    upstreamRequest.headers.set("cf-access-client-id", env.TUNNEL_ACCESS_CLIENT_ID);
+    upstreamRequest.headers.set("cf-access-client-secret", env.TUNNEL_ACCESS_CLIENT_SECRET);
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const upstream = await fetch(upstreamRequest, { signal: controller.signal });
+    if (upstream.status >= 500 && request.method === "GET") {
+      const fallback = await serveDashboardSnapshot(request, env);
+      if (fallback) return fallback;
+    }
+    if (upstream.status === 101) return upstream;
+    const headers = new Headers(upstream.headers);
+    headers.set("x-news-signal-mode", "live");
+    headers.set("cache-control", "private, no-store");
+    return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers });
+  } catch (error) {
+    if (request.method === "GET") {
+      const fallback = await serveDashboardSnapshot(request, env);
+      if (fallback) return fallback;
+    }
+    console.error("Self-hosted API proxy failed", requestedUrl.pathname, error);
+    return json({ error: "Live server unavailable and no stored response is available for this request" }, {
+      status: 503,
+      headers: { "retry-after": "30" },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function publishDashboardEvent(env: Env, event: DashboardEvent): Promise<void> {
@@ -9093,6 +9450,16 @@ export default {
       return html(DASHBOARD_HTML);
     }
 
+    if (url.pathname === "/api/internal/dashboard-snapshot" && request.method === "POST") {
+      return storeDashboardSnapshot(request, env);
+    }
+
+    if (url.pathname === "/api/snapshot/status" && request.method === "GET") {
+      const unauthorized = requireAuthorized(request, env);
+      if (unauthorized) return unauthorized;
+      return dashboardSnapshotStatus(env);
+    }
+
     if (url.pathname === "/health") {
       return json({
         ok: true,
@@ -9102,6 +9469,7 @@ export default {
           "/health",
           "/api/status",
           "/api/status/live",
+          "/api/snapshot/status",
           "/api/diagnostics/ticker-pipeline?since=ISO_TIMESTAMP",
           "/api/events",
           "/api/source-checks",
@@ -9152,11 +9520,19 @@ export default {
       if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
         return json({ error: "WebSocket upgrade required" }, { status: 426 });
       }
+      if (env.SELF_HOSTED_API_ORIGIN?.trim()) return proxySelfHostedApi(request, env);
       const id = env.DASHBOARD_EVENTS.idFromName("news-signal-dashboard");
       return env.DASHBOARD_EVENTS.get(id).fetch(new Request("https://dashboard-events.internal/subscribe", request));
     }
 
-    if (url.pathname.startsWith("/api/")) return handleApi(request, env);
+    if (url.pathname.startsWith("/api/")) {
+      if (env.SELF_HOSTED_API_ORIGIN?.trim()) {
+        const unauthorized = requireAuthorized(request, env);
+        if (unauthorized) return unauthorized;
+        return proxySelfHostedApi(request, env);
+      }
+      return handleApi(request, env);
+    }
     if (url.pathname.startsWith("/container/")) return handleContainer(request, env);
 
     return json({ error: "Not found" }, { status: 404 });

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "check:snapshot": "node scripts/test-dashboard-snapshot.mjs",
     "verify-feeds": "node scripts/verify-feeds.mjs",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",

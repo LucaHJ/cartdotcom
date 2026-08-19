@@ -42,8 +42,38 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Test dashboard snapshot fallback
+        shell: bash
+        run: |
+          npx wrangler dev --local --config wrangler.snapshot-test.jsonc --port 8791 \
+            --var SNAPSHOT_UPLOAD_TOKEN:test-upload \
+            --var CONTAINER_API_TOKEN:test-dashboard \
+            --var SELF_HOSTED_API_ORIGIN:https://127.0.0.1:1 \
+            >/tmp/news-snapshot-wrangler.log 2>&1 &
+          wrangler_pid=$!
+          trap 'kill "${wrangler_pid}" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8791/health >/dev/null; then
+              break
+            fi
+            if ! kill -0 "${wrangler_pid}" 2>/dev/null; then
+              cat /tmp/news-snapshot-wrangler.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8791/health >/dev/null
+          npm run check:snapshot
+
       - name: Confirm Docker is available
         run: docker version
+
+      - name: Configure dashboard snapshot credential
+        run: printf '%s' "$SNAPSHOT_UPLOAD_TOKEN" | npx wrangler secret put SNAPSHOT_UPLOAD_TOKEN
+        env:
+          SNAPSHOT_UPLOAD_TOKEN: ${{ secrets.SNAPSHOT_UPLOAD_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       - name: Deploy Worker and Container
         run: npx wrangler deploy --containers-rollout=immediate

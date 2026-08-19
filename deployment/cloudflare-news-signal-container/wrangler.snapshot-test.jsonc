@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cartdotcom-news-snapshot-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "r2_buckets": [
+    {
+      "binding": "ARTICLE_CORPUS",
+      "bucket_name": "cartdotcom-news-dashboard-snapshot-test"
+    }
+  ]
+}
