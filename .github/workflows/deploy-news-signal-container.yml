@@ -69,9 +69,12 @@ jobs:
         run: docker version
 
       - name: Configure dashboard snapshot credential
-        run: printf '%s' "$SNAPSHOT_UPLOAD_TOKEN" | npx wrangler secret put SNAPSHOT_UPLOAD_TOKEN
+        run: |
+          printf '%s' "$SNAPSHOT_UPLOAD_TOKEN" | npx wrangler secret put SNAPSHOT_UPLOAD_TOKEN
+          printf '%s' "$SELF_HOSTED_API_TOKEN" | npx wrangler secret put SELF_HOSTED_API_TOKEN
         env:
           SNAPSHOT_UPLOAD_TOKEN: ${{ secrets.SNAPSHOT_UPLOAD_TOKEN }}
+          SELF_HOSTED_API_TOKEN: ${{ secrets.SELF_HOSTED_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 

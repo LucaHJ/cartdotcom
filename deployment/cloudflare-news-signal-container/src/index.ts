@@ -369,6 +369,7 @@ export interface Env {
   RESEND_API_KEY?: string;
   SNAPSHOT_UPLOAD_TOKEN?: string;
   SELF_HOSTED_API_ORIGIN?: string;
+  SELF_HOSTED_API_TOKEN?: string;
   TUNNEL_ACCESS_CLIENT_ID?: string;
   TUNNEL_ACCESS_CLIENT_SECRET?: string;
 }
@@ -4870,6 +4871,9 @@ async function proxySelfHostedApi(request: Request, env: Env): Promise<Response>
   const target = new URL(requestedUrl.pathname + requestedUrl.search, origin);
   const upstreamRequest = new Request(target.toString(), request);
   upstreamRequest.headers.set("x-forwarded-host", requestedUrl.host);
+  if (env.SELF_HOSTED_API_TOKEN) {
+    upstreamRequest.headers.set("authorization", `Bearer ${env.SELF_HOSTED_API_TOKEN}`);
+  }
   if (env.TUNNEL_ACCESS_CLIENT_ID && env.TUNNEL_ACCESS_CLIENT_SECRET) {
     upstreamRequest.headers.set("cf-access-client-id", env.TUNNEL_ACCESS_CLIENT_ID);
     upstreamRequest.headers.set("cf-access-client-secret", env.TUNNEL_ACCESS_CLIENT_SECRET);
