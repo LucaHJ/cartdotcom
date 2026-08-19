@@ -1,0 +1,43 @@
+name: Export D1 Migration Snapshot
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: export-d1-migration
+  cancel-in-progress: false
+
+jobs:
+  export:
+    name: Export and encrypt transport with authenticated R2 storage
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deployment/cloudflare-news-signal-container/package-lock.json
+
+      - name: Install Wrangler
+        working-directory: deployment/cloudflare-news-signal-container
+        run: npm ci
+
+      - name: Export D1
+        working-directory: deployment/cloudflare-news-signal-container
+        run: npx wrangler d1 export cartdotcom-news-signal --remote --skip-confirmation --output /tmp/cartdotcom-news-signal.sql
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Upload verified D1 chunks
+        run: node deployment/self-hosted/scripts/upload-d1-export.mjs /tmp/cartdotcom-news-signal.sql
+        env:
+          OFFSITE_BACKUP_TOKEN: ${{ secrets.OFFSITE_BACKUP_TOKEN }}

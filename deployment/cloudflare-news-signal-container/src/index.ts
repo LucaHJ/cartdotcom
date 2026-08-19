@@ -4764,10 +4764,11 @@ function offsiteUploadAuthorized(request: Request, env: Env): boolean {
   return Boolean(env.OFFSITE_BACKUP_TOKEN) && authorization === `Bearer ${env.OFFSITE_BACKUP_TOKEN}`;
 }
 
-function permittedOffsiteObjectKey(objectKey: string): { corpus: boolean; postgres: boolean } {
+function permittedOffsiteObjectKey(objectKey: string): { corpus: boolean; postgres: boolean; d1: boolean } {
   return {
     corpus: /^articles\/\d{4}\/\d{2}\/\d{2}\/[a-zA-Z0-9_-]+\/[a-f0-9]{64}\.json$/.test(objectKey),
     postgres: /^_backups\/postgres\/\d{8}T\d{6}Z\/(part-\d{4}|manifest\.json)$/.test(objectKey),
+    d1: /^_backups\/d1\/\d{8}T\d{6}Z\/(part-\d{4}|manifest\.json)$/.test(objectKey),
   };
 }
 
@@ -4776,12 +4777,12 @@ async function sha256Bytes(value: ArrayBuffer): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function prunePostgresBackups(env: Env, retentionDays = 30): Promise<number> {
+async function pruneDatabaseBackups(env: Env, backupKind: "postgres" | "d1", retentionDays = 30): Promise<number> {
   const cutoff = Date.now() - retentionDays * 86400_000;
   let cursor: string | undefined;
   let deleted = 0;
   do {
-    const page = await env.ARTICLE_CORPUS.list({ prefix: "_backups/postgres/", limit: 1000, cursor });
+    const page = await env.ARTICLE_CORPUS.list({ prefix: `_backups/${backupKind}/`, limit: 1000, cursor });
     const expired = page.objects.filter((object) => object.uploaded.getTime() < cutoff).map((object) => object.key);
     if (expired.length) {
       await env.ARTICLE_CORPUS.delete(expired);
@@ -4796,8 +4797,8 @@ async function storeOffsiteObject(request: Request, env: Env): Promise<Response>
   if (!env.OFFSITE_BACKUP_TOKEN) return json({ error: "Off-site backup upload is not configured" }, { status: 503 });
   if (!offsiteUploadAuthorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
   const objectKey = (request.headers.get("x-object-key") || "").trim();
-  const { corpus: corpusObject, postgres: postgresObject } = permittedOffsiteObjectKey(objectKey);
-  if (!corpusObject && !postgresObject) return json({ error: "Object key is not permitted" }, { status: 400 });
+  const { corpus: corpusObject, postgres: postgresObject, d1: d1Object } = permittedOffsiteObjectKey(objectKey);
+  if (!corpusObject && !postgresObject && !d1Object) return json({ error: "Object key is not permitted" }, { status: 400 });
   const maxBytes = corpusObject ? 4 * 1024 * 1024 : 36 * 1024 * 1024;
   const contentLength = Number(request.headers.get("content-length") || 0);
   if (contentLength > maxBytes) return json({ error: "Backup object is too large" }, { status: 413 });
@@ -4811,11 +4812,12 @@ async function storeOffsiteObject(request: Request, env: Env): Promise<Response>
     httpMetadata: { contentType: request.headers.get("content-type") || "application/octet-stream" },
     customMetadata: {
       contentSha256: actualHash,
-      backupKind: corpusObject ? "article-corpus" : "postgres",
+      backupKind: corpusObject ? "article-corpus" : postgresObject ? "postgres" : "d1",
     },
   });
-  const pruned = postgresObject && objectKey.endsWith("/manifest.json")
-    ? await prunePostgresBackups(env)
+  const databaseBackupKind = postgresObject ? "postgres" : d1Object ? "d1" : null;
+  const pruned = databaseBackupKind && objectKey.endsWith("/manifest.json")
+    ? await pruneDatabaseBackups(env, databaseBackupKind)
     : 0;
   return json({ ok: true, object_key: objectKey, bytes: body.byteLength, content_sha256: actualHash, pruned });
 }
@@ -4824,8 +4826,8 @@ async function retrieveOffsiteBackupObject(request: Request, env: Env): Promise<
   if (!env.OFFSITE_BACKUP_TOKEN) return json({ error: "Off-site backup retrieval is not configured" }, { status: 503 });
   if (!offsiteUploadAuthorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
   const objectKey = (new URL(request.url).searchParams.get("key") || "").trim();
-  const { postgres } = permittedOffsiteObjectKey(objectKey);
-  if (!postgres) return json({ error: "Only PostgreSQL backup objects may be retrieved" }, { status: 400 });
+  const { postgres, d1 } = permittedOffsiteObjectKey(objectKey);
+  if (!postgres && !d1) return json({ error: "Only database backup objects may be retrieved" }, { status: 400 });
   const object = await env.ARTICLE_CORPUS.get(objectKey);
   if (!object) return json({ error: "Backup object not found" }, { status: 404 });
   const headers = new Headers({

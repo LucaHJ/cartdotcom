@@ -132,4 +132,26 @@ if (response.status !== 200) assert.fail(await response.text());
 assert.equal(response.headers.get("x-content-sha256"), backupHash);
 assert.deepEqual(Buffer.from(await response.arrayBuffer()), backupBody);
 
+const d1Body = Buffer.from("off-site d1 fixture");
+const d1Hash = createHash("sha256").update(d1Body).digest("hex");
+const d1Key = "_backups/d1/20260819T000000Z/part-0000";
+response = await request("/api/internal/offsite-object", {
+  method: "POST",
+  headers: {
+    authorization: `Bearer ${offsiteToken}`,
+    "content-type": "application/octet-stream",
+    "x-object-key": d1Key,
+    "x-content-sha256": d1Hash,
+  },
+  body: d1Body,
+});
+assert.equal(response.status, 200, await response.text());
+
+response = await request(`/api/internal/offsite-object?key=${encodeURIComponent(d1Key)}`, {
+  headers: { authorization: `Bearer ${offsiteToken}` },
+});
+if (response.status !== 200) assert.fail(await response.text());
+assert.equal(response.headers.get("x-content-sha256"), d1Hash);
+assert.deepEqual(Buffer.from(await response.arrayBuffer()), d1Body);
+
 console.log("Dashboard snapshot gateway checks passed.");
