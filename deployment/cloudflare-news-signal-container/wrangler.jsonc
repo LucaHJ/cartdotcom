@@ -35,6 +35,13 @@
       "bucket_name": "cartdotcom-news-article-corpus"
     }
   ],
+  "vpc_services": [
+    {
+      "binding": "SELF_HOSTED_API",
+      "service_id": "01a01a1d-431d-7fe3-8615-ae2145a219e4",
+      "remote": true
+    }
+  ],
   "queues": {
     "producers": [
       {

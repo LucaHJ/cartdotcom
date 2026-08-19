@@ -275,11 +275,18 @@ services:
     image: cloudflare/cloudflared:latest
     profiles: ["ingress"]
     restart: unless-stopped
-    command: ["tunnel", "--no-autoupdate", "--protocol", "quic", "run", "--token-file", "/run/secrets/cloudflare_tunnel_token"]
+    user: "1000:1000"
+    command: ["tunnel", "--no-autoupdate", "--protocol", "quic", "--metrics", "0.0.0.0:2000", "run", "--token-file", "/run/secrets/cloudflare_tunnel_token"]
     secrets:
       - cloudflare_tunnel_token
     networks:
       - edge
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:2000", "ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     mem_limit: 256m
     cpus: 0.5
     pids_limit: 128

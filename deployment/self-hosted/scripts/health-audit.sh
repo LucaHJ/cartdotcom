@@ -43,6 +43,7 @@ check_compose_health /srv/cartdotcom/news auth-rotator
 check_compose_health /srv/cartdotcom/news market-tracker
 check_compose_health /srv/cartdotcom/news corpus-archiver
 check_compose_health /srv/cartdotcom/news dashboard-snapshot
+check_compose_health /srv/cartdotcom/news cloudflared
 check_url gateway http://127.0.0.1:8080/health
 check_url news-api http://127.0.0.1:8080/health/ready
 

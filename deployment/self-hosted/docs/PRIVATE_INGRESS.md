@@ -11,20 +11,22 @@ architecture change:
 - https://developers.cloudflare.com/workers-vpc/configuration/vpc-services/
 - https://developers.cloudflare.com/workers-vpc/configuration/tunnel/
 
-## Required Cloudflare permissions
+## Cloudflare resources
 
-The deployment identity needs:
+Provisioned on 2026-08-19:
 
-- Cloudflare Tunnel Write (or Cloudflare One Connector: cloudflared Write)
-- Connectivity Directory Admin
-- Existing Workers deployment permissions
+- Tunnel: `cartdotcom-news-local`
+- Tunnel ID: `1bb7b4e0-aa3b-48c9-ae57-0349c283b7d2`
+- VPC Service: `cartdotcom-news-api`
+- VPC Service ID: `01a01a1d-431d-7fe3-8615-ae2145a219e4`
+- Origin: HTTP `news-api:3000` on the private Docker `edge` network
 
 Do not store the API token or tunnel token in Git. The tunnel token belongs at
 `/srv/platform/secrets/cloudflare_tunnel_token` with mode `0600`.
 
 ## Provisioning sequence
 
-1. Create the remotely managed tunnel `cartdotcom-news-origin`.
+1. Create the remotely managed tunnel `cartdotcom-news-local`.
 2. Store its token in the server secret file.
 3. Start the connector:
 
@@ -50,7 +52,7 @@ Do not store the API token or tunnel token in Git. The tunnel token belongs at
    "vpc_services": [
      {
        "binding": "SELF_HOSTED_API",
-       "service_id": "VPC_SERVICE_UUID",
+     "service_id": "01a01a1d-431d-7fe3-8615-ae2145a219e4",
        "remote": true
      }
    ]
