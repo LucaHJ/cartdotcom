@@ -15,6 +15,7 @@
     "CODEX_RESEARCH_REASONING_EFFORT": "medium",
     "PROCESSING_AUTHORITY": "self_hosted",
     "SELF_HOSTED_PROXY_ENABLED": "false",
+    "CORPUS_EXPORT_ENABLED": "true",
     "EXPERIMENT_REPORT_EMAIL_FROM": "news@alerts.cartdotcom.com"
   },
   "send_email": [

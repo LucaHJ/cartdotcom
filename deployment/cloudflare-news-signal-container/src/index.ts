@@ -373,6 +373,7 @@ export interface Env {
   SELF_HOSTED_API?: Fetcher;
   SELF_HOSTED_PROXY_ENABLED?: string;
   SELF_HOSTED_API_TOKEN?: string;
+  CORPUS_EXPORT_ENABLED?: string;
   TUNNEL_ACCESS_CLIENT_ID?: string;
   TUNNEL_ACCESS_CLIENT_SECRET?: string;
   PROCESSING_AUTHORITY?: string;
@@ -4827,7 +4828,7 @@ async function retrieveOffsiteBackupObject(request: Request, env: Env): Promise<
   if (!offsiteUploadAuthorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
   const objectKey = (new URL(request.url).searchParams.get("key") || "").trim();
   const { corpus, postgres, d1 } = permittedOffsiteObjectKey(objectKey);
-  const corpusMigrationAllowed = corpus && env.PROCESSING_AUTHORITY === "cloudflare";
+  const corpusMigrationAllowed = corpus && env.CORPUS_EXPORT_ENABLED === "true";
   if (!postgres && !d1 && !corpusMigrationAllowed) {
     return json({ error: "Object retrieval is not permitted" }, { status: 400 });
   }
