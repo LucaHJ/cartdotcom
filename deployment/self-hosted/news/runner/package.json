@@ -1,0 +1,11 @@
+{
+  "name": "cartdotcom-self-hosted-codex-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check smoke-test.js"
+  }
+}

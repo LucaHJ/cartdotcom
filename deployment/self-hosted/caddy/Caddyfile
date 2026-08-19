@@ -1,0 +1,28 @@
+{
+	admin off
+}
+
+:8080 {
+	encode zstd gzip
+
+	handle /health {
+		respond "healthy" 200
+	}
+
+	handle_path /server-docs/* {
+		root * /srv/docs
+		file_server browse
+	}
+
+	handle_path /api/self-hosted/* {
+		reverse_proxy news-api:3000
+	}
+
+	handle /api/* {
+		reverse_proxy news-api:3000
+	}
+
+	handle {
+		reverse_proxy news-api:3000
+	}
+}

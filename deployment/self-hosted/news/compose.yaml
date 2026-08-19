@@ -1,0 +1,270 @@
+name: cartdotcom-news
+
+services:
+  news-api:
+    build:
+      context: ./api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: cartdotcom
+      PGUSER: cartdotcom
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      DASHBOARD_TOKEN_FILE: /run/secrets/dashboard_token
+    secrets:
+      - postgres_password
+      - dashboard_token
+    volumes:
+      - /srv/cartdotcom/article-corpus:/data/article-corpus:ro
+    networks:
+      - edge
+      - data
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 1.5
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+
+  news-scheduler:
+    build:
+      context: .
+      dockerfile: scheduler/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: cartdotcom
+      PGUSER: cartdotcom
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      HEALTH_PORT: "3001"
+      INGESTION_ENABLED: "${INGESTION_ENABLED:-false}"
+      SOURCE_CHECK_INTERVAL_MS: "300000"
+      SOURCE_FETCH_CONCURRENCY: "12"
+    secrets:
+      - postgres_password
+    networks:
+      - data
+      - egress
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3001/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    mem_limit: 384m
+    cpus: 1.5
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+
+  news-worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: cartdotcom
+      PGUSER: cartdotcom
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      CODEX_RUNNER_URL: http://codex-runner:3010/research
+      CODEX_JOB_TIMEOUT_MS: "330000"
+      WORKERS_ENABLED: "${WORKERS_ENABLED:-false}"
+      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-8}"
+      HEALTH_PORT: "3002"
+    secrets:
+      - postgres_password
+    networks:
+      - data
+      - runtime
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3002/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    mem_limit: 4g
+    cpus: 8.0
+    pids_limit: 1024
+    security_opt:
+      - no-new-privileges:true
+
+  codex-runner:
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    restart: unless-stopped
+    environment:
+      CODEX_HOME: /codex-auth
+      CODEX_RESEARCH_MODEL: "${CODEX_RESEARCH_MODEL:-gpt-5.6-luna}"
+      CODEX_RESEARCH_REASONING_EFFORT: "${CODEX_RESEARCH_REASONING_EFFORT:-medium}"
+      CODEX_JOB_TIMEOUT_MS: "300000"
+      RUNNER_ENABLED: "${RUNNER_ENABLED:-false}"
+      RUNNER_CONCURRENCY: "${RUNNER_CONCURRENCY:-8}"
+      PORT: "3010"
+    volumes:
+      - /home/lucaj/.codex:/codex-auth
+      - /srv/cartdotcom/worker-runs:/work
+    networks:
+      - runtime
+      - egress
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3010/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    mem_limit: 3g
+    cpus: 8.0
+    pids_limit: 1024
+    security_opt:
+      - no-new-privileges:true
+
+  market-tracker:
+    build:
+      context: .
+      dockerfile: market/Dockerfile
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: cartdotcom
+      PGUSER: cartdotcom
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      MARKET_TRACKER_ENABLED: "${MARKET_TRACKER_ENABLED:-false}"
+      MARKET_TRACKER_CONCURRENCY: "${MARKET_TRACKER_CONCURRENCY:-4}"
+      HEALTH_PORT: "3003"
+    secrets:
+      - postgres_password
+    networks:
+      - data
+      - egress
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3003/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    mem_limit: 512m
+    cpus: 2.0
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+
+  dashboard-snapshot:
+    build:
+      context: ./snapshot
+    restart: unless-stopped
+    depends_on:
+      news-api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      LOCAL_API_ORIGIN: http://news-api:3000
+      SNAPSHOT_UPLOAD_URL: "${SNAPSHOT_UPLOAD_URL:-}"
+      SNAPSHOT_INTERVAL_MS: "${SNAPSHOT_INTERVAL_MS:-300000}"
+      SNAPSHOT_FETCH_CONCURRENCY: "1"
+      DASHBOARD_TOKEN_FILE: /run/secrets/dashboard_token
+      SNAPSHOT_UPLOAD_TOKEN_FILE: /run/secrets/snapshot_upload_token
+      HEALTH_PORT: "3004"
+    secrets:
+      - dashboard_token
+      - snapshot_upload_token
+    networks:
+      - edge
+      - egress
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    mem_limit: 256m
+    cpus: 0.75
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    image: postgres:17-alpine
+    profiles: ["tools"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: cartdotcom
+      PGUSER: cartdotcom
+    secrets:
+      - postgres_password
+    volumes:
+      - ./migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        export PGPASSWORD="$$(cat /run/secrets/postgres_password)"
+        for migration in /migrations/*.sql; do
+          echo "Applying $${migration}"
+          psql --set ON_ERROR_STOP=1 --file "$${migration}"
+        done
+    networks:
+      - data
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+
+  d1-import:
+    build:
+      context: ./tools/d1-import
+    profiles: ["tools"]
+    user: "1000:1000"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: cartdotcom
+      PGUSER: cartdotcom
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - /srv/cartdotcom/imports:/imports:ro
+    networks:
+      - data
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  postgres_password:
+    file: /srv/platform/secrets/postgres_password
+  dashboard_token:
+    file: /srv/platform/secrets/dashboard_token
+  snapshot_upload_token:
+    file: /srv/platform/secrets/snapshot_upload_token
+
+networks:
+  edge:
+    name: cartdotcom-edge
+    external: true
+  data:
+    name: cartdotcom-data
+    external: true
+  runtime:
+    name: cartdotcom-runtime
+    internal: true
+  egress:
+    name: cartdotcom-egress

@@ -6,3 +6,6 @@ node_modules/
 __pycache__/
 *.pyc
 .env
+deployment/self-hosted/secrets/
+deployment/self-hosted/*.local.yaml
+deployment/self-hosted/backups/

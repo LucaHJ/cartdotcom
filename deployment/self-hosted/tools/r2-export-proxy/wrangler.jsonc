@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../cloudflare-news-signal-container/node_modules/wrangler/config-schema.json",
+  "name": "cartdotcom-r2-export-proxy",
+  "main": "worker.js",
+  "compatibility_date": "2026-08-19",
+  "r2_buckets": [
+    {
+      "binding": "ARTICLE_CORPUS",
+      "bucket_name": "cartdotcom-news-article-corpus"
+    }
+  ]
+}

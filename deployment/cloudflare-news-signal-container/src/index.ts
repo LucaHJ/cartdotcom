@@ -4860,7 +4860,10 @@ function selfHostedApiOrigin(env: Env): URL | null {
   const configured = String(env.SELF_HOSTED_API_ORIGIN || "").trim();
   if (!configured) return null;
   const origin = new URL(configured);
-  if (origin.protocol !== "https:") throw new Error("SELF_HOSTED_API_ORIGIN must use HTTPS");
+  const localDevelopmentOrigin = origin.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(origin.hostname);
+  if (origin.protocol !== "https:" && !localDevelopmentOrigin) {
+    throw new Error("SELF_HOSTED_API_ORIGIN must use HTTPS outside local development");
+  }
   return origin;
 }
 

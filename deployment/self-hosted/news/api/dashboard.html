@@ -1,0 +1,3810 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>News Signal Dashboard</title>
+  <script>
+    (() => {
+      try {
+        const savedTheme = localStorage.getItem("newsSignalTheme");
+        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme = savedTheme || (prefersDark ? "dark" : "light");
+      } catch (_) {
+        document.documentElement.dataset.theme = "light";
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --panel-soft: #f1f4f8;
+      --text: #18202b;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --green: #097a55;
+      --red: #b42318;
+      --amber: #a15c07;
+      --blue: #1457a8;
+      --primary: #123c69;
+      --primary-text: #ffffff;
+      --text-secondary: #344054;
+      --surface-hover: #f8fbff;
+      --surface-raised: #ffffff;
+      --surface-alt: #fbfcfe;
+      --surface-input: #ffffff;
+      --pill-neutral-bg: #eef2f6;
+      --green-bg: #e6f4ee;
+      --red-bg: #fdecec;
+      --amber-bg: #fff2d6;
+      --blue-bg: #e8f1ff;
+      --skeleton: #dfe4ea;
+      --sticky-header: #e9edf3;
+      --chart-bg: #fbfcfe;
+      --chart-grid: #e4e9f0;
+      --chart-grid-subtle: #eef1f5;
+      --chart-zero: #475467;
+      --chart-sample: #8aaec7;
+      --chart-sample-text: #7893a8;
+      --chart-band: #f7f9fc;
+      --chart-separator: #c7d0dc;
+      --heatmap-empty-bg: #f3f4f6;
+      --heatmap-empty-text: #98a2b3;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0f1216;
+      --panel: #171b21;
+      --panel-soft: #20262e;
+      --text: #edf2f7;
+      --muted: #a4afbd;
+      --line: #343d49;
+      --green: #4fd1a1;
+      --red: #ff7a70;
+      --amber: #f7bd67;
+      --blue: #78b7ff;
+      --primary: #2f6da8;
+      --primary-text: #ffffff;
+      --text-secondary: #c9d2dc;
+      --surface-hover: #222b35;
+      --surface-raised: #1c222a;
+      --surface-alt: #1b2027;
+      --surface-input: #14181e;
+      --pill-neutral-bg: #29313b;
+      --green-bg: #153a31;
+      --red-bg: #452526;
+      --amber-bg: #46351d;
+      --blue-bg: #1c3551;
+      --skeleton: #333c47;
+      --sticky-header: #252c35;
+      --chart-bg: #171b21;
+      --chart-grid: #3d4652;
+      --chart-grid-subtle: #2b333d;
+      --chart-zero: #b0bac7;
+      --chart-sample: #80a9c8;
+      --chart-sample-text: #94b5cc;
+      --chart-band: #1a2027;
+      --chart-separator: #4a5664;
+      --heatmap-empty-bg: #252b33;
+      --heatmap-empty-text: #8e99a7;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, select { font: inherit; }
+
+    .shell {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    .subhead {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .theme-control {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .theme-control input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .theme-switch {
+      position: relative;
+      width: 38px;
+      height: 22px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--pill-neutral-bg);
+      transition: background 140ms ease, border-color 140ms ease;
+    }
+
+    .theme-switch::after {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--muted);
+      content: "";
+      transition: transform 140ms ease, background 140ms ease;
+    }
+
+    .theme-control input:checked + .theme-switch {
+      border-color: var(--primary);
+      background: var(--primary);
+    }
+
+    .theme-control input:checked + .theme-switch::after {
+      background: var(--primary-text);
+      transform: translateX(16px);
+    }
+
+    .theme-control input:focus-visible + .theme-switch {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
+    .btn {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 0 12px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }
+
+    .btn.primary {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: var(--primary-text);
+    }
+
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    .snapshot-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 14px 0 0;
+      padding: 10px 12px;
+      border: 1px solid var(--amber);
+      border-radius: 6px;
+      background: var(--amber-bg);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .snapshot-banner[hidden] { display: none; }
+    .snapshot-banner strong { color: var(--amber); white-space: nowrap; }
+
+    body.snapshot-mode [data-heatmap-direction],
+    body.snapshot-mode [data-outcome-direction],
+    body.snapshot-mode [data-reset-prediction-filters],
+    body.snapshot-mode .source-view-button,
+    body.snapshot-mode #source-period-previous,
+    body.snapshot-mode #source-period-next,
+    body.snapshot-mode #prediction-confidence-filter,
+    body.snapshot-mode #prediction-sort {
+      pointer-events: none;
+      opacity: 0.58;
+    }
+
+    .tokenbar {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      margin: 16px 0;
+      align-items: center;
+    }
+
+    .tokenbar input {
+      min-width: 0;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 11px;
+      background: var(--panel);
+      color: var(--text);
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .metrics {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .metric, .panel, .result {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .metric {
+      padding: 14px;
+      min-height: 86px;
+    }
+
+    .metric-button {
+      width: 100%;
+      color: var(--text);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .metric-button:hover {
+      border-color: var(--blue);
+      background: var(--surface-hover);
+    }
+
+    .metric-button:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 750;
+    }
+
+    .metric .note {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(340px, 0.9fr);
+      gap: 14px;
+      margin-top: 14px;
+      align-items: start;
+    }
+
+    .panel {
+      overflow: hidden;
+    }
+
+    .metric .value sup {
+      margin-left: 5px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 750;
+      vertical-align: super;
+    }
+
+    .metric .value sup.active {
+      color: var(--green);
+    }
+
+    #simulation-panel > .panel {
+      overflow: visible;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .panel-meta {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .results {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+    }
+
+    .result {
+      padding: 13px;
+    }
+
+    .result-title {
+      display: block;
+      color: var(--text);
+      font-weight: 700;
+      line-height: 1.3;
+      text-decoration: none;
+    }
+
+    .result-title:hover { text-decoration: underline; }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+      align-items: center;
+    }
+
+    .auth-repair {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 14px;
+      align-items: center;
+    }
+
+    .auth-repair input[type="file"] {
+      min-width: 0;
+      color: var(--text-secondary);
+      font: inherit;
+    }
+
+    .auth-repair-status {
+      grid-column: 1 / -1;
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--pill-neutral-bg);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.2;
+      max-width: 100%;
+    }
+
+    .pill.green { background: var(--green-bg); color: var(--green); }
+    .pill.red { background: var(--red-bg); color: var(--red); }
+    .pill.amber { background: var(--amber-bg); color: var(--amber); }
+    .pill.blue { background: var(--blue-bg); color: var(--blue); }
+    .pill.accuracy-counted { font-weight: 750; }
+
+    .summary {
+      margin-top: 10px;
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .note {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    details {
+      margin-top: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 9px;
+    }
+
+    summary {
+      cursor: pointer;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    pre {
+      margin: 10px 0 0;
+      max-height: 340px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1.45;
+      background: var(--surface-alt);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+    }
+
+    th {
+      color: var(--muted);
+      background: var(--panel-soft);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    td a {
+      color: var(--text);
+      font-weight: 650;
+      text-decoration: none;
+    }
+
+    td a:hover { text-decoration: underline; }
+
+    .truncate {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .empty, .error {
+      padding: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .error { color: var(--red); }
+
+    @keyframes skeletonPulse {
+      0%, 100% { opacity: 0.48; }
+      50% { opacity: 0.9; }
+    }
+
+    .skeleton-block {
+      display: block;
+      background: var(--skeleton);
+      border-radius: 4px;
+      animation: skeletonPulse 1.15s ease-in-out infinite;
+    }
+
+    .skeleton-metric {
+      min-height: 86px;
+      padding: 14px;
+    }
+
+    .skeleton-line {
+      height: 11px;
+      margin-top: 9px;
+    }
+
+    .skeleton-line.short { width: 34%; }
+    .skeleton-line.medium { width: 58%; }
+    .skeleton-line.long { width: 86%; }
+
+    .skeleton-result {
+      padding: 16px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .prediction-skeleton-grid {
+      display: grid;
+      grid-template-columns: 76px repeat(10, minmax(72px, 1fr));
+      gap: 5px;
+      min-width: 1120px;
+      padding: 12px;
+    }
+
+    .prediction-skeleton-cell {
+      height: 38px;
+    }
+
+    .split {
+      display: grid;
+      gap: 14px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin: 12px 0 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tab {
+      border: 0;
+      border-bottom: 3px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      padding: 11px 8px 9px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .tab.active {
+      color: var(--text);
+      border-bottom-color: var(--primary);
+    }
+
+    .subtabs {
+      display: flex;
+      gap: 8px;
+      margin: 0 0 14px;
+    }
+
+    .subtab {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-input);
+      color: var(--muted);
+      padding: 7px 10px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .subtab.active {
+      color: var(--text);
+      border-color: var(--primary);
+      background: var(--blue-bg);
+    }
+
+    .model-blurb {
+      padding: 12px 18px 0;
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .report-select {
+      margin: 0 18px 14px;
+      max-width: 520px;
+      width: calc(100% - 36px);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: var(--surface-input);
+      color: var(--text);
+    }
+
+    .report-box {
+      margin: 0 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: var(--surface-alt);
+    }
+
+    .hidden { display: none; }
+
+    .portfolio-head {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 18px;
+    }
+
+    .portfolio-value {
+      font-size: 38px;
+      line-height: 1;
+      font-weight: 800;
+    }
+
+    .portfolio-move {
+      font-size: 16px;
+      font-weight: 750;
+    }
+
+    .portfolio-breakdown {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 18px 14px;
+    }
+
+    .rangebar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 0 18px 12px;
+    }
+
+    .range-btn {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-input);
+      color: var(--muted);
+      padding: 5px 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .range-btn.active {
+      color: var(--text);
+      border-color: var(--primary);
+      background: var(--blue-bg);
+    }
+
+    .chart {
+      width: 100%;
+      height: 260px;
+      padding: 0 18px 18px;
+    }
+
+    .chart svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: var(--chart-bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .impact-wrap {
+      padding: 12px;
+      overflow-x: auto;
+    }
+
+    .impact-table th,
+    .impact-table td {
+      white-space: nowrap;
+    }
+
+    .prediction-outcomes-table .prediction-article-row th {
+      padding: 12px;
+      background: var(--surface-alt);
+      color: var(--text);
+      font-size: 13px;
+      text-transform: none;
+      white-space: normal;
+    }
+
+    .prediction-outcomes-table {
+      min-width: 1920px;
+    }
+
+    .prediction-article-row a {
+      display: block;
+      width: min(1000px, calc(100vw - 72px));
+      max-width: 100%;
+      color: var(--text);
+      font-weight: 750;
+      line-height: 1.4;
+      text-decoration: none;
+      overflow-wrap: anywhere;
+    }
+
+    .prediction-article-row a:hover { text-decoration: underline; }
+
+    .prediction-outcomes-table .prediction-data-row td {
+      padding-top: 6px;
+      padding-bottom: 6px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    .prediction-outcomes-table .prediction-data-row .pill {
+      width: max-content;
+      max-width: none;
+      white-space: nowrap;
+    }
+
+    .prediction-call-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 24px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .prediction-call-age { font-weight: 750; }
+
+    .prediction-call-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .prediction-call-status::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+      content: "";
+    }
+
+    .prediction-call-status.active { color: var(--green); }
+    .prediction-call-status.active::before { background: var(--green); }
+
+    .prediction-current-price {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 7px;
+      min-height: 24px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .prediction-current-move { color: var(--muted); font-size: 11px; font-weight: 750; }
+    .prediction-current-move.positive { color: var(--green); }
+    .prediction-current-move.negative { color: var(--red); }
+
+    .prediction-daily-viewport {
+      width: 100%;
+      max-width: 300px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      touch-action: pan-x;
+    }
+
+    .prediction-daily-viewport::-webkit-scrollbar { display: none; }
+
+    .prediction-daily-grid {
+      display: grid;
+      grid-template-rows: repeat(7, 4px);
+      grid-auto-flow: column;
+      grid-auto-columns: 4px;
+      align-content: center;
+      gap: 1px;
+      width: max-content;
+      min-height: 34px;
+    }
+
+    .prediction-daily-cell {
+      width: 4px;
+      height: 4px;
+      border-radius: 1px;
+      background: #e5e7eb;
+    }
+
+    .prediction-daily-flat { background: #d0d5dd; }
+    .prediction-daily-up-1 { background: #dcfce7; }
+    .prediction-daily-up-2 { background: #bbf7d0; }
+    .prediction-daily-up-3 { background: #86efac; }
+    .prediction-daily-up-4 { background: #22c55e; }
+    .prediction-daily-up-5 { background: #15803d; }
+    .prediction-daily-down-1 { background: #fee2e2; }
+    .prediction-daily-down-2 { background: #fecaca; }
+    .prediction-daily-down-3 { background: #fca5a5; }
+    .prediction-daily-down-4 { background: #ef4444; }
+    .prediction-daily-down-5 { background: #b91c1c; }
+
+    :root[data-theme="dark"] .prediction-daily-cell { background: #303741; }
+    :root[data-theme="dark"] .prediction-daily-flat { background: #4a5563; }
+    :root[data-theme="dark"] .prediction-daily-up-1 { background: #17372e; }
+    :root[data-theme="dark"] .prediction-daily-up-2 { background: #1b5140; }
+    :root[data-theme="dark"] .prediction-daily-up-3 { background: #207052; }
+    :root[data-theme="dark"] .prediction-daily-up-4 { background: #269464; }
+    :root[data-theme="dark"] .prediction-daily-up-5 { background: #35bb7b; }
+    :root[data-theme="dark"] .prediction-daily-down-1 { background: #46262a; }
+    :root[data-theme="dark"] .prediction-daily-down-2 { background: #653035; }
+    :root[data-theme="dark"] .prediction-daily-down-3 { background: #8b3c41; }
+    :root[data-theme="dark"] .prediction-daily-down-4 { background: #bd4a4d; }
+    :root[data-theme="dark"] .prediction-daily-down-5 { background: #e45d5d; }
+
+    .prediction-daily-empty {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .prediction-sticky-header {
+      position: sticky;
+      top: 0;
+      z-index: 7;
+      overflow: hidden;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .prediction-sticky-header .prediction-outcomes-table {
+      margin: 0;
+      will-change: transform;
+    }
+
+    .prediction-sticky-header thead th {
+      background: var(--sticky-header);
+      box-shadow: 0 1px 0 var(--line), 0 4px 8px rgba(16, 24, 40, 0.08);
+    }
+
+    .heatmap-stack {
+      display: grid;
+      gap: 18px;
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .heatmap-section {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .heatmap-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .heatmap-title {
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .heatmap-axis-label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .heatmap-scroll {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .confidence-heatmap {
+      width: 100%;
+      min-width: var(--heatmap-min-width, 100%);
+      table-layout: fixed;
+    }
+
+    .confidence-heatmap th,
+    .confidence-heatmap td {
+      padding: 7px 5px;
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    .confidence-heatmap th:first-child,
+    .confidence-heatmap td:first-child {
+      width: 160px;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .confidence-heatmap th:nth-child(2),
+    .confidence-heatmap td:nth-child(2) {
+      width: 76px;
+      text-align: left;
+      padding-left: 10px;
+      font-weight: 700;
+    }
+
+    .heatmap-cell {
+      height: 42px;
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
+      transition: box-shadow 120ms ease;
+    }
+
+    .heatmap-filter-button {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .heatmap-accuracy {
+      font-weight: 650;
+      opacity: 0.86;
+    }
+
+    .heatmap-samples {
+      margin-left: 2px;
+      font-size: 9px;
+      line-height: 0;
+      vertical-align: super;
+      cursor: help;
+    }
+
+    .heatmap-cell.clickable:hover,
+    .heatmap-cell.active-filter {
+      box-shadow: inset 0 0 0 2px var(--primary);
+    }
+
+    .heatmap-cell.active-filter {
+      box-shadow: inset 0 0 0 3px var(--primary);
+    }
+
+    .heatmap-empty { background: var(--heatmap-empty-bg); color: var(--heatmap-empty-text); }
+    .heatmap-scale-wrong { background: #dc2626; }
+    .heatmap-scale-neutral { background: #facc15; }
+    .heatmap-scale-correct { background: #16a34a; }
+    .heatmap-scale-outlier-wrong { background: #7f1d1d; }
+    .heatmap-scale-outlier-correct { background: #14532d; }
+
+    .heatmap-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .heatmap-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .heatmap-legend-item[title] { cursor: help; }
+
+    .heatmap-swatch {
+      width: 13px;
+      height: 13px;
+      border: 1px solid rgba(16, 24, 40, 0.08);
+      border-radius: 3px;
+    }
+
+    .heatmap-outlier-swatches {
+      display: inline-flex;
+      gap: 2px;
+    }
+
+    .prediction-trend-section {
+      border-top: 1px solid var(--line);
+      padding: 14px;
+    }
+
+    .prediction-trend-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .prediction-trend-title {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .prediction-trend-meta {
+      color: var(--muted);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .prediction-trend-chart {
+      width: 100%;
+      height: 320px;
+      min-height: 320px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--chart-bg);
+    }
+
+    .prediction-trend-chart svg {
+      display: block;
+      width: 100%;
+      min-width: 760px;
+      height: 100%;
+    }
+
+    .prediction-trend-chart .empty {
+      min-height: 318px;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .prediction-filterbar {
+      display: flex;
+      align-items: end;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-alt);
+    }
+
+    .prediction-filter-group {
+      display: grid;
+      gap: 5px;
+    }
+
+    .prediction-filter-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .prediction-direction-control {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .prediction-direction-button {
+      min-height: 34px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      padding: 0 11px;
+      background: var(--surface-input);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .prediction-direction-button:last-child { border-right: 0; }
+    .prediction-direction-button.active { background: var(--blue-bg); color: var(--blue); }
+
+    .prediction-confidence-select,
+    .prediction-sort-select {
+      min-width: 150px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 9px;
+      background: var(--surface-input);
+      color: var(--text);
+    }
+
+    .prediction-filter-status {
+      margin-left: auto;
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .job-timing {
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .prediction-page-loader {
+      display: grid;
+      gap: 8px;
+      padding: 12px 14px 16px;
+    }
+
+    .prediction-page-loader .skeleton-line { margin-top: 0; height: 16px; }
+    .prediction-scroll-sentinel { height: 1px; }
+
+    .pill[title] { cursor: help; }
+
+    .source-activity-section {
+      padding: 16px 18px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .source-activity-heading {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+
+    .source-activity-title { font-size: 14px; font-weight: 750; }
+    .source-activity-meta { color: var(--muted); font-size: 12px; }
+
+    .source-activity-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .source-view-control {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .source-view-button {
+      min-height: 34px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      padding: 0 12px;
+      background: var(--surface-input);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .source-view-button:last-child { border-right: 0; }
+    .source-view-button.active { background: var(--blue-bg); color: var(--blue); }
+
+    .source-period-control { display: flex; align-items: center; gap: 8px; }
+    .source-period-label { min-width: 150px; text-align: center; font-size: 12px; font-weight: 700; }
+
+    .source-hourly-widget {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px;
+      max-width: 520px;
+      margin-bottom: 14px;
+      padding: 11px 13px;
+      border-left: 3px solid var(--blue);
+      background: var(--panel-soft);
+    }
+
+    .source-hourly-value { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .source-hourly-label { color: var(--muted); font-size: 11px; }
+    .source-hourly-note { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
+
+    .source-activity-chart {
+      width: 100%;
+      height: 330px;
+      border: 1px solid var(--line);
+      overflow-x: auto;
+      background: var(--chart-bg);
+    }
+
+    .source-activity-chart svg { display: block; width: 100%; min-width: 780px; height: 100%; }
+    .source-stats-table { padding: 14px 18px 18px; }
+
+    @media (max-width: 1050px) {
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .layout { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 720px) {
+      .shell { padding: 12px; }
+      .topbar { align-items: stretch; flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .tokenbar { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr; }
+      .panel-header { align-items: flex-start; flex-direction: column; }
+      .panel-meta { white-space: normal; }
+      th:nth-child(3), td:nth-child(3) { display: none; }
+      .confidence-heatmap th:nth-child(3),
+      .confidence-heatmap td:nth-child(3) { display: table-cell; }
+      .prediction-outcomes-table th:nth-child(3),
+      .prediction-outcomes-table td:nth-child(3) { display: table-cell; }
+      #source-stats th:nth-child(3),
+      #source-stats td:nth-child(3) { display: table-cell; }
+      .prediction-filter-status { width: 100%; margin-left: 0; }
+      .prediction-trend-heading { align-items: flex-start; flex-direction: column; }
+      .prediction-trend-meta { text-align: left; }
+      .source-activity-heading { align-items: flex-start; flex-direction: column; }
+      .source-hourly-widget { grid-template-columns: 1fr; }
+      .source-hourly-note { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>News Signal Dashboard</h1>
+        <div class="subhead">
+          <span id="last-updated">Not loaded</span>
+          <span id="live-status-updated">Live updates waiting</span>
+          <span id="auth-state">Token not set</span>
+        </div>
+      </div>
+      <div class="actions">
+        <label class="theme-control" title="Use the dark dashboard colour scheme">
+          <span>Dark mode</span>
+          <input id="theme-toggle" type="checkbox" role="switch" aria-label="Dark mode">
+          <span class="theme-switch" aria-hidden="true"></span>
+        </label>
+        <button class="btn" id="refresh-btn" type="button">Refresh</button>
+        <button class="btn" id="ingest-btn" type="button">Ingest</button>
+        <button class="btn primary" id="settings-btn" type="button">Settings</button>
+      </div>
+    </header>
+
+    <section class="snapshot-banner" id="snapshot-banner" role="status" hidden>
+      <strong>Offline snapshot</strong>
+      <span id="snapshot-banner-detail">The local server is unavailable.</span>
+    </section>
+
+    <section class="tokenbar">
+      <input id="token-input" type="password" autocomplete="off" placeholder="Bearer token">
+      <button class="btn" id="save-token-btn" type="button">Save Token</button>
+      <button class="btn" id="clear-token-btn" type="button">Clear</button>
+    </section>
+
+    <section class="grid metrics" id="metrics"></section>
+
+    <nav class="tabs" aria-label="Dashboard sections">
+      <button class="tab active" id="simulation-tab" type="button">Prediction Accuracy</button>
+      <button class="tab" id="overview-tab" type="button">Overview</button>
+      <button class="tab" id="sources-tab" type="button">Sources</button>
+    </nav>
+
+    <section id="overview-panel" class="hidden">
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Event Summaries</div>
+          <div class="panel-meta" id="results-meta">0 rows</div>
+        </div>
+        <div class="results" id="results"></div>
+      </section>
+    </section>
+
+    <section id="settings-panel" class="hidden">
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Luna vs Terra Model Experiment</div>
+          <div class="panel-meta" id="model-experiment-meta">Not started</div>
+        </div>
+        <div class="model-blurb">Runs the same frozen cohort of 1,000 matured articles through Luna medium first and Terra low second. Experiment results are isolated from production predictions and validated against 12h, 24h, 48h, and 1w market movement.</div>
+        <div class="auth-repair">
+          <input id="model-experiment-email" type="email" autocomplete="email" placeholder="Report email address" aria-label="Experiment report email address">
+          <button class="btn primary" id="start-model-experiment-btn" type="button">Start Experiment</button>
+          <button class="btn" id="save-model-experiment-email-btn" type="button">Save Email</button>
+          <button class="btn" id="test-model-experiment-email-btn" type="button">Send Test</button>
+          <button class="btn" id="dispatch-model-experiment-btn" type="button">Resume</button>
+          <div class="auth-repair-status" id="model-experiment-status">No experiment has been created.</div>
+        </div>
+        <div id="model-experiment-progress"></div>
+        <pre id="model-experiment-report" class="hidden"></pre>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Codex Authentication</div>
+          <div class="panel-meta">Local auth.json</div>
+        </div>
+        <div class="auth-repair">
+          <input id="codex-auth-file" type="file" accept=".json,application/json" aria-label="Codex auth.json file">
+          <button class="btn primary" id="rotate-codex-auth-btn" type="button">Repair Login</button>
+          <div class="auth-repair-status" id="codex-auth-status">Select the current <code>auth.json</code> file to restore research workers.</div>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Recent Jobs</div>
+          <div class="panel-meta" id="jobs-meta">0 rows</div>
+        </div>
+        <div id="jobs"></div>
+        <div class="row">
+          <button class="btn" id="requeue-btn" type="button">Requeue Pending</button>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Archived Failures</div>
+        </div>
+        <div id="failed-jobs"></div>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Article Impacts</div>
+          <div class="panel-meta" id="articles-meta">0 rows</div>
+        </div>
+        <div id="articles"></div>
+      </section>
+    </section>
+
+    <section id="sources-panel" class="hidden">
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Source Coverage and Prediction Movement</div>
+          <div class="panel-meta" id="source-stats-meta">0 sources</div>
+        </div>
+        <section class="source-activity-section" aria-labelledby="ticker-pipeline-title">
+          <div class="source-activity-heading">
+            <div>
+              <div class="source-activity-title" id="ticker-pipeline-title">Ticker Pipeline Health</div>
+              <div class="source-activity-meta" id="ticker-pipeline-meta">Loading recent pipeline activity</div>
+            </div>
+          </div>
+          <div id="ticker-pipeline-health"></div>
+        </section>
+        <section class="source-activity-section" aria-labelledby="source-activity-title">
+          <div class="source-activity-heading">
+            <div>
+              <div class="source-activity-title" id="source-activity-title">Article and Ticker Acquisition</div>
+              <div class="source-activity-meta" id="source-activity-meta">Completed Brisbane calendar hours</div>
+            </div>
+          </div>
+          <div class="source-activity-controls">
+            <div class="source-view-control" aria-label="Acquisition chart period">
+              <button class="source-view-button active" type="button" data-source-view="day">Day</button>
+              <button class="source-view-button" type="button" data-source-view="month">Month</button>
+              <button class="source-view-button" type="button" data-source-view="year">Year</button>
+            </div>
+            <div class="source-period-control">
+              <button class="btn" id="source-period-previous" type="button">Previous</button>
+              <div class="source-period-label" id="source-period-label">Current day</div>
+              <button class="btn" id="source-period-next" type="button">Next</button>
+            </div>
+          </div>
+          <div class="source-hourly-widget" id="source-hourly-widget"></div>
+          <div class="source-activity-chart" id="source-activity-chart" aria-live="polite"></div>
+        </section>
+        <div id="source-stats"></div>
+      </section>
+    </section>
+
+    <section id="simulation-panel">
+      <section class="panel">
+        <div class="model-blurb">Prediction Accuracy tracks every bullish or bearish ticker prediction against real market movement. Price collection continues for every call at 12h, 24h, 48h, 1w, 2w, 1m, 3m, 6m, 1y, 2y, 3y, and 4y. Every call remains an independent observation for its full lifetime; later calls do not alter or exclude earlier results.</div>
+        <div class="panel-header">
+          <div class="panel-title">Accuracy by Interval and Confidence</div>
+          <div class="panel-meta" id="prediction-summary-meta">0 intervals</div>
+        </div>
+        <div id="prediction-summary"></div>
+        <div class="prediction-trend-section">
+          <div class="prediction-trend-heading">
+            <div class="prediction-trend-title">Average Call Movement Over Time</div>
+            <div class="prediction-trend-meta" id="prediction-trend-meta">Daily history is loading</div>
+          </div>
+          <div class="prediction-trend-chart" id="prediction-trend-chart" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <div class="panel-header">
+          <div class="panel-title">Prediction Outcomes</div>
+          <div class="panel-meta" id="predictions-meta">0 rows</div>
+        </div>
+        <div id="predictions"></div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const tokenInput = document.getElementById("token-input");
+    const themeToggle = document.getElementById("theme-toggle");
+    const authState = document.getElementById("auth-state");
+    const lastUpdated = document.getElementById("last-updated");
+    const liveStatusUpdated = document.getElementById("live-status-updated");
+    const snapshotBannerEl = document.getElementById("snapshot-banner");
+    const snapshotBannerDetailEl = document.getElementById("snapshot-banner-detail");
+    const metricsEl = document.getElementById("metrics");
+    const resultsEl = document.getElementById("results");
+    const jobsEl = document.getElementById("jobs");
+    const failedJobsEl = document.getElementById("failed-jobs");
+    const articlesEl = document.getElementById("articles");
+    const modelExperimentMetaEl = document.getElementById("model-experiment-meta");
+    const modelExperimentStatusEl = document.getElementById("model-experiment-status");
+    const modelExperimentProgressEl = document.getElementById("model-experiment-progress");
+    const modelExperimentReportEl = document.getElementById("model-experiment-report");
+    const modelExperimentEmailEl = document.getElementById("model-experiment-email");
+    const startModelExperimentBtn = document.getElementById("start-model-experiment-btn");
+    const saveModelExperimentEmailBtn = document.getElementById("save-model-experiment-email-btn");
+    const testModelExperimentEmailBtn = document.getElementById("test-model-experiment-email-btn");
+    const dispatchModelExperimentBtn = document.getElementById("dispatch-model-experiment-btn");
+    const sourceStatsEl = document.getElementById("source-stats");
+    const sourceActivityChartEl = document.getElementById("source-activity-chart");
+    const sourceActivityMeta = document.getElementById("source-activity-meta");
+    const sourceHourlyWidgetEl = document.getElementById("source-hourly-widget");
+    const sourcePeriodLabelEl = document.getElementById("source-period-label");
+    const tickerPipelineHealthEl = document.getElementById("ticker-pipeline-health");
+    const tickerPipelineMetaEl = document.getElementById("ticker-pipeline-meta");
+    const resultsMeta = document.getElementById("results-meta");
+    const jobsMeta = document.getElementById("jobs-meta");
+    const articlesMeta = document.getElementById("articles-meta");
+    const sourceStatsMeta = document.getElementById("source-stats-meta");
+    const overviewTab = document.getElementById("overview-tab");
+    const simulationTab = document.getElementById("simulation-tab");
+    const sourcesTab = document.getElementById("sources-tab");
+    const settingsBtn = document.getElementById("settings-btn");
+    const overviewPanel = document.getElementById("overview-panel");
+    const simulationPanel = document.getElementById("simulation-panel");
+    const settingsPanel = document.getElementById("settings-panel");
+    const sourcesPanel = document.getElementById("sources-panel");
+    const predictionSummaryEl = document.getElementById("prediction-summary");
+    const predictionSummaryMeta = document.getElementById("prediction-summary-meta");
+    const predictionTrendChartEl = document.getElementById("prediction-trend-chart");
+    const predictionTrendMeta = document.getElementById("prediction-trend-meta");
+    const predictionsEl = document.getElementById("predictions");
+    const predictionsMeta = document.getElementById("predictions-meta");
+    const codexAuthFileEl = document.getElementById("codex-auth-file");
+    const rotateCodexAuthBtn = document.getElementById("rotate-codex-auth-btn");
+    const codexAuthStatusEl = document.getElementById("codex-auth-status");
+    const liveModelTab = null;
+    const eodModelTab = null;
+    const liveModelPanel = null;
+    const eodModelPanel = null;
+    const portfolioValueEl = document.getElementById("portfolio-value");
+    const portfolioMoveEl = document.getElementById("portfolio-move");
+    const portfolioCashEl = document.getElementById("portfolio-cash");
+    const portfolioInvestmentsEl = document.getElementById("portfolio-investments");
+    const portfolioRangebarEl = document.getElementById("portfolio-rangebar");
+    const portfolioChartEl = document.getElementById("portfolio-chart");
+    const tradesEl = document.getElementById("trades");
+    const tradesMeta = document.getElementById("trades-meta");
+    const eodPortfolioValueEl = document.getElementById("eod-portfolio-value");
+    const eodPortfolioMoveEl = document.getElementById("eod-portfolio-move");
+    const eodPortfolioCashEl = document.getElementById("eod-portfolio-cash");
+    const eodPortfolioInvestmentsEl = document.getElementById("eod-portfolio-investments");
+    const eodPortfolioChartEl = document.getElementById("eod-portfolio-chart");
+    const eodReportSelectEl = document.getElementById("eod-report-select");
+    const eodReportEl = document.getElementById("eod-report");
+    const eodTradesEl = document.getElementById("eod-trades");
+    const eodTradesMeta = document.getElementById("eod-trades-meta");
+    let predictionsLoaded = false;
+    let predictionSummaryData = [];
+    let predictionCoverage = {};
+    let predictionDailySeries = [];
+    let predictionDailyCoverage = {};
+    let predictionNextCursor = null;
+    let predictionHasMore = false;
+    let predictionLoading = false;
+    let predictionRequestVersion = 0;
+    let predictionLoadedCount = 0;
+    let predictionTotal = 0;
+    let predictionLastArticleKey = null;
+    let snapshotMode = false;
+    let snapshotAt = null;
+    let snapshotRecoveryTimer = null;
+    let snapshotRecoveryLoading = false;
+    let predictionObserver = null;
+    let latestStatus = null;
+    let modelExperimentId = null;
+    let liveStatusSocket = null;
+    let liveStatusReconnectTimer = null;
+    let liveStatusReconnectAttempts = 0;
+    let liveStatusFallbackTimer = null;
+    let liveStatusRefreshTimer = null;
+    let liveStatusRefreshPending = false;
+    let liveStatusLoading = false;
+    let sourceStatsLoading = false;
+    let sourceActivityMode = "day";
+    let sourceActivityAnchor = brisbaneDateKey();
+    const predictionLoadedArticles = new Set();
+    const predictionFilters = { direction: "all", confidenceBin: null, sort: "newest" };
+    const PREDICTION_PAGE_SIZE = 50;
+    const PREDICTION_OUTCOME_INTERVALS = ["12h", "24h", "48h", "1w", "2w", "1m", "3m", "6m", "1y", "2y", "3y", "4y"];
+    const PREDICTION_OUTCOME_COLUMNS = [
+      { label: "Date", width: 190 },
+      { label: "Ticker", width: 82 },
+      { label: "Call", width: 138 },
+      { label: "Dir", width: 100 },
+      { label: "Score", width: 80 },
+      { label: "Conf", width: 80 },
+      { label: "Baseline", width: 116 },
+      { label: "Current Day", width: 170 },
+      { label: "Daily Movement", width: 324 },
+    ];
+    let simulationLoaded = false;
+    let eodSimulationLoaded = false;
+    let activeSimulation = null;
+    let activeChartRange = "all";
+    const chartRanges = [
+      { key: "all", label: "All", hours: null },
+      { key: "12h", label: "12h", hours: 12 },
+      { key: "24h", label: "24h", hours: 24 },
+      { key: "1w", label: "1w", hours: 24 * 7 },
+      { key: "2w", label: "2w", hours: 24 * 14 },
+      { key: "1m", label: "1m", hours: 24 * 30 },
+      { key: "6m", label: "6m", hours: 24 * 183 },
+      { key: "1y", label: "1y", hours: 24 * 365 },
+    ];
+
+    const THEME_KEY = "newsSignalTheme";
+    const TOKEN_KEY = "newsSignalToken";
+    const TOKEN_COOKIE = "news_signal_token";
+    themeToggle.checked = document.documentElement.dataset.theme === "dark";
+    themeToggle.addEventListener("change", () => {
+      const theme = themeToggle.checked ? "dark" : "light";
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem(THEME_KEY, theme);
+    });
+    tokenInput.value = storedToken();
+    persistToken(tokenInput.value);
+    syncAuthState();
+
+    document.getElementById("save-token-btn").addEventListener("click", () => {
+      const token = tokenInput.value.trim();
+      persistToken(token);
+      predictionsLoaded = false;
+      eodSimulationLoaded = false;
+      syncAuthState();
+      stopLiveStatusStream();
+      startLiveStatusStream();
+      loadAll();
+    });
+
+    document.getElementById("clear-token-btn").addEventListener("click", () => {
+      clearStoredToken();
+      tokenInput.value = "";
+      predictionsLoaded = false;
+      eodSimulationLoaded = false;
+      syncAuthState();
+      stopLiveStatusStream();
+      liveStatusUpdated.textContent = "Live updates waiting";
+    });
+
+    document.getElementById("refresh-btn").addEventListener("click", loadAll);
+    document.getElementById("ingest-btn").addEventListener("click", () => runAction("/api/ingest"));
+    document.getElementById("requeue-btn").addEventListener("click", () => runAction("/api/requeue-pending?limit=10"));
+    startModelExperimentBtn.addEventListener("click", startModelExperiment);
+    saveModelExperimentEmailBtn.addEventListener("click", saveModelExperimentEmail);
+    testModelExperimentEmailBtn.addEventListener("click", testModelExperimentEmail);
+    dispatchModelExperimentBtn.addEventListener("click", () => runAction("/api/model-experiments/dispatch"));
+    rotateCodexAuthBtn.addEventListener("click", rotateCodexAuth);
+    overviewTab.addEventListener("click", () => setTab("overview"));
+    simulationTab.addEventListener("click", () => setTab("simulation"));
+    sourcesTab.addEventListener("click", () => setTab("sources"));
+    settingsBtn.addEventListener("click", () => setTab("settings"));
+    sourcesPanel.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const viewButton = target?.closest("[data-source-view]");
+      if (snapshotMode && (viewButton || target?.closest("#source-period-previous") || target?.closest("#source-period-next"))) return;
+      if (viewButton) {
+        sourceActivityMode = viewButton.getAttribute("data-source-view") || "day";
+        sourceActivityAnchor = brisbaneDateKey();
+        loadSourceStats();
+        return;
+      }
+      if (target?.closest("#source-period-previous")) shiftSourceActivityPeriod(-1);
+      if (target?.closest("#source-period-next")) shiftSourceActivityPeriod(1);
+    });
+    metricsEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target.closest("[data-open-tab]") : null;
+      if (target) setTab(target.getAttribute("data-open-tab") || "simulation");
+    });
+    predictionSummaryEl.addEventListener("click", (event) => {
+      if (snapshotMode) return;
+      const target = event.target instanceof Element ? event.target.closest("[data-heatmap-direction]") : null;
+      if (!target) return;
+      const confidenceBin = target.getAttribute("data-confidence-bin");
+      setPredictionFilters(target.getAttribute("data-heatmap-direction") || "all", confidenceBin === "all" ? null : Number(confidenceBin));
+    });
+    predictionsEl.addEventListener("click", (event) => {
+      if (snapshotMode) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const directionButton = target?.closest("[data-outcome-direction]");
+      if (directionButton) {
+        setPredictionFilters(directionButton.getAttribute("data-outcome-direction") || "all", predictionFilters.confidenceBin);
+        return;
+      }
+      if (target?.closest("[data-reset-prediction-filters]")) setPredictionFilters("all", null);
+    });
+    predictionsEl.addEventListener("change", (event) => {
+      if (snapshotMode) return;
+      const select = event.target instanceof HTMLSelectElement ? event.target : null;
+      if (!select) return;
+      if (select.id === "prediction-confidence-filter") {
+        setPredictionFilters(predictionFilters.direction, select.value === "all" ? null : Number(select.value));
+      }
+      if (select.id === "prediction-sort") setPredictionSort(select.value);
+    });
+
+    function setTab(tab) {
+      const simulation = tab === "simulation";
+      const settings = tab === "settings";
+      const sources = tab === "sources";
+      const overview = !simulation && !settings && !sources;
+      overviewTab.classList.toggle("active", overview);
+      simulationTab.classList.toggle("active", simulation);
+      sourcesTab.classList.toggle("active", sources);
+      overviewPanel.classList.toggle("hidden", !overview);
+      simulationPanel.classList.toggle("hidden", !simulation);
+      settingsPanel.classList.toggle("hidden", !settings);
+      sourcesPanel.classList.toggle("hidden", !sources);
+      settingsBtn.classList.toggle("active", settings);
+      if (simulation && !predictionsLoaded) loadPredictions();
+      if (sources) loadSourceStats();
+    }
+
+    function setSimulationModel(model) {
+      const eod = model === "eod";
+      liveModelTab.classList.toggle("active", !eod);
+      eodModelTab.classList.toggle("active", eod);
+      liveModelPanel.classList.toggle("hidden", eod);
+      eodModelPanel.classList.toggle("hidden", !eod);
+      if (eod && !eodSimulationLoaded) loadEodSimulation();
+      if (!eod && !simulationLoaded) loadSimulation();
+    }
+
+    function syncAuthState() {
+      authState.textContent = tokenInput.value.trim() ? "Token set" : "Token not set";
+    }
+
+    async function rotateCodexAuth() {
+      const file = codexAuthFileEl.files && codexAuthFileEl.files[0];
+      if (!file) {
+        codexAuthStatusEl.textContent = "Select auth.json first.";
+        return;
+      }
+      if (!window.confirm("Replace the research-worker Codex login, restart all workers, and recover authentication-failed jobs?")) return;
+
+      rotateCodexAuthBtn.disabled = true;
+      codexAuthStatusEl.textContent = "Replacing authentication and restarting workers...";
+      try {
+        const authJson = await file.text();
+        const parsed = JSON.parse(authJson);
+        if (!parsed || typeof parsed !== "object" || !(parsed.tokens || parsed.OPENAI_API_KEY || parsed.auth_mode)) {
+          throw new Error("The selected file is not a valid Codex auth.json file.");
+        }
+        const result = await api("/api/research/auth/rotate", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ auth_json: authJson }),
+        });
+        codexAuthFileEl.value = "";
+        codexAuthStatusEl.textContent =
+          "Login repaired. " + Number(result.recycled || 0) + " workers restarted; " +
+          Number(result.recovered || 0) + " failed jobs recovered; " +
+          Number(result.requeued || 0) + " jobs dispatched.";
+        await loadAll();
+      } catch (error) {
+        codexAuthStatusEl.textContent = error.message || String(error);
+      } finally {
+        rotateCodexAuthBtn.disabled = false;
+      }
+    }
+
+    function storedToken() {
+      return localStorage.getItem(TOKEN_KEY) || cookieValue(TOKEN_COOKIE) || sessionStorage.getItem(TOKEN_KEY) || "";
+    }
+
+    function persistToken(token) {
+      if (!token) return;
+      localStorage.setItem(TOKEN_KEY, token);
+      sessionStorage.setItem(TOKEN_KEY, token);
+      document.cookie = TOKEN_COOKIE + "=" + encodeURIComponent(token) + "; Max-Age=31536000; Path=/; SameSite=Lax; Secure";
+    }
+
+    function clearStoredToken() {
+      localStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_KEY);
+      document.cookie = TOKEN_COOKIE + "=; Max-Age=0; Path=/; SameSite=Lax; Secure";
+    }
+
+    function cookieValue(name) {
+      const prefix = name + "=";
+      return document.cookie.split(";").map((value) => value.trim()).filter(Boolean).reduce((found, value) => {
+        if (found) return found;
+        return value.startsWith(prefix) ? decodeURIComponent(value.slice(prefix.length)) : "";
+      }, "");
+    }
+
+    const SNAPSHOT_CONTROL_SELECTOR = [
+      "#ingest-btn",
+      "#requeue-btn",
+      "#start-model-experiment-btn",
+      "#save-model-experiment-email-btn",
+      "#test-model-experiment-email-btn",
+      "#dispatch-model-experiment-btn",
+      "#rotate-codex-auth-btn",
+      "[data-heatmap-direction]",
+      "[data-outcome-direction]",
+      "[data-reset-prediction-filters]",
+      ".source-view-button",
+      "#source-period-previous",
+      "#source-period-next",
+      "#prediction-confidence-filter",
+      "#prediction-sort",
+    ].join(",");
+
+    function applySnapshotControlState() {
+      for (const control of document.querySelectorAll(SNAPSHOT_CONTROL_SELECTOR)) {
+        control.disabled = snapshotMode;
+        control.setAttribute("aria-disabled", snapshotMode ? "true" : "false");
+      }
+    }
+
+    function scheduleSnapshotRecovery() {
+      if (!snapshotMode || snapshotRecoveryTimer) return;
+      snapshotRecoveryTimer = setTimeout(checkSnapshotRecovery, 30000);
+    }
+
+    async function checkSnapshotRecovery() {
+      snapshotRecoveryTimer = null;
+      if (!snapshotMode || snapshotRecoveryLoading) return;
+      snapshotRecoveryLoading = true;
+      try {
+        const response = await fetch("/api/status/live", {
+          headers: headers(),
+          signal: AbortSignal.timeout(12000),
+          cache: "no-store",
+        });
+        if (response.ok && response.headers.get("x-news-signal-mode") === "live") {
+          deactivateSnapshotMode();
+          predictionsLoaded = false;
+          await loadAll();
+          if (!sourcesPanel.classList.contains("hidden")) await loadSourceStats();
+          return;
+        }
+      } catch (_) {
+        // The next scheduled probe will retry without disturbing the stored view.
+      } finally {
+        snapshotRecoveryLoading = false;
+      }
+      scheduleSnapshotRecovery();
+    }
+
+    function activateSnapshotMode(generatedAt) {
+      const firstActivation = !snapshotMode;
+      snapshotMode = true;
+      if (generatedAt && (!snapshotAt || Date.parse(generatedAt) > Date.parse(snapshotAt))) snapshotAt = generatedAt;
+      document.body.classList.add("snapshot-mode");
+      snapshotBannerEl.hidden = false;
+      snapshotBannerDetailEl.textContent = "Showing the last server snapshot from " + formatDate(snapshotAt) + ". Live controls will return automatically when the server reconnects.";
+      liveStatusUpdated.textContent = "Server offline";
+      if (firstActivation) {
+        predictionFilters.direction = "all";
+        predictionFilters.confidenceBin = null;
+        predictionFilters.sort = "newest";
+        sourceActivityMode = "day";
+        stopLiveStatusStream();
+      }
+      applySnapshotControlState();
+      scheduleSnapshotRecovery();
+    }
+
+    function deactivateSnapshotMode() {
+      if (!snapshotMode) return;
+      snapshotMode = false;
+      snapshotAt = null;
+      document.body.classList.remove("snapshot-mode");
+      snapshotBannerEl.hidden = true;
+      if (snapshotRecoveryTimer) clearTimeout(snapshotRecoveryTimer);
+      snapshotRecoveryTimer = null;
+      applySnapshotControlState();
+      liveStatusUpdated.textContent = "Live server restored";
+      startLiveStatusStream();
+    }
+
+    function headers() {
+      const token = tokenInput.value.trim() || storedToken();
+      return token ? { Authorization: "Bearer " + token } : {};
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        signal: options.signal || AbortSignal.timeout(20000),
+        headers: { ...(options.headers || {}), ...headers() },
+      });
+      const responseMode = response.headers.get("x-news-signal-mode");
+      if (responseMode === "snapshot") activateSnapshotMode(response.headers.get("x-news-signal-snapshot-at"));
+      if (responseMode === "live" && snapshotMode) deactivateSnapshotMode();
+      const contentType = response.headers.get("content-type") || "";
+      const body = await response.text();
+      let payload = null;
+      if (contentType.includes("application/json") && body) {
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          throw new Error("Dashboard returned invalid JSON (HTTP " + response.status + ").");
+        }
+      }
+      if (!response.ok) {
+        const htmlError = contentType.includes("text/html") || body.trimStart().startsWith("<!DOCTYPE");
+        const message = response.status === 401
+          ? "Unauthorized: paste the dashboard token and click Save token."
+          : htmlError
+            ? "Cloudflare returned an error page (HTTP " + response.status + ")."
+            : (payload && payload.error) || body.trim().slice(0, 180) || "HTTP " + response.status;
+        throw new Error(message);
+      }
+      if (!contentType.includes("application/json")) {
+        throw new Error("Dashboard expected JSON but received " + (contentType || "an unknown response type") + " (HTTP " + response.status + ").");
+      }
+      return payload;
+    }
+
+    async function runAction(path) {
+      if (snapshotMode) return;
+      setBusy(true);
+      try {
+        await api(path, { method: "POST" });
+        predictionsLoaded = false;
+        await loadAll();
+      } catch (error) {
+        showError(metricsEl, error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadAll() {
+      if (!metricsEl.children.length) showInitialSkeletons();
+      setBusy(true);
+      try {
+        const responses = await Promise.allSettled([
+          api("/api/status"),
+          api("/api/results?limit=20"),
+          api("/api/jobs?limit=12"),
+          api("/api/jobs/failures?limit=500"),
+          api("/api/model-experiments"),
+        ]);
+        const [status, results, jobs, failedJobs, modelExperiment] = responses;
+        if (status.status === "fulfilled") {
+          latestStatus = status.value;
+          renderMetrics(latestStatus);
+          liveStatusUpdated.textContent = "Live update " + new Date().toLocaleTimeString();
+        } else {
+          showError(metricsEl, status.reason, false);
+        }
+        if (results.status === "fulfilled") {
+          renderResults(results.value.results || []);
+          renderArticles(results.value.results || []);
+        } else {
+          showError(resultsEl, results.reason, false);
+          showError(articlesEl, results.reason, false);
+        }
+        if (jobs.status === "fulfilled") renderJobs(jobs.value.jobs || []);
+        else showError(jobsEl, jobs.reason, false);
+        if (failedJobs.status === "fulfilled") renderFailedJobs(failedJobs.value.jobs || []);
+        else showError(failedJobsEl, failedJobs.reason, false);
+        if (modelExperiment.status === "fulfilled") renderModelExperiment(modelExperiment.value);
+        else showError(modelExperimentProgressEl, modelExperiment.reason, false);
+        const failures = responses.filter((response) => response.status === "rejected").length;
+        lastUpdated.textContent = (failures ? "Data partially refreshed " : "Data refreshed ") + new Date().toLocaleTimeString();
+        if (!simulationPanel.classList.contains("hidden")) {
+          predictionsLoaded = false;
+          await loadPredictions();
+        }
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadPredictions() {
+      if (predictionLoading) return;
+      const requestVersion = ++predictionRequestVersion;
+      predictionLoading = true;
+      showPredictionSkeletons();
+      setBusy(true);
+      try {
+        const settle = (promise) => promise.then(
+          (value) => ({ status: "fulfilled", value }),
+          (reason) => ({ status: "rejected", reason }),
+        );
+        const outcomes = await settle(api(predictionRequestPath("/api/predictions/outcomes")));
+        if (requestVersion !== predictionRequestVersion) return;
+        if (outcomes.status === "fulfilled") {
+          renderPredictionOutcomeShell(false);
+          applyPredictionPage(outcomes.value, true);
+        } else {
+          predictionsMeta.textContent = "Prediction outcomes unavailable";
+          showError(predictionsEl, outcomes.reason, false);
+        }
+
+        const summary = await settle(api("/api/predictions/summary"));
+        if (requestVersion !== predictionRequestVersion) return;
+        if (summary.status === "fulfilled") {
+          predictionSummaryData = summary.value.summary || [];
+          predictionCoverage = summary.value.coverage || {};
+          renderPredictionSummary(predictionSummaryData, predictionCoverage);
+        } else {
+          predictionSummaryMeta.textContent = "Interval summary unavailable";
+          showError(predictionSummaryEl, summary.reason, false);
+        }
+
+        const daily = await settle(api("/api/predictions/daily"));
+        if (requestVersion !== predictionRequestVersion) return;
+        if (daily.status === "fulfilled") {
+          predictionDailySeries = daily.value.daily_series || [];
+          predictionDailyCoverage = daily.value.daily_coverage || {};
+          renderPredictionDailyChart();
+        } else {
+          predictionTrendMeta.textContent = "Daily movement history unavailable";
+          showError(predictionTrendChartEl, daily.reason, false);
+        }
+        predictionsLoaded = true;
+      } finally {
+        if (requestVersion === predictionRequestVersion) {
+          predictionLoading = false;
+          observePredictionSentinel();
+        }
+        setBusy(false);
+      }
+    }
+
+    function mergeLiveStatus(current, live) {
+      if (!current) return current;
+      const jobCounts = new Map((current.jobs || []).map((item) => [item.status, item]));
+      for (const item of live.jobs || []) jobCounts.set(item.status, item);
+      return { ...current, jobs: [...jobCounts.values()], timing: live.timing || current.timing, active_jobs: live.active_jobs || [], latest_source_check: live.latest_source_check || current.latest_source_check };
+    }
+
+    async function refreshLiveStatus() {
+      if (snapshotMode) {
+        scheduleSnapshotRecovery();
+        return;
+      }
+      if (liveStatusLoading) {
+        liveStatusRefreshPending = true;
+        return;
+      }
+      if (document.hidden || !tokenInput.value.trim()) return;
+      liveStatusLoading = true;
+      try {
+        const live = await api("/api/status/live");
+        latestStatus = mergeLiveStatus(latestStatus, live);
+        if (latestStatus) renderMetrics(latestStatus);
+        syncRunningJobTimers(live.active_jobs || []);
+        liveStatusUpdated.textContent = "Live update " + new Date().toLocaleTimeString();
+      } catch (error) {
+        liveStatusUpdated.textContent = "Live updates unavailable";
+      } finally {
+        liveStatusLoading = false;
+        if (liveStatusRefreshPending) {
+          liveStatusRefreshPending = false;
+          scheduleLiveStatusRefresh(0);
+        }
+      }
+    }
+
+    function scheduleLiveStatusRefresh(delay = 150) {
+      if (liveStatusRefreshTimer) clearTimeout(liveStatusRefreshTimer);
+      liveStatusRefreshTimer = setTimeout(() => {
+        liveStatusRefreshTimer = null;
+        refreshLiveStatus();
+      }, delay);
+    }
+
+    function websocketAuthProtocol(token) {
+      const bytes = new TextEncoder().encode(token);
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return "auth." + btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    }
+
+    async function loadSourceStats() {
+      if (sourceStatsLoading) return;
+      sourceStatsLoading = true;
+      sourceStatsMeta.textContent = "Loading sources";
+      sourceStatsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+      sourceHourlyWidgetEl.innerHTML = predictionLoadingRows();
+      sourceActivityChartEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+      tickerPipelineMetaEl.textContent = "Loading recent pipeline activity";
+      tickerPipelineHealthEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
+      try {
+        try {
+          renderTickerPipelineHealth(await api("/api/diagnostics/ticker-pipeline"));
+        } catch (error) {
+          tickerPipelineMetaEl.textContent = "Pipeline diagnostic unavailable";
+          showError(tickerPipelineHealthEl, error, false);
+        }
+
+        try {
+          const activityPayload = await api("/api/source-activity?mode=" + encodeURIComponent(sourceActivityMode) + "&anchor=" + encodeURIComponent(sourceActivityAnchor));
+          renderSourceActivity(activityPayload);
+        } catch (error) {
+          sourceHourlyWidgetEl.innerHTML = "";
+          showError(sourceActivityChartEl, error, false);
+        }
+
+        try {
+          const statsPayload = await api("/api/source-stats");
+          renderSourceStats(statsPayload.sources || []);
+        } catch (error) {
+          sourceStatsMeta.textContent = "Source table unavailable";
+          showError(sourceStatsEl, error, false);
+        }
+      } finally {
+        sourceStatsLoading = false;
+      }
+    }
+
+    function renderTickerPipelineHealth(payload) {
+      const articleRows = Array.isArray(payload.article_cohorts) ? payload.article_cohorts : [];
+      const resultRows = Array.isArray(payload.results_by_article_cohort) ? payload.results_by_article_cohort : [];
+      const scanRows = Array.isArray(payload.outcome_scans_by_day) ? payload.outcome_scans_by_day : [];
+      const outcomeRows = Array.isArray(payload.outcomes_by_update_day) ? payload.outcomes_by_update_day : [];
+      const metricRows = Array.isArray(payload.source_metrics_by_day) ? payload.source_metrics_by_day : [];
+      const jobRows = Array.isArray(payload.jobs_by_completion_day) ? payload.jobs_by_completion_day : [];
+      const failureReasons = Array.isArray(payload.recent_failure_reasons) ? payload.recent_failure_reasons : [];
+      const predictionDelay = payload.prediction_delay || {};
+      const predictionDelaySources = Array.isArray(payload.prediction_delay_by_source) ? payload.prediction_delay_by_source : [];
+      const cumulativeDelay = predictionDelaySources.reduce((sum, row) => sum + Number(row.cumulative_delay_seconds || 0), 0);
+      const byDay = (rows) => new Map(rows.map((row) => [row.day, row]));
+      const articlesByDay = byDay(articleRows);
+      const resultsByDay = byDay(resultRows);
+      const scansByDay = byDay(scanRows);
+      const outcomesByDay = byDay(outcomeRows);
+      const metricsByDay = byDay(metricRows);
+      const jobsByDay = new Map();
+      for (const row of jobRows) {
+        const statuses = jobsByDay.get(row.day) || {};
+        statuses[row.status] = Number(row.jobs || 0);
+        jobsByDay.set(row.day, statuses);
+      }
+      const days = [...new Set([
+        ...articleRows.map((row) => row.day),
+        ...resultRows.map((row) => row.day),
+        ...scanRows.map((row) => row.day),
+        ...outcomeRows.map((row) => row.day),
+        ...metricRows.map((row) => row.day),
+        ...jobRows.map((row) => row.day),
+      ].filter(Boolean))].sort().reverse();
+      const latest = payload.latest || {};
+      tickerPipelineMetaEl.textContent =
+        "Latest result " + formatDate(latest.latest_result_at) +
+        " | latest symbol result " + formatDate(latest.latest_symbol_result_at) +
+        " | latest tracked call " + formatDate(latest.latest_outcome_prediction_at) +
+        " | " + Number(latest.total_outcomes || 0) + " total outcomes";
+      tickerPipelineHealthEl.innerHTML = days.length
+        ? '<div class="impact-wrap">' + table(
+            ["Brisbane day", "Acquired", "Analyzed", "Results", "With tickers", "Ticker calls", "Succeeded", "Failed", "Cancelled", "Scanned", "Outcomes", "Skipped", "Metric calls"],
+            days.map((day) => {
+              const articles = articlesByDay.get(day) || {};
+              const results = resultsByDay.get(day) || {};
+              const scans = scansByDay.get(day) || {};
+              const outcomes = outcomesByDay.get(day) || {};
+              const metrics = metricsByDay.get(day) || {};
+              const jobs = jobsByDay.get(day) || {};
+              return [
+                escapeHtml(day),
+                Number(articles.articles || 0),
+                Number(articles.analyzed || 0),
+                Number(results.results || 0),
+                Number(results.results_with_symbols || 0),
+                Number(results.ticker_calls || 0),
+                Number(jobs.succeeded || 0),
+                Number(jobs.failed || 0),
+                Number(jobs.cancelled || 0),
+                Number(scans.scanned_results || 0),
+                Number(outcomes.outcomes || 0),
+                Number(scans.symbols_skipped || 0),
+                Number(metrics.ticker_calls || 0),
+              ];
+            }),
+          ) + '</div>' +
+          (Number(predictionDelay.samples || 0)
+            ? '<div class="summary"><strong>Pipeline delay:</strong> ' +
+                escapeHtml(formatDuration(predictionDelay.average_total_seconds)) + ' average publication-to-synthesis time across ' +
+                escapeHtml(String(predictionDelay.samples)) + ' completed first-pass articles with publication timestamps. ' +
+                escapeHtml(String(predictionDelay.excluded_recovery_jobs || 0)) + ' recovery jobs are excluded.</div>' +
+              '<div class="impact-wrap">' + table(
+                ["Source", "Samples", "Avg publication to synthesis", "Share of total delay"],
+                predictionDelaySources.map((row) => [
+                  escapeHtml(row.source || "unknown"),
+                  Number(row.samples || 0),
+                  escapeHtml(formatDuration(row.average_total_seconds)),
+                  cumulativeDelay ? (Number(row.cumulative_delay_seconds || 0) / cumulativeDelay * 100).toFixed(1) + "%" : "0.0%",
+                ]),
+              ) + '</div>'
+            : '') +
+          (failureReasons.length
+            ? '<div class="summary"><strong>Recent failure reasons:</strong> ' + failureReasons.map((item) =>
+                escapeHtml(String(item.failures || 0)) + ' x ' + escapeHtml(item.reason || "unknown")
+              ).join(" | ") + '</div>'
+            : '')
+        : '<div class="empty">No recent ticker pipeline activity is recorded.</div>';
+    }
+
+    function brisbaneDateKey(date = new Date()) {
+      const parts = new Intl.DateTimeFormat("en-AU", {
+        timeZone: "Australia/Brisbane",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(date).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+      return parts.year + "-" + parts.month + "-" + parts.day;
+    }
+
+    function shiftSourceActivityPeriod(direction) {
+      const date = new Date(sourceActivityAnchor + "T00:00:00Z");
+      if (sourceActivityMode === "day") date.setUTCDate(date.getUTCDate() + direction);
+      if (sourceActivityMode === "month") {
+        date.setUTCDate(1);
+        date.setUTCMonth(date.getUTCMonth() + direction);
+      }
+      if (sourceActivityMode === "year") {
+        date.setUTCMonth(0, 1);
+        date.setUTCFullYear(date.getUTCFullYear() + direction);
+      }
+      sourceActivityAnchor = date.toISOString().slice(0, 10);
+      loadSourceStats();
+    }
+
+    function startLiveStatusStream() {
+      if (snapshotMode || !tokenInput.value.trim() || liveStatusSocket) return;
+      if (liveStatusReconnectTimer) {
+        clearTimeout(liveStatusReconnectTimer);
+        liveStatusReconnectTimer = null;
+      }
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const authProtocol = websocketAuthProtocol(tokenInput.value.trim() || storedToken());
+      const socket = new WebSocket(protocol + "//" + window.location.host + "/api/events", ["news-signal", authProtocol]);
+      liveStatusSocket = socket;
+      liveStatusUpdated.textContent = "Live updates connecting";
+
+      socket.addEventListener("open", () => {
+        liveStatusReconnectAttempts = 0;
+        if (liveStatusFallbackTimer) clearTimeout(liveStatusFallbackTimer);
+        liveStatusFallbackTimer = null;
+        liveStatusUpdated.textContent = "Live updates connected";
+        scheduleLiveStatusRefresh(0);
+      });
+      socket.addEventListener("message", (message) => {
+        let event = null;
+        try { event = JSON.parse(String(message.data || "")); } catch { event = null; }
+        if (event && event.type === "source_check_completed") {
+          if (latestStatus) {
+            latestStatus = {
+              ...latestStatus,
+              latest_source_check: {
+                id: "live",
+                checked_at: event.at,
+                acquired_count: Number(event.acquired_count || 0),
+                source_count: Number(event.source_count || 0),
+                failed_source_count: Number(event.failed_source_count || 0),
+              },
+            };
+            renderMetrics(latestStatus);
+          }
+          if (!sourcesPanel.classList.contains("hidden")) loadSourceStats();
+        }
+        liveStatusUpdated.textContent = "Live signal " + new Date().toLocaleTimeString();
+        scheduleLiveStatusRefresh();
+      });
+      socket.addEventListener("close", () => {
+        if (liveStatusSocket !== socket) return;
+        liveStatusSocket = null;
+        if (!tokenInput.value.trim()) return;
+        liveStatusReconnectAttempts += 1;
+        const usingFallback = liveStatusReconnectAttempts >= 5;
+        liveStatusUpdated.textContent = usingFallback ? "Live updates using fallback" : "Live updates reconnecting";
+        if (usingFallback) scheduleLiveStatusFallback();
+        const retryDelay = usingFallback
+          ? 5 * 60 * 1000
+          : Math.min(30000, 1000 * Math.pow(2, liveStatusReconnectAttempts - 1));
+        liveStatusReconnectTimer = setTimeout(() => {
+          liveStatusReconnectTimer = null;
+          startLiveStatusStream();
+        }, retryDelay);
+      });
+      socket.addEventListener("error", () => {
+        liveStatusUpdated.textContent = "Live updates unavailable";
+      });
+    }
+
+    function scheduleLiveStatusFallback() {
+      if (liveStatusFallbackTimer) clearTimeout(liveStatusFallbackTimer);
+      scheduleLiveStatusRefresh(0);
+      liveStatusFallbackTimer = setTimeout(scheduleLiveStatusFallback, 30000);
+    }
+
+    function stopLiveStatusStream() {
+      if (liveStatusRefreshTimer) clearTimeout(liveStatusRefreshTimer);
+      if (liveStatusReconnectTimer) clearTimeout(liveStatusReconnectTimer);
+      if (liveStatusFallbackTimer) clearTimeout(liveStatusFallbackTimer);
+      liveStatusRefreshTimer = null;
+      liveStatusReconnectTimer = null;
+      liveStatusFallbackTimer = null;
+      liveStatusReconnectAttempts = 0;
+      liveStatusRefreshPending = false;
+      const socket = liveStatusSocket;
+      liveStatusSocket = null;
+      if (socket) socket.close(1000, "Live updates stopped");
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        if (snapshotMode) {
+          scheduleSnapshotRecovery();
+          return;
+        }
+        startLiveStatusStream();
+        scheduleLiveStatusRefresh(0);
+      }
+    });
+
+    async function reloadPredictionOutcomes() {
+      if (snapshotMode) return;
+      const requestVersion = ++predictionRequestVersion;
+      predictionLoading = true;
+      renderPredictionOutcomeShell(true);
+      try {
+        const payload = await api(predictionRequestPath("/api/predictions/outcomes"));
+        if (requestVersion !== predictionRequestVersion) return;
+        applyPredictionPage(payload, true);
+      } catch (error) {
+        if (requestVersion === predictionRequestVersion) showError(predictionsEl, error);
+      } finally {
+        if (requestVersion === predictionRequestVersion) {
+          predictionLoading = false;
+          observePredictionSentinel();
+        }
+      }
+    }
+
+    async function loadMorePredictions() {
+      if (snapshotMode || predictionLoading || !predictionHasMore || !predictionNextCursor) return;
+      const requestVersion = predictionRequestVersion;
+      let loadFailed = false;
+      predictionLoading = true;
+      setPredictionPageLoading(true);
+      try {
+        const payload = await api(predictionRequestPath("/api/predictions/outcomes", predictionNextCursor));
+        if (requestVersion !== predictionRequestVersion) return;
+        applyPredictionPage(payload, false);
+      } catch (error) {
+        loadFailed = true;
+        if (requestVersion === predictionRequestVersion) showPredictionPageError(error);
+      } finally {
+        if (requestVersion === predictionRequestVersion) {
+          predictionLoading = false;
+          if (!loadFailed) {
+            setPredictionPageLoading(false);
+            observePredictionSentinel();
+          }
+        }
+      }
+    }
+
+    async function loadSimulation() {
+      setBusy(true);
+      try {
+        const payload = await api("/api/simulation?limit=500");
+        renderSimulation(payload.simulation);
+        simulationLoaded = true;
+      } catch (error) {
+        showError(tradesEl, error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function loadEodSimulation() {
+      setBusy(true);
+      try {
+        const payload = await api("/api/simulation/eod?limit=500");
+        renderEodSimulation(payload.simulation);
+        eodSimulationLoaded = true;
+      } catch (error) {
+        showError(eodTradesEl, error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function setBusy(isBusy) {
+      for (const button of document.querySelectorAll("button")) {
+        button.disabled = isBusy || (snapshotMode && button.matches(SNAPSHOT_CONTROL_SELECTOR));
+      }
+      if (!isBusy) applySnapshotControlState();
+    }
+
+    function predictionLoadingRows() {
+      return Array.from({ length: 4 }, (_, index) => '<span class="skeleton-block skeleton-line ' + (index % 2 ? 'long' : 'medium') + '"></span>').join("");
+    }
+
+    function showInitialSkeletons() {
+      metricsEl.innerHTML = Array.from({ length: 8 }, () => '<div class="metric skeleton-metric"><span class="skeleton-block skeleton-line short"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
+      resultsEl.innerHTML = Array.from({ length: 5 }, () => '<div class="skeleton-result"><span class="skeleton-block skeleton-line long"></span><span class="skeleton-block skeleton-line medium"></span><span class="skeleton-block skeleton-line long"></span></div>').join("");
+      jobsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
+      failedJobsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
+      articlesEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + '</div>';
+    }
+
+    function showPredictionSkeletons() {
+      predictionSummaryMeta.textContent = "Loading interval summary";
+      const skeletonCells = Array.from({ length: 66 }, () => '<span class="skeleton-block prediction-skeleton-cell"></span>').join("");
+      predictionSummaryEl.innerHTML = '<div class="heatmap-stack"><div class="heatmap-scroll"><div class="prediction-skeleton-grid">' + skeletonCells + '</div></div></div>';
+      predictionTrendMeta.textContent = "Loading daily movement history";
+      predictionTrendChartEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+      predictionsMeta.textContent = "Loading outcomes";
+      predictionsEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+    }
+
+    function count(rows, status) {
+      const row = (rows || []).find((item) => item.status === status);
+      return row ? Number(row.count || 0) : 0;
+    }
+
+    function renderMetrics(status) {
+      const analyzed = count(status.articles, "analyzed");
+      const queued = count(status.articles, "queued");
+      const pending = count(status.jobs, "pending");
+      const running = count(status.jobs, "running");
+      const succeeded = count(status.jobs, "succeeded");
+      const results = Number((status.results && status.results.count) || 0);
+      const predictions = Number((status.predictions && status.predictions.count) || 0);
+      const timing = status.timing || {};
+      const capacity = Number(timing.parallel_capacity || 8);
+      const synthesisSamples = Number(timing.synthesis_samples || 0);
+      const delaySamples = Number(timing.prediction_delay_samples || 0);
+      const missingDelaySamples = Number(timing.prediction_delay_missing_publication_samples || 0);
+      const yahooDelaySamples = Number(timing.yahoo_prediction_delay_samples || 0);
+      const yahooMissingDelaySamples = Number(timing.yahoo_prediction_delay_missing_publication_samples || 0);
+      const sourceCheck = status.latest_source_check || null;
+      const sourceCheckDate = sourceCheck ? new Date(sourceCheck.checked_at) : null;
+      const configuredSources = Number(status.configured_source_count || (sourceCheck && sourceCheck.source_count) || 0);
+      const attemptedSources = Number((sourceCheck && sourceCheck.source_count) || 0);
+      const failedSources = Number((sourceCheck && sourceCheck.failed_source_count) || 0);
+      metricsEl.innerHTML = [
+        metric("Articles", analyzed + queued, analyzed + " actionable analyzed, " + queued + " queued"),
+        metric("Results", results, succeeded + " succeeded", [
+          { text: predictions.toLocaleString() + " predictions" },
+        ]),
+        metric("Running", running, running + " of " + capacity + " parallel Codex workers active"),
+        metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers"),
+        metric("Avg synthesis", formatDuration(timing.average_synthesis_seconds), synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s")),
+        metric(
+          "Avg pipeline delay (non-Yahoo)",
+          formatDuration(timing.average_prediction_delay_seconds),
+          delaySamples + " completed first-pass article" + (delaySamples === 1 ? "" : "s") + " | publication to synthesis" +
+            (missingDelaySamples ? " | " + missingDelaySamples + " missing publication time" : ""),
+        ),
+        metric(
+          "Yahoo Finance pipeline delay",
+          formatDuration(timing.average_yahoo_prediction_delay_seconds),
+          yahooDelaySamples + " completed first-pass article" + (yahooDelaySamples === 1 ? "" : "s") + " | publication to synthesis" +
+            (yahooMissingDelaySamples ? " | " + yahooMissingDelaySamples + " missing publication time" : ""),
+        ),
+        metric(
+          "Last source check",
+          sourceCheck ? attemptedSources + " / " + configuredSources : "n/a",
+          sourceCheck
+            ? Number(sourceCheck.acquired_count || 0) + " acquired at " + (sourceCheckDate && Number.isFinite(sourceCheckDate.getTime()) ? sourceCheckDate.toLocaleString() : "unknown time") + " | " + failedSources + " source failures"
+            : "No source checks recorded yet",
+          "",
+          "sources",
+        ),
+      ].join("");
+    }
+
+    function metric(label, value, note, supertext = "", openTab = "") {
+      const tag = openTab ? "button" : "div";
+      const attributes = openTab ? ' type="button" data-open-tab="' + escapeAttr(openTab) + '"' : "";
+      const supertexts = Array.isArray(supertext) ? supertext : (supertext ? [{ text: supertext }] : []);
+      const supertextHtml = supertexts.map((item) => '<sup' + (item && item.active ? ' class="active"' : '') + '>' + escapeHtml(item && item.text !== undefined ? item.text : item) + '</sup>').join("");
+      return '<' + tag + ' class="metric' + (openTab ? ' metric-button' : '') + '"' + attributes + '><div class="label">' + escapeHtml(label) + '</div><div class="value">' + escapeHtml(String(value)) + supertextHtml + '</div><div class="note">' + escapeHtml(note) + '</div></' + tag + '>';
+    }
+
+    function renderSourceStats(sources) {
+      const ledgerPending = sources.reduce((sum, source) => sum + Number(source.ledger_pending_count || 0), 0);
+      const ledgerSeen = sources.reduce((sum, source) => sum + Number(source.ledger_seen_count || 0), 0);
+      sourceStatsMeta.textContent = sources.length + " configured source" + (sources.length === 1 ? "" : "s") + " | " + ledgerSeen + " URLs tracked" + (ledgerPending ? " | " + ledgerPending + " pending" : "");
+      if (!sources.length) {
+        sourceStatsEl.innerHTML = '<div class="empty">No configured sources are available.</div>';
+        return;
+      }
+      sourceStatsEl.innerHTML = '<div class="impact-wrap source-stats-table">' + table(["Source", "Type", "Seen", "Acquired", "Baseline", "Stale", "Pending", "Stored", "Bull avg movement", "Bear avg movement"], sources.map((source) => [
+        '<a href="' + escapeAttr(source.url || "#") + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(source.name || source.id || "Unknown") + '</a>',
+        escapeHtml([source.source_type, source.category].filter(Boolean).join(" / ")),
+        sourceLedgerCell(source.ledger_seen_count, "Unique feed URLs observed since the persistent ledger was enabled."),
+        sourceLedgerCell(source.ledger_acquired_count, "Observed feed URLs that are present in the article store. This includes duplicate feed appearances for articles already acquired from another source."),
+        sourceLedgerCell(source.ledger_baseline_count, "Existing entries recorded during this source's initial baseline. They were deliberately not queued, preventing stale-feed backfill."),
+        sourceLedgerCell(source.ledger_stale_count, "Previously unseen archive entries published before this source's fixed activation time. They are recorded but never queued."),
+        sourceLedgerCell(source.ledger_pending_count, "Durable unseen feed entries still awaiting insertion or queue recovery."),
+        sourceLedgerCell(source.acquired_article_count, "All article records historically stored against this source."),
+        sourceMovementCell(source.bullish_average_movement_pct, source.bullish_samples, "bullish"),
+        sourceMovementCell(source.bearish_average_movement_pct, source.bearish_samples, "bearish"),
+      ]));
+      sourceStatsEl.innerHTML += '</div>';
+    }
+
+    function sourceLedgerCell(value, hint) {
+      return '<span title="' + escapeAttr(hint) + '">' + escapeHtml(String(Number(value || 0))) + '</span>';
+    }
+
+    function renderSourceActivity(payload) {
+      sourceActivityMode = payload.mode || sourceActivityMode;
+      sourceActivityAnchor = payload.anchor || sourceActivityAnchor;
+      document.querySelectorAll("[data-source-view]").forEach((button) => {
+        button.classList.toggle("active", button.getAttribute("data-source-view") === sourceActivityMode);
+      });
+      sourcePeriodLabelEl.textContent = payload.period_label || sourceActivityAnchor;
+      document.getElementById("source-period-next").disabled = payload.can_go_next === false;
+
+      const average = payload.average || {};
+      const completedHours = Number(average.completed_hours || 0);
+      sourceHourlyWidgetEl.innerHTML =
+        '<div><div class="source-hourly-value">' + formatDecimal(average.articles_per_hour) + '</div><div class="source-hourly-label">Articles acquired per completed hour</div></div>' +
+        '<div><div class="source-hourly-value">' + formatDecimal(average.tickers_per_hour) + '</div><div class="source-hourly-label">Ticker calls acquired per completed hour</div></div>' +
+        '<div class="source-hourly-note">Average across ' + completedHours + ' fully observed Brisbane calendar hour' + (completedHours === 1 ? '' : 's') + '. The current partial hour is excluded.</div>';
+      sourceActivityMeta.textContent = "Australia/Brisbane | exact top-of-hour buckets | " + (payload.bucket_note || "completed periods only");
+      renderSourceActivityChart(payload);
+    }
+
+    function formatDecimal(value) {
+      const number = Number(value || 0);
+      return Number.isFinite(number) ? number.toFixed(2) : "0.00";
+    }
+
+    function renderSourceActivityChart(payload) {
+      const buckets = Array.isArray(payload.buckets) ? payload.buckets : [];
+      const populated = buckets.filter((item) => item.articles !== null && item.articles !== undefined);
+      const width = 1040;
+      const height = 320;
+      const pad = { left: 58, right: 62, top: 46, bottom: 50 };
+      const plotWidth = width - pad.left - pad.right;
+      const plotHeight = height - pad.top - pad.bottom;
+      const domainMax = Math.max(1, Number(payload.domain_max || buckets.length || 1));
+      const articleMax = Math.max(1, ...populated.map((item) => Number(item.articles || 0)));
+      const tickerMax = Math.max(1, ...populated.map((item) => Number(item.tickers || 0)));
+      const xFor = (value) => pad.left + (Number(value) / domainMax) * plotWidth;
+      const articleY = (value) => pad.top + ((articleMax - Number(value)) / articleMax) * plotHeight;
+      const tickerY = (value) => pad.top + ((tickerMax - Number(value)) / tickerMax) * plotHeight;
+
+      const grid = Array.from({ length: 5 }, (_, index) => {
+        const ratio = index / 4;
+        const y = pad.top + ratio * plotHeight;
+        const articles = articleMax * (1 - ratio);
+        const tickers = tickerMax * (1 - ratio);
+        return '<line x1="' + pad.left + '" y1="' + y.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y.toFixed(2) + '" stroke="var(--chart-grid)"></line>' +
+          '<text x="' + (pad.left - 8) + '" y="' + (y + 4).toFixed(2) + '" fill="var(--blue)" font-size="10" text-anchor="end">' + formatAxisCount(articles) + '</text>' +
+          '<text x="' + (width - pad.right + 8) + '" y="' + (y + 4).toFixed(2) + '" fill="var(--green)" font-size="10">' + formatAxisCount(tickers) + '</text>';
+      }).join("");
+
+      const separators = Array.isArray(payload.separators) ? payload.separators : [];
+      const separatorBands = separators.map((separator, index) => {
+        const start = Math.max(0, Number(separator.position || 0));
+        const end = index + 1 < separators.length ? Number(separators[index + 1].position || domainMax) : domainMax;
+        const x = xFor(start);
+        const nextX = xFor(Math.min(domainMax, end));
+        return (index % 2 === 0 ? '<rect x="' + x.toFixed(2) + '" y="' + pad.top + '" width="' + Math.max(0, nextX - x).toFixed(2) + '" height="' + plotHeight + '" fill="var(--chart-band)"></rect>' : '') +
+          '<line x1="' + x.toFixed(2) + '" y1="' + pad.top + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="var(--chart-separator)" stroke-dasharray="4 4"></line>' +
+          '<text x="' + (x + 5).toFixed(2) + '" y="' + (pad.top + 12) + '" fill="var(--muted)" font-size="9">' + escapeHtml(separator.label || "") + '</text>';
+      }).join("");
+
+      const ticks = (Array.isArray(payload.ticks) ? payload.ticks : []).map((tick) => {
+        const x = xFor(tick.position);
+        return '<line x1="' + x.toFixed(2) + '" y1="' + (height - pad.bottom) + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom + 4) + '" stroke="var(--muted)"></line>' +
+          '<text x="' + x.toFixed(2) + '" y="' + (height - 27) + '" fill="var(--muted)" font-size="10" text-anchor="middle">' + escapeHtml(tick.label || "") + '</text>';
+      }).join("");
+
+      const pathFor = (field, yFor) => {
+        let drawing = false;
+        return buckets.map((item) => {
+          const value = item[field];
+          if (value === null || value === undefined) {
+            drawing = false;
+            return "";
+          }
+          const command = drawing ? "L" : "M";
+          drawing = true;
+          return command + xFor(item.position).toFixed(2) + " " + yFor(value).toFixed(2);
+        }).join(" ");
+      };
+      const articlePath = pathFor("articles", articleY);
+      const tickerPath = pathFor("tickers", tickerY);
+      const points = populated.map((item) => {
+        const tooltip = (item.label || "Period") + ": " + Number(item.articles || 0) + " articles, " + Number(item.tickers || 0) + " ticker calls" + (item.partial ? " (completed hours only)" : "");
+        return '<circle cx="' + xFor(item.position).toFixed(2) + '" cy="' + articleY(item.articles).toFixed(2) + '" r="3" fill="var(--blue)"><title>' + escapeHtml(tooltip) + '</title></circle>' +
+          '<circle cx="' + xFor(item.position).toFixed(2) + '" cy="' + tickerY(item.tickers).toFixed(2) + '" r="3" fill="var(--green)"><title>' + escapeHtml(tooltip) + '</title></circle>';
+      }).join("");
+
+      sourceActivityChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Articles and ticker calls acquired over time">' +
+        separatorBands + grid + ticks +
+        '<text x="8" y="20" fill="var(--blue)" font-size="10">Articles</text>' +
+        '<text x="' + (width - 8) + '" y="20" fill="var(--green)" font-size="10" text-anchor="end">Ticker calls</text>' +
+        '<line x1="' + pad.left + '" y1="24" x2="' + (pad.left + 22) + '" y2="24" stroke="var(--blue)" stroke-width="3"></line><text x="' + (pad.left + 29) + '" y="28" fill="var(--text-secondary)" font-size="11">Articles retrieved</text>' +
+        '<line x1="' + (pad.left + 150) + '" y1="24" x2="' + (pad.left + 172) + '" y2="24" stroke="var(--green)" stroke-width="3"></line><text x="' + (pad.left + 179) + '" y="28" fill="var(--text-secondary)" font-size="11">Ticker calls</text>' +
+        (articlePath ? '<path d="' + articlePath + '" fill="none" stroke="var(--blue)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' : '') +
+        (tickerPath ? '<path d="' + tickerPath + '" fill="none" stroke="var(--green)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' : '') + points +
+        '<text x="' + (pad.left + plotWidth / 2) + '" y="310" fill="var(--muted)" font-size="10" text-anchor="middle">' + escapeHtml(payload.axis_label || "Brisbane time") + '</text>' +
+      '</svg>';
+    }
+
+    function formatAxisCount(value) {
+      if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + "k";
+      if (value >= 10) return String(Math.round(value));
+      return Number(value).toFixed(value < 2 ? 1 : 0);
+    }
+
+    function sourceMovementCell(value, samples, direction) {
+      const count = Number(samples || 0);
+      const movement = Number(value);
+      if (!count || !Number.isFinite(movement)) {
+        return pill("n/a", "", "No accuracy-eligible " + direction + " interval samples have been recorded for this source.");
+      }
+      const favorable = direction === "bullish" ? movement > 0 : movement < 0;
+      const cls = movement === 0 ? "amber" : favorable ? "green" : "red";
+      return pill(
+        signedPct(movement) + " (" + count + ")",
+        cls,
+        "Average ticker movement across " + count + " recorded " + direction + " interval sample" + (count === 1 ? "" : "s") + " that count toward prediction accuracy. Opposite-call-truncated intervals are excluded.",
+      );
+    }
+
+    function renderResults(results) {
+      resultsMeta.textContent = results.length + " rows";
+      if (!results.length) {
+        resultsEl.innerHTML = '<div class="empty">No event summaries yet.</div>';
+        return;
+      }
+      resultsEl.innerHTML = results.map((item) => {
+        const parsed = parseMemoJson(item.memo || "");
+        const eventTitle = parsed.event_title || item.event_type || item.title || "Untitled event";
+        const blurb = parsed.event_blurb || item.summary || "";
+        const impactDetails = normalizeImpactDetailsClient(parsed.impact_details);
+        const score = Number(item.sentiment_score || 0);
+        const scoreClass = score > 0.1 ? "green" : score < -0.1 ? "red" : "amber";
+        const hasStructuredImpacts = Array.isArray(parsed.impact_details);
+        const impactRows = impactDetails.length ? impactDetails.map((impact) => [
+          pill(impact.kind || "impact", "blue", "Impact category identified by Codex after reasoning through the event's causal path."),
+          escapeHtml(impact.name || impact.symbol || "Unknown"),
+          escapeHtml(impact.symbol || "private/n/a"),
+          pill(impact.direction || "unknown", directionClass(impact.direction), "Speculated stock value direction from this event: bullish, bearish, mixed, neutral, or unknown."),
+          pill(formatNumber(impact.confidence), "green", "Confidence for this specific impacted entity, based on how direct and explicit the causal path is."),
+          escapeHtml(impact.reason || ""),
+        ]) : hasStructuredImpacts ? [[
+          pill("no material impact", "", "Codex completed a structured analysis but found no defensible public-ticker impact."),
+          escapeHtml(parseArray(item.companies).join(", ") || "No directly affected public company"),
+          "n/a",
+          pill("neutral", "", "No bullish or bearish public-ticker prediction was recorded."),
+          pill(formatNumber(item.confidence), "green", "Confidence in the completed event analysis."),
+          escapeHtml(item.summary || parsed.summary || "No concrete public-ticker causal path was identified."),
+        ]] : [[
+          pill("legacy", "amber", "This older result predates structured impact rationales."),
+          escapeHtml(parseArray(item.companies).join(", ") || "See memo"),
+          escapeHtml(parseArray(item.symbols).join(", ") || "n/a"),
+          pill(score > 0.1 ? "bullish" : score < -0.1 ? "bearish" : "mixed", scoreClass, "Legacy direction inferred from article-level score."),
+          pill(formatNumber(item.confidence), "green", "Article-level confidence from the legacy analysis."),
+          escapeHtml(item.summary || "Open memo for details."),
+        ]];
+        return '<article class="result">' +
+          '<a class="result-title" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(eventTitle) + '</a>' +
+          '<div class="row">' +
+            pill(item.source_name || "Source", "blue", "News source that originally published or syndicated this article.") +
+            pill("published " + formatDate(item.published_at || item.created_at), "blue", "Article publication time used as the baseline for ticker price comparisons.") +
+            pill(item.event_type || "event_unknown", "", "Codex-classified event category used to group comparable market perception events.") +
+            pill("score " + formatNumber(score), scoreClass, "Sentiment score from -1 to 1 estimated by Codex from the article's expected public/investor perception impact; negative means bearish, positive means bullish.") +
+            pill(item.impact_horizon || "unknown", "amber", "Expected duration of market perception impact: immediate, short, medium, long, or unknown.") +
+            pill("conf " + formatNumber(item.confidence), "green", "Codex confidence from 0 to 1 based on source specificity, clarity of affected companies/sectors, and how directly the article maps to known market patterns.") +
+          '</div>' +
+          '<p class="summary">' + escapeHtml(blurb) + '</p>' +
+          table(["Type", "Impacted", "Ticker", "Direction", "Conf", "Why"], impactRows) +
+          renderPriceImpacts(item.price_impacts || []) +
+          '<details><summary>Source article</summary><p class="summary"><a href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || "Article") + '</a></p></details>' +
+          '<details><summary>Memo</summary><pre>' + escapeHtml(item.memo || "") + '</pre></details>' +
+        '</article>';
+      }).join("");
+    }
+
+    async function startModelExperiment() {
+      setBusy(true);
+      modelExperimentStatusEl.textContent = "Creating the frozen 1,000-article cohort...";
+      try {
+        await api("/api/model-experiments/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email_to: modelExperimentEmailEl.value.trim() || null }),
+        });
+        await loadAll();
+      } catch (error) {
+        modelExperimentStatusEl.textContent = error.message || String(error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function saveModelExperimentEmail() {
+      if (!modelExperimentId) {
+        modelExperimentStatusEl.textContent = "Start an experiment before saving its report email.";
+        return;
+      }
+      setBusy(true);
+      try {
+        const payload = await api("/api/model-experiments/email", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ experiment_id: modelExperimentId, email_to: modelExperimentEmailEl.value.trim() }),
+        });
+        renderModelExperiment(payload);
+      } catch (error) {
+        modelExperimentStatusEl.textContent = error.message || String(error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function testModelExperimentEmail() {
+      if (!modelExperimentId) {
+        modelExperimentStatusEl.textContent = "Start an experiment before testing report delivery.";
+        return;
+      }
+      setBusy(true);
+      modelExperimentStatusEl.textContent = "Sending a test email...";
+      try {
+        const payload = await api("/api/model-experiments/email/test", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ experiment_id: modelExperimentId, email_to: modelExperimentEmailEl.value.trim() }),
+        });
+        modelExperimentStatusEl.textContent = "Test email accepted by " + payload.provider + (payload.message_id ? " (" + payload.message_id + ")" : "") + ".";
+      } catch (error) {
+        modelExperimentStatusEl.textContent = error.message || String(error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function renderModelExperiment(payload) {
+      const experiment = payload.experiment;
+      if (!experiment) {
+        modelExperimentId = null;
+        modelExperimentMetaEl.textContent = "Not started";
+        modelExperimentStatusEl.textContent = "No experiment has been created.";
+        modelExperimentProgressEl.innerHTML = "";
+        modelExperimentReportEl.classList.add("hidden");
+        startModelExperimentBtn.disabled = false;
+        return;
+      }
+      modelExperimentId = experiment.id;
+      if (experiment.email_to && !modelExperimentEmailEl.value) modelExperimentEmailEl.value = experiment.email_to;
+      modelExperimentMetaEl.textContent = String(experiment.status || "unknown") + " - phase " + String(experiment.phase || 1);
+      modelExperimentStatusEl.textContent = experiment.status === "completed"
+        ? "Completed " + formatDate(experiment.completed_at) + ". Email: " + String(experiment.email_status || "not configured") + (experiment.email_error ? " (" + experiment.email_error + ")" : "")
+        : "Experiment " + experiment.id + " is processing " + (Number(experiment.phase) === 1 ? "Luna medium" : "Terra low") + ". Production articles retain queue priority.";
+      const grouped = new Map();
+      for (const row of payload.progress || []) {
+        const key = String(row.phase) + ":" + row.model + ":" + row.reasoning_effort;
+        if (!grouped.has(key)) grouped.set(key, { phase: row.phase, model: row.model, effort: row.reasoning_effort, statuses: {}, duration: null });
+        const group = grouped.get(key);
+        group.statuses[row.status] = Number(row.count || 0);
+        if (row.average_duration_seconds !== null) group.duration = Number(row.average_duration_seconds);
+      }
+      modelExperimentProgressEl.innerHTML = grouped.size ? table(
+        ["Phase", "Model", "Pending", "Active", "Succeeded", "Failed", "Avg time"],
+        [...grouped.values()].map((group) => [
+          escapeHtml(String(group.phase)),
+          escapeHtml(group.model + " / " + group.effort),
+          escapeHtml(String(group.statuses.pending || 0)),
+          escapeHtml(String((group.statuses.queued || 0) + (group.statuses.running || 0))),
+          escapeHtml(String(group.statuses.succeeded || 0)),
+          escapeHtml(String(group.statuses.failed || 0)),
+          escapeHtml(formatDuration(group.duration)),
+        ]),
+      ) : '<div class="empty">Preparing experiment jobs.</div>';
+      if (experiment.report_text) {
+        modelExperimentReportEl.textContent = experiment.report_text;
+        modelExperimentReportEl.classList.remove("hidden");
+      } else {
+        modelExperimentReportEl.classList.add("hidden");
+      }
+      startModelExperimentBtn.disabled = ["preparing", "running", "reporting"].includes(experiment.status);
+    }
+
+    function renderJobs(jobs) {
+      jobsMeta.textContent = jobs.length + " rows";
+      if (!jobs.length) {
+        jobsEl.innerHTML = '<div class="empty">No jobs.</div>';
+        return;
+      }
+      const renderedAt = Date.now();
+      jobsEl.innerHTML = table(["Status", "Worker", "Duration", "Post to prediction", "Attempts", "Article"], jobs.map((job) => {
+        const duration = job.elapsed_synthesis_seconds === null || job.elapsed_synthesis_seconds === undefined
+          ? Number.NaN
+          : Number(job.elapsed_synthesis_seconds);
+        const durationText = formatDuration(duration);
+        const durationHtml = job.status === "running" && Number.isFinite(duration)
+          ? '<span class="job-timing" data-job-timer data-job-id="' + escapeAttr(job.id) + '" data-running-job-timer data-base-seconds="' + escapeAttr(duration) + '" data-rendered-at="' + renderedAt + '">' + escapeHtml(durationText) + '</span>'
+          : '<span class="job-timing">' + escapeHtml(durationText) + '</span>';
+        return [
+        pill(job.status || "unknown", statusClass(job.status), "Current durable research job state in D1 and Cloudflare Queues."),
+        escapeHtml(job.status === "running" && Number.isInteger(Number(job.research_slot)) ? "#" + (Number(job.research_slot) + 1) : "n/a"),
+        durationHtml,
+        '<span class="job-timing" title="Elapsed time from the article publication timestamp to completion of its first-pass synthesis.">' + escapeHtml(formatDuration(job.prediction_delay_seconds)) + '</span>',
+        escapeHtml(String(job.attempts || 0)),
+        '<a class="truncate" href="' + escapeAttr(job.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(job.title || job.article_id || "Article") + '</a>',
+        ];
+      }));
+    }
+
+    function renderFailedJobs(jobs) {
+      if (!jobs.length) {
+        failedJobsEl.innerHTML = '<div class="empty">No archived failures.</div>';
+        return;
+      }
+      failedJobsEl.innerHTML = table(["Status", "Failed", "Attempts", "Reason", "Article"], jobs.map((job) => [
+        pill("failed", "red", "Research exhausted its automatic processing attempts and the article was archived."),
+        escapeHtml(formatDate(job.finished_at || job.queued_at)),
+        escapeHtml(String(job.attempts || 0)),
+        '<span style="white-space:normal;overflow-wrap:anywhere">' + escapeHtml(job.last_error || "No failure reason was recorded.") + '</span>',
+        '<a class="truncate" href="' + escapeAttr(job.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(job.title || job.article_id || "Article") + '</a>',
+      ]));
+    }
+
+    function updateRunningJobTimers() {
+      const now = Date.now();
+      for (const timer of document.querySelectorAll("[data-running-job-timer]")) {
+        const base = Number(timer.getAttribute("data-base-seconds"));
+        const renderedAt = Number(timer.getAttribute("data-rendered-at"));
+        if (!Number.isFinite(base) || !Number.isFinite(renderedAt)) continue;
+        timer.textContent = formatDuration(base + Math.max(0, Math.floor((now - renderedAt) / 1000)));
+      }
+    }
+
+    function syncRunningJobTimers(activeJobs) {
+      const activeById = new Map((activeJobs || []).map((job) => [String(job.id), job]));
+      const now = Date.now();
+      for (const timer of document.querySelectorAll("[data-job-timer]")) {
+        const active = activeById.get(timer.getAttribute("data-job-id") || "");
+        if (!active) {
+          timer.removeAttribute("data-running-job-timer");
+          timer.textContent = "complete; refresh";
+          continue;
+        }
+        const elapsed = Number(active.elapsed_synthesis_seconds);
+        if (!Number.isFinite(elapsed)) continue;
+        timer.setAttribute("data-running-job-timer", "");
+        timer.setAttribute("data-base-seconds", String(elapsed));
+        timer.setAttribute("data-rendered-at", String(now));
+        timer.textContent = formatDuration(elapsed);
+      }
+    }
+
+    function renderArticles(results) {
+      articlesMeta.textContent = results.length + " rows";
+      if (!results.length) {
+        articlesEl.innerHTML = '<div class="empty">No analyzed article impacts yet.</div>';
+        return;
+      }
+      articlesEl.innerHTML = table(["Published", "Article", "Tickers", "Score", "Conf"], results.map((item) => [
+        escapeHtml(formatDate(item.published_at || item.created_at)),
+        '<a class="truncate" href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(item.title || "Article") + '</a>',
+        renderImpactTickerPills(item),
+        pill(formatNumber(item.sentiment_score), Number(item.sentiment_score || 0) > 0.1 ? "green" : Number(item.sentiment_score || 0) < -0.1 ? "red" : "amber", "Article-level perception score used to record directional prediction outcomes."),
+        pill(formatNumber(item.confidence), "green", "Article-level confidence."),
+      ]));
+    }
+
+    function renderPredictions(payload) {
+      predictionSummaryData = payload.summary || [];
+      predictionCoverage = payload.coverage || {};
+      predictionDailySeries = payload.daily_series || [];
+      predictionDailyCoverage = payload.daily_coverage || {};
+      renderPredictionSummary(predictionSummaryData, predictionCoverage);
+      renderPredictionDailyChart();
+      renderPredictionOutcomeShell(false);
+      applyPredictionPage(payload, true);
+    }
+
+    function renderPredictionSummary(summary, coverage) {
+      const trackedPredictions = Number(coverage.predictions || 0);
+      const trackedArticles = Number(coverage.articles || 0);
+      const repairPending = Number(coverage.date_repair_pending || 0);
+      const dimensions = predictionSummaryDimensions(summary);
+      predictionSummaryMeta.textContent = dimensions.intervals.length + " intervals · " + trackedPredictions + " corrected ticker predictions across " + trackedArticles + " articles" + (repairPending ? " · " + repairPending + " analyses rebuilding dates" : "");
+      predictionSummaryEl.innerHTML = dimensions.intervals.length && dimensions.confidenceBins.length
+        ? '<div class="heatmap-stack">' +
+            renderConfidenceHeatmap(dimensions.intervals, "bullish", dimensions.confidenceBins) +
+            renderConfidenceHeatmap(dimensions.intervals, "bearish", dimensions.confidenceBins) +
+            '<div class="heatmap-legend" aria-label="Average movement colour legend">' +
+              heatmapLegendItem("heatmap-scale-wrong", "Strongest wrong-direction average") +
+              heatmapLegendItem("heatmap-scale-neutral", "0% average movement") +
+              heatmapLegendItem("heatmap-scale-correct", "Strongest correct-direction average") +
+              heatmapOutlierLegendItem() +
+              heatmapLegendItem("heatmap-empty", "No samples") +
+            '</div>' +
+          '</div>'
+        : '<div class="empty">No prediction intervals have elapsed yet.</div>';
+    }
+
+    function predictionSummaryDimensions(summary) {
+      const intervals = summary.filter((item) => ["bullish", "bearish"].some((direction) =>
+        Array.isArray(item[direction]) && item[direction].some((cell) => Number(cell && cell.samples || 0) > 0),
+      ));
+      const confidenceBins = Array.from({ length: 10 }, (_, index) => index).filter((index) =>
+        intervals.some((item) => ["bullish", "bearish"].some((direction) => Number(item[direction] && item[direction][index] && item[direction][index].samples || 0) > 0)),
+      );
+      return { intervals, confidenceBins };
+    }
+
+    function renderPredictionOutcomeShell(loading) {
+      if (predictionObserver) predictionObserver.disconnect();
+      predictionObserver = null;
+      predictionNextCursor = null;
+      predictionHasMore = false;
+      predictionLoadedCount = 0;
+      predictionTotal = 0;
+      predictionLastArticleKey = null;
+      predictionLoadedArticles.clear();
+      const headers = PREDICTION_OUTCOME_COLUMNS.map((column) => column.label).concat(PREDICTION_OUTCOME_INTERVALS);
+      const intervalColumns = PREDICTION_OUTCOME_INTERVALS.map((interval) => '<col data-prediction-interval="' + interval + '" style="width:150px">').join("");
+      const colgroup = '<colgroup>' + PREDICTION_OUTCOME_COLUMNS.map((column) => '<col style="width:' + column.width + 'px">').join("") + intervalColumns + '</colgroup>';
+      const header = '<thead><tr>' + headers.map((item) => '<th>' + escapeHtml(item) + '</th>').join("") + '</tr></thead>';
+      const initialTableWidth = PREDICTION_OUTCOME_COLUMNS.reduce((sum, column) => sum + column.width, 0) + PREDICTION_OUTCOME_INTERVALS.length * 150;
+      predictionsEl.innerHTML = predictionFilterBarHtml() +
+        '<div class="empty hidden" id="prediction-list-empty">No predictions match these filters.</div>' +
+        '<div class="prediction-sticky-header hidden" id="prediction-sticky-header"><table class="prediction-outcomes-table" id="prediction-sticky-table" style="width:' + initialTableWidth + 'px;min-width:' + initialTableWidth + 'px">' + colgroup + header + '</table></div>' +
+        '<div class="impact-wrap hidden" id="prediction-table-shell"><table class="prediction-outcomes-table" id="prediction-outcomes-table" style="width:' + initialTableWidth + 'px;min-width:' + initialTableWidth + 'px">' + colgroup + '<tbody id="prediction-outcomes-body"></tbody></table></div>' +
+        '<div class="prediction-page-loader' + (loading ? '' : ' hidden') + '" id="prediction-page-loader" aria-label="Loading prediction outcomes">' + predictionLoadingRows() + '</div>' +
+        '<div class="prediction-scroll-sentinel" id="prediction-scroll-sentinel" aria-hidden="true"></div>';
+      bindPredictionHeaderScroll();
+      updatePredictionFilterUi();
+    }
+
+    function bindPredictionHeaderScroll() {
+      const shell = document.getElementById("prediction-table-shell");
+      const stickyTable = document.getElementById("prediction-sticky-table");
+      if (!shell || !stickyTable) return;
+      const sync = () => {
+        stickyTable.style.transform = "translateX(-" + shell.scrollLeft + "px)";
+      };
+      shell.addEventListener("scroll", sync, { passive: true });
+      sync();
+    }
+
+    function predictionFilterBarHtml() {
+      const confidenceOptions = ['<option value="all">All confidence</option>'].concat(Array.from({ length: 10 }, (_, index) => '<option value="' + index + '">' + (index * 10) + '-' + ((index + 1) * 10) + '%</option>')).join("");
+      const sortOptions = [
+        ["newest", "Newest calls"],
+        ["oldest", "Oldest calls"],
+        ["current_desc", "Current movement: high to low"],
+        ["current_asc", "Current movement: low to high"],
+        ["peak_desc", "Peak movement: high to low"],
+        ["peak_asc", "Peak movement: low to high"],
+      ].map((option) => '<option value="' + option[0] + '">' + option[1] + '</option>').join("");
+      return '<div class="prediction-filterbar">' +
+        '<div class="prediction-filter-group"><span class="prediction-filter-label">Direction</span><div class="prediction-direction-control" role="group" aria-label="Prediction direction">' +
+          '<button class="prediction-direction-button" type="button" data-outcome-direction="all">All</button>' +
+          '<button class="prediction-direction-button" type="button" data-outcome-direction="bullish">Bullish</button>' +
+          '<button class="prediction-direction-button" type="button" data-outcome-direction="bearish">Bearish</button>' +
+        '</div></div>' +
+        '<label class="prediction-filter-group"><span class="prediction-filter-label">Confidence</span><select class="prediction-confidence-select" id="prediction-confidence-filter">' + confidenceOptions + '</select></label>' +
+        '<label class="prediction-filter-group"><span class="prediction-filter-label">Sort</span><select class="prediction-sort-select" id="prediction-sort" title="Peak movement is the signed daily-sample movement furthest from the baseline price.">' + sortOptions + '</select></label>' +
+        '<button class="btn" type="button" data-reset-prediction-filters>Reset filters</button>' +
+        '<div class="prediction-filter-status" id="prediction-filter-status">Loading outcomes</div>' +
+      '</div>';
+    }
+
+    function applyPredictionPage(payload, reset) {
+      if (reset) {
+        predictionLoadedCount = 0;
+        predictionLastArticleKey = null;
+        predictionLoadedArticles.clear();
+        const body = document.getElementById("prediction-outcomes-body");
+        if (body) body.innerHTML = "";
+      }
+      const outcomes = payload.outcomes || [];
+      appendPredictionOutcomes(outcomes);
+      predictionNextCursor = payload.next_cursor || null;
+      predictionHasMore = Boolean(payload.has_more && predictionNextCursor);
+      predictionTotal = Number(payload.total || 0);
+      predictionLoadedCount += outcomes.length;
+
+      const tableShell = document.getElementById("prediction-table-shell");
+      const stickyHeader = document.getElementById("prediction-sticky-header");
+      const empty = document.getElementById("prediction-list-empty");
+      if (tableShell) tableShell.classList.toggle("hidden", predictionLoadedCount === 0);
+      if (stickyHeader) stickyHeader.classList.toggle("hidden", predictionLoadedCount === 0);
+      if (empty) empty.classList.toggle("hidden", predictionLoadedCount !== 0 || predictionLoading);
+      updatePredictionMeta();
+      setPredictionPageLoading(false);
+    }
+
+    function appendPredictionOutcomes(outcomes) {
+      const body = document.getElementById("prediction-outcomes-body");
+      if (!body || !outcomes.length) return;
+      const columnCount = PREDICTION_OUTCOME_COLUMNS.length + PREDICTION_OUTCOME_INTERVALS.length;
+      let html = "";
+      for (const item of outcomes) {
+        const articleKey = item.article_id || item.result_id || [item.title, item.url, item.prediction_at].join("|");
+        predictionLoadedArticles.add(articleKey);
+        if (articleKey !== predictionLastArticleKey) {
+          const title = decodeHtmlEntities(item.title || item.article_id || "Prediction");
+          html += '<tr class="prediction-article-row"><th colspan="' + columnCount + '" scope="rowgroup"><a href="' + escapeAttr(item.url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(title) + '</a></th></tr>';
+        }
+        const cells = [
+          escapeHtml(formatDate(item.prediction_at)),
+          escapeHtml(item.symbol || ""),
+          predictionCallCell(item),
+          pill(item.direction || "unknown", directionClass(item.direction), item.rationale || "Predicted direction for this ticker."),
+          pill(formatNumber(item.score), Number(item.score || 0) > 0 ? "green" : "red", "Article prediction score used when the ticker outcome was recorded."),
+          pill(formatNumber(item.confidence), "green", "Prediction confidence from the analyzed impact detail or article-level result."),
+          priceCell(item.baseline_price, item.baseline_at, "Closest available ticker price at the article publication time."),
+          predictionCurrentPriceCell(item),
+          predictionDailyGrid(item),
+          ...PREDICTION_OUTCOME_INTERVALS.map((interval) => predictionPointPill(item.intervals && item.intervals[interval], item.direction, interval)),
+        ];
+        html += '<tr class="prediction-data-row">' + cells.map((cell) => '<td>' + cell + '</td>').join("") + '</tr>';
+        predictionLastArticleKey = articleKey;
+      }
+      body.insertAdjacentHTML("beforeend", html);
+      resizePredictionOutcomeColumns(PREDICTION_OUTCOME_INTERVALS);
+      scrollPredictionDailyGridsToLatest();
+    }
+
+    function resizePredictionOutcomeColumns(intervals) {
+      const bodyTable = document.getElementById("prediction-outcomes-table");
+      const stickyTable = document.getElementById("prediction-sticky-table");
+      if (!bodyTable || !stickyTable) return;
+      const fixedWidth = PREDICTION_OUTCOME_COLUMNS.reduce((sum, column) => sum + column.width, 0);
+      let intervalWidthTotal = 0;
+      intervals.forEach((interval, intervalIndex) => {
+        const cellIndex = PREDICTION_OUTCOME_COLUMNS.length + intervalIndex;
+        let width = 150;
+        for (const row of bodyTable.querySelectorAll("tr.prediction-data-row")) {
+          const cell = row.children[cellIndex];
+          const content = cell && cell.firstElementChild;
+          if (content) width = Math.max(width, Math.ceil(content.scrollWidth) + 26);
+        }
+        intervalWidthTotal += width;
+        for (const column of predictionsEl.querySelectorAll('col[data-prediction-interval="' + interval + '"]')) {
+          column.style.width = width + "px";
+        }
+      });
+      const tableWidth = fixedWidth + intervalWidthTotal;
+      for (const table of [bodyTable, stickyTable]) {
+        table.style.width = tableWidth + "px";
+        table.style.minWidth = tableWidth + "px";
+      }
+    }
+
+    function updatePredictionMeta() {
+      const filterStatus = document.getElementById("prediction-filter-status");
+      const loadedText = predictionLoadedCount + " of " + predictionTotal + " predictions";
+      if (filterStatus) filterStatus.textContent = loadedText;
+      predictionsMeta.textContent = loadedText + " across " + predictionLoadedArticles.size + " loaded articles";
+    }
+
+    function setPredictionFilters(direction, confidenceBin) {
+      const normalizedDirection = direction === "bullish" || direction === "bearish" ? direction : "all";
+      const normalizedBin = Number.isInteger(confidenceBin) && confidenceBin >= 0 && confidenceBin <= 9 ? confidenceBin : null;
+      if (predictionFilters.direction === normalizedDirection && predictionFilters.confidenceBin === normalizedBin) return;
+      predictionFilters.direction = normalizedDirection;
+      predictionFilters.confidenceBin = normalizedBin;
+      renderPredictionSummary(predictionSummaryData, predictionCoverage);
+      renderPredictionDailyChart();
+      reloadPredictionOutcomes();
+    }
+
+    function setPredictionSort(sort) {
+      const allowed = ["newest", "oldest", "current_desc", "current_asc", "peak_desc", "peak_asc"];
+      const normalized = allowed.includes(sort) ? sort : "newest";
+      if (predictionFilters.sort === normalized) return;
+      predictionFilters.sort = normalized;
+      reloadPredictionOutcomes();
+    }
+
+    function updatePredictionFilterUi() {
+      for (const button of predictionsEl.querySelectorAll("[data-outcome-direction]")) {
+        button.classList.toggle("active", button.getAttribute("data-outcome-direction") === predictionFilters.direction);
+      }
+      const select = document.getElementById("prediction-confidence-filter");
+      if (select) select.value = predictionFilters.confidenceBin === null ? "all" : String(predictionFilters.confidenceBin);
+      const sortSelect = document.getElementById("prediction-sort");
+      if (sortSelect) sortSelect.value = predictionFilters.sort;
+      for (const button of predictionSummaryEl.querySelectorAll("[data-heatmap-direction]")) {
+        const confidenceBin = button.getAttribute("data-confidence-bin");
+        const normalizedBin = confidenceBin === "all" ? null : Number(confidenceBin);
+        const active = button.getAttribute("data-heatmap-direction") === predictionFilters.direction && normalizedBin === predictionFilters.confidenceBin;
+        button.closest("td")?.classList.toggle("active-filter", active);
+      }
+    }
+
+    function predictionRequestPath(endpoint, cursor) {
+      const params = new URLSearchParams({ limit: String(PREDICTION_PAGE_SIZE) });
+      if (predictionFilters.direction !== "all") params.set("direction", predictionFilters.direction);
+      if (predictionFilters.confidenceBin !== null) {
+        params.set("confidence_min", String(predictionFilters.confidenceBin * 10));
+        params.set("confidence_max", String((predictionFilters.confidenceBin + 1) * 10));
+      }
+      params.set("sort", predictionFilters.sort);
+      if (cursor) params.set("cursor", cursor);
+      return endpoint + "?" + params.toString();
+    }
+
+    function observePredictionSentinel() {
+      if (predictionObserver) predictionObserver.disconnect();
+      predictionObserver = null;
+      if (snapshotMode || !predictionHasMore || !("IntersectionObserver" in window)) return;
+      const sentinel = document.getElementById("prediction-scroll-sentinel");
+      if (!sentinel) return;
+      predictionObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMorePredictions();
+      }, { rootMargin: "600px 0px" });
+      predictionObserver.observe(sentinel);
+    }
+
+    function setPredictionPageLoading(loading) {
+      document.getElementById("prediction-page-loader")?.classList.toggle("hidden", !loading);
+      if (!loading) document.getElementById("prediction-list-empty")?.classList.toggle("hidden", predictionLoadedCount !== 0);
+    }
+
+    function showPredictionPageError(error) {
+      predictionHasMore = false;
+      const loader = document.getElementById("prediction-page-loader");
+      if (loader) {
+        loader.classList.remove("hidden");
+        loader.innerHTML = '<div class="error">Additional outcomes could not be loaded: ' + escapeHtml(error.message || String(error)) + '</div>';
+      }
+    }
+
+    function renderConfidenceHeatmap(summary, direction, confidenceBins) {
+      const bands = confidenceBins.map((index) => ({ index, min: index * 10, max: (index + 1) * 10 }));
+      const heading = direction === "bullish" ? "Bullish predictions" : "Bearish predictions";
+      const headers = '<th scope="col">Overall movement</th><th scope="col">Interval</th>' + bands.map((band) => '<th scope="col">' + band.min + '-' + band.max + '</th>').join("");
+      const scale = heatmapMovementScale(summary, direction, confidenceBins);
+      const rows = summary.map((item) => {
+        const cells = Array.isArray(item[direction]) ? item[direction] : [];
+        const overall = aggregateHeatmapCells(cells);
+        return '<tr>' + renderHeatmapCell(overall, direction, item.interval, null, scale) + '<th scope="row">' + escapeHtml(item.interval || "") + '</th>' + bands.map((band) => renderHeatmapCell(cells[band.index], direction, item.interval, band, scale)).join("") + '</tr>';
+      }).join("");
+      const heatmapCellWidth = 160;
+      const minimumWidth = heatmapCellWidth + 76 + bands.length * heatmapCellWidth;
+      return '<section class="heatmap-section" aria-label="' + escapeAttr(heading + " accuracy by confidence and interval") + '">' +
+        '<div class="heatmap-heading"><div class="heatmap-title">' + heading + '</div><div class="heatmap-axis-label">Prediction confidence (%)</div></div>' +
+        '<div class="heatmap-scroll"><table class="confidence-heatmap" style="--heatmap-min-width:' + minimumWidth + 'px"><thead><tr>' + headers + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '</section>';
+    }
+
+    function aggregateHeatmapCells(cells) {
+      const populated = cells.filter((cell) => Number(cell && cell.samples || 0) > 0);
+      const samples = populated.reduce((sum, cell) => sum + Number(cell.samples || 0), 0);
+      if (!samples) return null;
+      const accurate = populated.reduce((sum, cell) => sum + Number(cell.accuracy_pct || 0) * Number(cell.samples || 0) / 100, 0);
+      const movement = populated.reduce((sum, cell) => sum + Number(cell.average_movement_pct || 0) * Number(cell.samples || 0), 0);
+      return {
+        samples,
+        accuracy_pct: accurate / samples * 100,
+        average_movement_pct: movement / samples,
+      };
+    }
+
+    function predictionDailyGroup(direction, confidenceBin) {
+      const grouped = new Map();
+      for (const row of predictionDailySeries) {
+        if (row.direction !== direction) continue;
+        if (confidenceBin !== null && Number(row.confidence_bin) !== confidenceBin) continue;
+        const day = Number(row.day_index);
+        const samples = Number(row.samples || 0);
+        const movement = Number(row.average_movement_pct);
+        if (!Number.isFinite(day) || !samples || !Number.isFinite(movement)) continue;
+        const current = grouped.get(day) || { day, samples: 0, weightedMovement: 0 };
+        current.samples += samples;
+        current.weightedMovement += movement * samples;
+        grouped.set(day, current);
+      }
+      return Array.from(grouped.values())
+        .map((item) => ({ day: item.day, samples: item.samples, movement: item.weightedMovement / item.samples }))
+        .sort((a, b) => a.day - b.day);
+    }
+
+    function renderPredictionDailyChart() {
+      const dailyPredictions = Number(predictionDailyCoverage.daily_predictions || 0);
+      const eligiblePredictions = Number(predictionDailyCoverage.eligible_predictions || 0);
+      const coverageText = dailyPredictions + " of " + eligiblePredictions + " predictions with daily prices" + (dailyPredictions < eligiblePredictions ? " (backfilling)" : "");
+      const confidenceBin = predictionFilters.confidenceBin;
+      const selectedDirection = predictionFilters.direction === "bullish" || predictionFilters.direction === "bearish" ? predictionFilters.direction : null;
+      const confidenceLabel = confidenceBin === null ? "all confidence" : (confidenceBin * 10) + "-" + ((confidenceBin + 1) * 10) + "% confidence";
+      const series = [];
+      let sampleSeries = null;
+
+      if (selectedDirection) {
+        const points = predictionDailyGroup(selectedDirection, confidenceBin);
+        series.push({
+          label: (selectedDirection === "bullish" ? "Bullish" : "Bearish") + " " + confidenceLabel,
+          direction: selectedDirection,
+          points,
+        });
+        sampleSeries = points;
+        predictionTrendMeta.textContent = series[0].label + " - " + coverageText;
+      } else {
+        series.push({ label: "Bullish " + confidenceLabel, direction: "bullish", points: predictionDailyGroup("bullish", confidenceBin) });
+        series.push({ label: "Bearish " + confidenceLabel, direction: "bearish", points: predictionDailyGroup("bearish", confidenceBin) });
+        predictionTrendMeta.textContent = "Bullish and bearish " + confidenceLabel + " - " + coverageText;
+      }
+
+      const populated = series.filter((item) => item.points.length);
+      if (!populated.length) {
+        predictionTrendChartEl.innerHTML = '<div class="empty">Daily price history is being collected. New and existing calls are backfilled automatically in the background.</div>';
+        return;
+      }
+
+      const width = 1000;
+      const height = 300;
+      const pad = { left: 64, right: sampleSeries ? 72 : 28, top: 42, bottom: 46 };
+      const plotWidth = width - pad.left - pad.right;
+      const plotHeight = height - pad.top - pad.bottom;
+      const observedMaxDay = Math.max(0, ...populated.flatMap((item) => item.points.map((point) => point.day)));
+      const xMax = observedMaxDay;
+      const movements = populated.flatMap((item) => item.points.map((point) => Number(point.movement)));
+      let movementMin = Math.min(0, ...movements);
+      let movementMax = Math.max(0, ...movements);
+      if (movementMin === movementMax) {
+        movementMin -= 1;
+        movementMax += 1;
+      } else {
+        const movementPad = (movementMax - movementMin) * 0.1;
+        movementMin -= movementPad;
+        movementMax += movementPad;
+      }
+      const movementSpan = movementMax - movementMin || 1;
+      const sampleMax = Math.max(1, ...(sampleSeries || []).map((point) => Number(point.samples || 0)));
+      const xFor = (day) => pad.left + (xMax > 0 ? (Number(day) / xMax) * plotWidth : 0);
+      const movementY = (movement) => pad.top + ((movementMax - Number(movement)) / movementSpan) * plotHeight;
+      const sampleY = (samples) => pad.top + ((sampleMax - Number(samples)) / sampleMax) * plotHeight;
+      const colors = { bullish: "var(--green)", bearish: "var(--red)" };
+
+      const movementGrid = Array.from({ length: 5 }, (_, index) => {
+        const ratio = index / 4;
+        const value = movementMax - ratio * movementSpan;
+        const y = pad.top + ratio * plotHeight;
+        return '<line x1="' + pad.left + '" y1="' + y.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y.toFixed(2) + '" stroke="var(--chart-grid)"></line>' +
+          '<text x="' + (pad.left - 9) + '" y="' + (y + 4).toFixed(2) + '" fill="var(--muted)" font-size="10" text-anchor="end">' + escapeHtml(signedPct(value)) + '</text>';
+      }).join("");
+      const zeroY = movementY(0);
+      const zeroLine = '<line class="prediction-zero-line" x1="' + pad.left + '" y1="' + zeroY.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + zeroY.toFixed(2) + '" stroke="var(--chart-zero)" stroke-width="1.5"></line>' +
+        '<text x="' + (pad.left + 7) + '" y="' + (zeroY - 6).toFixed(2) + '" fill="var(--text-secondary)" font-size="10" font-weight="700">0% movement</text>';
+
+      const tickDays = xMax > 0
+        ? Array.from(new Set(Array.from({ length: 6 }, (_, index) => Math.round((index / 5) * xMax))))
+        : [0];
+      const xTicks = tickDays.map((day) => {
+        const x = xFor(day);
+        return '<line x1="' + x.toFixed(2) + '" y1="' + pad.top + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="var(--chart-grid-subtle)"></line>' +
+          '<text x="' + x.toFixed(2) + '" y="' + (height - 22) + '" fill="var(--muted)" font-size="10" text-anchor="middle">Day ' + day + '</text>';
+      }).join("");
+
+      const movementLines = populated.map((item) => {
+        const path = item.points.map((point, index) => (index ? "L" : "M") + xFor(point.day).toFixed(2) + " " + movementY(point.movement).toFixed(2)).join(" ");
+        const points = item.points.map((point) => '<circle cx="' + xFor(point.day).toFixed(2) + '" cy="' + movementY(point.movement).toFixed(2) + '" r="3" fill="' + colors[item.direction] + '"><title>' + escapeHtml(item.label + ", day " + point.day + ": " + signedPct(point.movement) + " average movement from " + point.samples + " samples") + '</title></circle>').join("");
+        return '<path d="' + path + '" fill="none" stroke="' + colors[item.direction] + '" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' + points;
+      }).join("");
+
+      const sampleMarkup = sampleSeries ? (() => {
+        const samplePath = sampleSeries.map((point, index) => (index ? "L" : "M") + xFor(point.day).toFixed(2) + " " + sampleY(point.samples).toFixed(2)).join(" ");
+        const sampleTicks = [sampleMax, sampleMax / 2, 0].map((value) => {
+          const y = sampleY(value);
+          return '<text x="' + (width - pad.right + 9) + '" y="' + (y + 4).toFixed(2) + '" fill="var(--chart-sample-text)" font-size="10">' + Math.round(value) + '</text>';
+        }).join("");
+        const samplePoints = sampleSeries.map((point) => '<circle cx="' + xFor(point.day).toFixed(2) + '" cy="' + sampleY(point.samples).toFixed(2) + '" r="3" fill="var(--chart-sample)"><title>' + escapeHtml("Day " + point.day + ": " + point.samples + " samples") + '</title></circle>').join("");
+        return '<path d="' + samplePath + '" fill="none" stroke="var(--chart-sample)" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' + samplePoints + sampleTicks +
+          '<text x="' + (width - pad.right + 9) + '" y="20" fill="var(--chart-sample-text)" font-size="10">Samples</text>';
+      })() : "";
+
+      const legend = populated.map((item, index) => {
+        const x = pad.left + index * 170;
+        return '<line x1="' + x + '" y1="20" x2="' + (x + 22) + '" y2="20" stroke="' + colors[item.direction] + '" stroke-width="3"></line><text x="' + (x + 29) + '" y="24" fill="var(--text-secondary)" font-size="11">' + escapeHtml(item.label) + '</text>';
+      }).join("") + (sampleSeries ? '<line x1="' + (pad.left + 340) + '" y1="20" x2="' + (pad.left + 362) + '" y2="20" stroke="var(--chart-sample)" stroke-width="2" stroke-dasharray="6 5"></line><text x="' + (pad.left + 369) + '" y="24" fill="var(--muted)" font-size="11">Daily samples</text>' : "");
+
+      predictionTrendChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Average prediction movement by days since baseline">' +
+        '<text x="8" y="20" fill="var(--muted)" font-size="10">Average movement</text>' + legend + movementGrid + xTicks + zeroLine + movementLines + sampleMarkup +
+        '<text x="' + (pad.left + plotWidth / 2) + '" y="294" fill="var(--muted)" font-size="10" text-anchor="middle">Days since prediction baseline</text>' +
+      '</svg>';
+    }
+
+    function renderHeatmapCell(cell, direction, interval, band, scale) {
+      const samples = Number(cell && cell.samples || 0);
+      if (!samples) {
+        return '<td class="heatmap-cell heatmap-empty">n/a</td>';
+      }
+      const accuracy = Number(cell.accuracy_pct || 0);
+      const label = direction === "bullish" ? "Bullish" : "Bearish";
+      const averageMovement = Number(cell.average_movement_pct || 0);
+      const movement = signedPct(averageMovement);
+      const sampleConfidence = sampleSizeConfidence(samples);
+      const outlier = heatmapMovementIsOutlier(averageMovement, direction, scale);
+      const confidenceLabel = band ? band.min + "-" + band.max + "% confidence" : "all confidence levels";
+      const confidenceBin = band ? String(band.min / 10) : "all";
+      const accessibilityLabel = label + ", " + confidenceLabel + ", " + interval + ": " + (outlier ? "outlier, " : "") + "average movement " + movement + ", " + accuracy.toFixed(1) + "% accurate, " + samples + " samples, " + sampleConfidence.toFixed(0) + "% sample-size confidence.";
+      const active = predictionFilters.direction === direction && predictionFilters.confidenceBin === (band ? band.min / 10 : null);
+      return '<td class="heatmap-cell clickable' + (active ? ' active-filter' : '') + '" style="' + heatmapMovementStyle(averageMovement, direction, scale, outlier) + '">' +
+        '<button class="heatmap-filter-button" type="button" data-heatmap-direction="' + direction + '" data-confidence-bin="' + confidenceBin + '" aria-label="' + escapeAttr(accessibilityLabel + (band ? " Filter outcomes by this direction and confidence band." : " Filter outcomes by this direction across all confidence levels.")) + '">' +
+          (outlier ? '*' : '') + movement + ' <span class="heatmap-accuracy">(' + accuracy.toFixed(0) + '%)</span><sup class="heatmap-samples" title="' + escapeAttr(sampleSizeConfidenceTooltip(samples, sampleConfidence)) + '">' + samples + ' (' + sampleConfidence.toFixed(0) + '%)</sup>' +
+        '</button></td>';
+    }
+
+    function heatmapMovementScale(summary, direction, confidenceBins) {
+      const directionalValues = [];
+      for (const item of summary) {
+        const cells = Array.isArray(item[direction]) ? item[direction] : [];
+        for (const index of confidenceBins) {
+          const cell = cells[index];
+          if (!cell || Number(cell.samples || 0) <= 0) continue;
+          const movement = Number(cell.average_movement_pct || 0);
+          if (Number.isFinite(movement)) directionalValues.push(direction === "bullish" ? movement : -movement);
+        }
+      }
+      const sorted = directionalValues.slice().sort((a, b) => a - b);
+      const q1 = heatmapQuantile(sorted, 0.25);
+      const q3 = heatmapQuantile(sorted, 0.75);
+      const iqr = q3 - q1;
+      const lowerFence = iqr > 0 ? q1 - 1.5 * iqr : Number.NEGATIVE_INFINITY;
+      const upperFence = iqr > 0 ? q3 + 1.5 * iqr : Number.POSITIVE_INFINITY;
+      const inliers = directionalValues.filter((value) => value >= lowerFence && value <= upperFence);
+      const scaledValues = inliers.length ? inliers : directionalValues;
+      return {
+        correct: Math.max(0, ...scaledValues),
+        wrong: Math.max(0, ...scaledValues.map((value) => -value)),
+        lowerFence,
+        upperFence,
+      };
+    }
+
+    function heatmapQuantile(sortedValues, percentile) {
+      if (!sortedValues.length) return 0;
+      const position = (sortedValues.length - 1) * percentile;
+      const lower = Math.floor(position);
+      const fraction = position - lower;
+      return sortedValues[lower + 1] === undefined
+        ? sortedValues[lower]
+        : sortedValues[lower] + fraction * (sortedValues[lower + 1] - sortedValues[lower]);
+    }
+
+    function heatmapMovementIsOutlier(movement, direction, scale) {
+      const directionalMovement = direction === "bullish" ? movement : -movement;
+      return directionalMovement < scale.lowerFence || directionalMovement > scale.upperFence;
+    }
+
+    function heatmapMovementStyle(movement, direction, scale, outlier) {
+      const directionalMovement = direction === "bullish" ? movement : -movement;
+      if (outlier) {
+        return directionalMovement >= 0
+          ? "background:#14532d;color:#ffffff"
+          : "background:#7f1d1d;color:#ffffff";
+      }
+      const neutral = [250, 204, 21];
+      const target = directionalMovement >= 0 ? [22, 163, 74] : [220, 38, 38];
+      const extent = directionalMovement >= 0 ? scale.correct : scale.wrong;
+      const ratio = extent > 0 ? Math.min(1, Math.abs(directionalMovement) / extent) : 0;
+      const channels = neutral.map((channel, index) => Math.round(channel + (target[index] - channel) * ratio));
+      const foreground = ratio >= 0.62 ? "#ffffff" : "#3b2a08";
+      return "background:rgb(" + channels.join(",") + ");color:" + foreground;
+    }
+
+    function sampleSizeConfidence(samples) {
+      return Math.max(0, Math.min(100, (samples / (samples + 100)) * 100));
+    }
+
+    function sampleSizeConfidenceTooltip(samples, confidence) {
+      return "Sample-size confidence = n / (n + 100) × 100 = " + samples + " / (" + samples + " + 100) × 100 = " + confidence.toFixed(1) + "%. The 100-sample constant makes 100 samples equal 50% confidence. This measures sample volume only and does not correct for correlated calls.";
+    }
+
+    function heatmapLegendItem(cls, label) {
+      return '<span class="heatmap-legend-item"><span class="heatmap-swatch ' + cls + '"></span>' + escapeHtml(label) + '</span>';
+    }
+
+    function heatmapOutlierLegendItem() {
+      const hint = "Outliers use Tukey fences: values below Q1 − 1.5 × IQR or above Q3 + 1.5 × IQR. They are excluded from the normal colour scale and shown in darker red or green.";
+      return '<span class="heatmap-legend-item" title="' + escapeAttr(hint) + '"><span class="heatmap-outlier-swatches"><span class="heatmap-swatch heatmap-scale-outlier-wrong"></span><span class="heatmap-swatch heatmap-scale-outlier-correct"></span></span>* Outliers</span>';
+    }
+
+    function predictionPointPill(point, direction, label) {
+      if (!point || point.change_pct === null || point.change_pct === undefined) {
+        return pill("n/a", "", "No market price at or after the " + label + " post-prediction target is available yet.");
+      }
+      const change = Number(point.change_pct);
+      const accurate = direction === "bullish" ? change > 0 : direction === "bearish" ? change < 0 : false;
+      const counted = point.counts_toward_accuracy === true;
+      return pill(
+        formatMoney(point.price) + " " + signedPct(change),
+        (accurate ? "green" : "red") + (counted ? " accuracy-counted" : ""),
+        "Price sampled at " + formatDate(point.at) + ". " + (accurate ? "Accurate" : "Inaccurate") + " " + direction + " prediction at " + label + " after prediction time. " + (counted ? "Included in the accuracy chart as an independent observation." : "Excluded because the prediction confidence is missing or outside the supported range."),
+      );
+    }
+
+    function predictionCallCell(item) {
+      const suppliedDays = Number(item.days_since_call);
+      const predictionTime = new Date(item.prediction_at).getTime();
+      const calculatedDays = Number.isFinite(predictionTime) ? Math.max(0, Math.floor((Date.now() - predictionTime) / 86400000)) : 0;
+      const days = Number.isFinite(suppliedDays) ? Math.max(0, Math.floor(suppliedDays)) : calculatedDays;
+      const status = "Tracked";
+      const statusHint = "This call remains an independent observation and continues contributing whenever a tracked price interval is available.";
+      return '<span class="prediction-call-meta" title="' + escapeAttr(days + " days since the call. " + statusHint) + '">' +
+        '<span class="prediction-call-age">' + days + 'd</span>' +
+        '<span class="prediction-call-status active">' + status + '</span>' +
+      '</span>';
+    }
+
+    function predictionCurrentPriceCell(item) {
+      if (item.current_price === null || item.current_price === undefined || item.current_price === "") {
+        return '<span class="prediction-daily-empty">n/a</span>';
+      }
+      const price = Number(item.current_price);
+      if (!Number.isFinite(price)) return '<span class="prediction-daily-empty">n/a</span>';
+      const hasMovement = item.current_movement_pct !== null && item.current_movement_pct !== undefined && item.current_movement_pct !== "";
+      const movement = hasMovement ? Number(item.current_movement_pct) : NaN;
+      const movementClass = movement > 0 ? "positive" : movement < 0 ? "negative" : "";
+      const hasPeak = item.peak_movement_pct !== null && item.peak_movement_pct !== undefined && item.peak_movement_pct !== "";
+      const peak = hasPeak ? Number(item.peak_movement_pct) : NaN;
+      const hint = "Latest stored daily price sampled at " + formatDate(item.current_price_at) +
+        ". Current movement is measured from the baseline price." +
+        (Number.isFinite(peak) ? " Signed peak movement is " + signedPct(peak) + "." : "");
+      return '<span class="prediction-current-price" title="' + escapeAttr(hint) + '">' +
+        '<span>' + escapeHtml(formatMoney(price)) + '</span>' +
+        '<span class="prediction-current-move ' + movementClass + '">' + escapeHtml(hasMovement ? signedPct(movement) : "n/a") + '</span>' +
+      '</span>';
+    }
+
+    function predictionDailyMovementClass(value, direction) {
+      const movement = Number(value);
+      if (!Number.isFinite(movement) || movement === 0) return "prediction-daily-flat";
+      const magnitude = Math.abs(movement);
+      const level = magnitude < 1 ? 1 : magnitude < 2.5 ? 2 : magnitude < 5 ? 3 : magnitude < 10 ? 4 : 5;
+      const movementInPredictedDirection = direction === "bearish" ? -movement : movement;
+      return "prediction-daily-" + (movementInPredictedDirection > 0 ? "up-" : "down-") + level;
+    }
+
+    function predictionDailyGrid(item) {
+      const points = Array.isArray(item.daily_points)
+        ? item.daily_points.slice().sort((left, right) => Number(left.day_index || 0) - Number(right.day_index || 0))
+        : [];
+      if (points.length < 2) return '<span class="prediction-daily-empty" title="Daily price tracking begins after the first full day.">Awaiting day 1</span>';
+      let previous = points[0];
+      const cells = [];
+      for (const point of points.slice(1)) {
+        const price = Number(point.price);
+        const previousPrice = Number(previous.price);
+        const dailyMovement = Number.isFinite(price) && Number.isFinite(previousPrice) && previousPrice !== 0
+          ? ((price - previousPrice) / previousPrice) * 100
+          : 0;
+        const baselineMovement = Number(point.change_pct);
+        const hint = "Day " + Number(point.day_index || 0) + " at " + formatDate(point.at) +
+          ": " + formatMoney(price) + ", from baseline " + signedPct(baselineMovement) +
+          ", day-over-day " + signedPct(dailyMovement) + ".";
+        cells.push('<span class="prediction-daily-cell ' + predictionDailyMovementClass(baselineMovement, item.direction) + '" title="' + escapeAttr(hint) + '" aria-label="' + escapeAttr(hint) + '"></span>');
+        previous = point;
+      }
+      const colourMeaning = item.direction === "bearish"
+        ? "green is below baseline and red is above baseline"
+        : "green is above baseline and red is below baseline";
+      const label = cells.length + " tracked daily prices for a " + item.direction + " call. Each square is coloured by movement from the call baseline: " + colourMeaning + ", and darker colour means larger magnitude.";
+      return '<div class="prediction-daily-viewport" data-daily-grid-scroll title="Scroll horizontally for older daily prices.">' +
+        '<div class="prediction-daily-grid" role="img" aria-label="' + escapeAttr(label) + '">' + cells.join("") + '</div>' +
+      '</div>';
+    }
+
+    function scrollPredictionDailyGridsToLatest() {
+      for (const viewport of predictionsEl.querySelectorAll("[data-daily-grid-scroll]:not([data-scroll-initialized])")) {
+        viewport.setAttribute("data-scroll-initialized", "");
+        viewport.scrollLeft = viewport.scrollWidth;
+      }
+    }
+
+    function renderSimulation(simulation) {
+      activeSimulation = simulation;
+      portfolioValueEl.textContent = formatMoney(simulation.current_value);
+      portfolioCashEl.textContent = "Cash " + formatMoney(simulation.cash);
+      portfolioCashEl.title = "Uninvested cash remaining in the simulated account.";
+      portfolioInvestmentsEl.textContent = "Investments " + formatMoney(simulation.investment_value);
+      portfolioInvestmentsEl.title = "Current market value of simulated stock positions.";
+      renderFilteredChart();
+      const trades = simulation.trades || [];
+      tradesMeta.textContent = trades.length + " rows";
+      if (!trades.length) {
+        tradesEl.innerHTML = '<div class="empty">No simulated trades yet. Trades require analyzed articles with tickers, score magnitude above 0.15, and confidence above 0.35.</div>';
+        return;
+      }
+      tradesEl.innerHTML = table(["Action", "Ticker", "Price", "Shares", "Notional", "Time", "Article"], trades.map((trade) => [
+        pill(trade.action, trade.action === "BUY" ? "green" : "red", "The simulated action generated from sentiment score and confidence. Positive signals buy; negative signals sell existing holdings."),
+        escapeHtml(trade.symbol),
+        escapeHtml(formatMoney(trade.price)),
+        escapeHtml(formatNumber(trade.shares)),
+        escapeHtml(formatMoney(trade.notional)),
+        escapeHtml(formatDate(trade.action_at)),
+        '<a class="truncate" href="' + escapeAttr(trade.article_url || "#") + '" target="_blank" rel="noreferrer">' + escapeHtml(trade.article_title || "Article") + '</a>',
+      ]));
+    }
+
+    function renderEodSimulation(simulation) {
+      eodPortfolioValueEl.textContent = formatMoney(simulation.current_value);
+      const move = Number(simulation.movement_pct || 0);
+      eodPortfolioMoveEl.textContent = signedPct(move) + " all time";
+      eodPortfolioMoveEl.style.color = move >= 0 ? "var(--green)" : "var(--red)";
+      eodPortfolioCashEl.textContent = "Cash " + formatMoney(simulation.cash);
+      eodPortfolioInvestmentsEl.textContent = "Investments " + formatMoney(simulation.investment_value);
+      renderChart(simulation.points || [], eodPortfolioChartEl);
+
+      const reports = simulation.reports || [];
+      eodReportSelectEl.innerHTML = reports.length
+        ? reports.map((report, index) => '<option value="' + index + '">' + escapeHtml(report.report_date + " - " + (report.chosen || []).length + " chosen") + '</option>').join("")
+        : '<option value="">No EOD reports yet</option>';
+      function showReport() {
+        const report = reports[Number(eodReportSelectEl.value || 0)];
+        if (!report) {
+          eodReportEl.innerHTML = '<div class="empty">No EOD report has been generated yet. Reports are created once per day after the EOD window.</div>';
+          return;
+        }
+        const chosen = report.chosen || [];
+        eodReportEl.innerHTML = '<div class="summary"><strong>' + escapeHtml(report.report_date) + '</strong>: ' + escapeHtml(report.summary || "") + '</div>' +
+          table(["Ticker", "Score", "Conf", "Events", "Thesis"], chosen.map((item) => [
+            escapeHtml(item.symbol || ""),
+            pill(formatNumber(item.score), Number(item.score || 0) > 0 ? "green" : "red", "EOD confidence-weighted score."),
+            pill(formatNumber(item.confidence), "green", "EOD aggregate confidence."),
+            escapeHtml(String(item.event_count || 0)),
+            escapeHtml(item.thesis || ""),
+          ]));
+      }
+      eodReportSelectEl.onchange = showReport;
+      showReport();
+
+      const trades = simulation.trades || [];
+      eodTradesMeta.textContent = trades.length + " rows";
+      if (!trades.length) {
+        eodTradesEl.innerHTML = '<div class="empty">No EOD actions yet. The model waits for an end-of-day report and only acts on the 10 strongest confident movements.</div>';
+        return;
+      }
+      eodTradesEl.innerHTML = table(["Action", "Ticker", "Price", "Shares", "Notional", "Time", "Thesis"], trades.map((trade) => [
+        pill(trade.action, trade.action === "BUY" ? "green" : "red", "EOD model action from daily report."),
+        escapeHtml(trade.symbol),
+        escapeHtml(formatMoney(trade.price)),
+        escapeHtml(formatNumber(trade.shares)),
+        escapeHtml(formatMoney(trade.notional)),
+        escapeHtml(formatDate(trade.action_at)),
+        escapeHtml(trade.article_title || ""),
+      ]));
+    }
+
+    function renderRangeButtons() {
+      portfolioRangebarEl.innerHTML = chartRanges.map((range) =>
+        '<button class="range-btn' + (range.key === activeChartRange ? " active" : "") + '" type="button" data-range="' + escapeAttr(range.key) + '">' + escapeHtml(range.label) + '</button>'
+      ).join("");
+      for (const button of portfolioRangebarEl.querySelectorAll("button")) {
+        button.addEventListener("click", () => {
+          activeChartRange = button.getAttribute("data-range") || "all";
+          renderRangeButtons();
+          renderFilteredChart();
+        });
+      }
+    }
+
+    function rangeFilteredPoints(points) {
+      const clean = (points || []).filter((point) => Number.isFinite(Number(point.value)) && Number.isFinite(new Date(point.at).getTime()));
+      const range = chartRanges.find((item) => item.key === activeChartRange);
+      if (!range || !range.hours) return clean;
+      const cutoff = Date.now() - range.hours * 60 * 60 * 1000;
+      const filtered = clean.filter((point) => new Date(point.at).getTime() >= cutoff);
+      return filtered.length >= 2 ? filtered : clean.slice(-Math.min(clean.length, 2));
+    }
+
+    function renderFilteredChart() {
+      if (!activeSimulation) return;
+      const points = rangeFilteredPoints(activeSimulation.points || []);
+      const first = points[0];
+      const last = points[points.length - 1];
+      const move = first && last && Number(first.value) ? ((Number(last.value) - Number(first.value)) / Number(first.value)) * 100 : 0;
+      const range = chartRanges.find((item) => item.key === activeChartRange);
+      portfolioMoveEl.textContent = signedPct(move) + " " + ((range && range.key !== "all") ? "over " + range.label : "all time");
+      portfolioMoveEl.style.color = move >= 0 ? "var(--green)" : "var(--red)";
+      renderChart(points, portfolioChartEl);
+    }
+
+    function renderChart(points, targetEl = portfolioChartEl) {
+      const clean = points.filter((point) => Number.isFinite(Number(point.value)));
+      if (clean.length < 2) {
+        targetEl.innerHTML = '<div class="empty">Not enough simulation points for a chart.</div>';
+        return;
+      }
+      const width = 900;
+      const height = 240;
+      const pad = 34;
+      const values = clean.flatMap((point) => [Number(point.value), Number(point.cash || 0), Number(point.investments || 0)]);
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = max - min || 1;
+
+      function makePath(key) {
+        return clean.map((point, index) => {
+          const x = pad + (index / (clean.length - 1)) * (width - pad * 2);
+          const y = height - pad - ((Number(point[key] || 0) - min) / span) * (height - pad * 2);
+          return (index === 0 ? "M" : "L") + x.toFixed(2) + " " + y.toFixed(2);
+        }).join(" ");
+      }
+
+      const slices = clean.filter((_, index) => index === 0 || index === clean.length - 1 || index % Math.max(1, Math.floor(clean.length / 5)) === 0).map((point, index) => {
+        const originalIndex = clean.indexOf(point);
+        const x = pad + (originalIndex / (clean.length - 1)) * (width - pad * 2);
+        const labelY = index % 2 === 0 ? height - 8 : height - 20;
+        const label = formatShortDate(point.at);
+        return '<line x1="' + x.toFixed(2) + '" y1="' + pad + '" x2="' + x.toFixed(2) + '" y2="' + (height - pad) + '" stroke="var(--line)"></line>' +
+          '<text x="' + x.toFixed(2) + '" y="' + labelY + '" fill="var(--muted)" font-size="10" text-anchor="' + (originalIndex === 0 ? "start" : originalIndex === clean.length - 1 ? "end" : "middle") + '">' + escapeHtml(label) + '</text>';
+      }).join(" ");
+
+      targetEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Portfolio value movement">' +
+        slices +
+        '<path d="' + makePath("value") + '" fill="none" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        '<path d="' + makePath("cash") + '" fill="none" stroke="var(--blue)" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        '<path d="' + makePath("investments") + '" fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>' +
+        '<text x="' + (width - 190) + '" y="22" fill="var(--primary)" font-size="12">Total</text>' +
+        '<text x="' + (width - 135) + '" y="22" fill="var(--blue)" font-size="12">Cash</text>' +
+        '<text x="' + (width - 88) + '" y="22" fill="var(--green)" font-size="12">Invested</text>' +
+      '</svg>';
+    }
+
+    function table(headers, rows) {
+      return '<table><thead><tr>' + headers.map((header) => '<th>' + escapeHtml(header) + '</th>').join("") + '</tr></thead><tbody>' +
+        rows.map((row) => '<tr>' + row.map((cell) => '<td>' + cell + '</td>').join("") + '</tr>').join("") +
+        '</tbody></table>';
+    }
+
+    function renderPriceImpacts(impacts) {
+      if (!impacts || !impacts.length) return '<div class="summary">No ticker price history is available for this event yet.</div>';
+      const rows = impacts.map((impact) => [
+        escapeHtml(impact.symbol || ""),
+        escapeHtml(impact.company || ""),
+        priceCell(impact.baseline_price, impact.baseline_at, "Closest available release-time baseline price."),
+        impactPill(impact.intervals && impact.intervals["1h"], "1h"),
+        impactPill(impact.intervals && impact.intervals["6h"], "6h"),
+        impactPill(impact.intervals && impact.intervals["12h"], "12h"),
+        impactPill(impact.intervals && impact.intervals["1d"], "1d"),
+      ]);
+      return '<details open><summary>Ticker price movement from publication</summary>' +
+        table(["Ticker", "Company", "Release", "1h", "6h", "12h", "1d"], rows) +
+      '</details>';
+    }
+
+    function renderImpactTickerPills(item) {
+      const impacts = item.price_impacts || [];
+      if (impacts.length) {
+        return impacts.slice(0, 8).map((impact) => {
+          const detail = [impact.company, impact.direction, impact.rationale].filter(Boolean).join(" - ");
+          return pill(impact.symbol || "n/a", directionClass(impact.direction), detail || "Ticker with a stored article price impact.");
+        }).join("");
+      }
+      const parsed = parseMemoJson(item.memo || "");
+      return normalizeImpactDetailsClient(parsed.impact_details)
+        .filter((impact) => impact.symbol)
+        .slice(0, 8)
+        .map((impact) => pill(impact.symbol, directionClass(impact.direction), impact.reason || "Impacted ticker."))
+        .join("") || renderArrayPills(item.symbols, "blue", "Legacy ticker identified by the older article analysis.");
+    }
+
+    function renderArrayPills(value, cls, hint) {
+      let parsed = [];
+      try { parsed = Array.isArray(value) ? value : JSON.parse(value || "[]"); } catch { parsed = []; }
+      return parsed.slice(0, 12).map((item) => pill(String(item), cls, hint)).join("");
+    }
+
+    function parseArray(value) {
+      try {
+        const parsed = Array.isArray(value) ? value : JSON.parse(value || "[]");
+        return Array.isArray(parsed) ? parsed.map(String) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function parseMemoJson(value) {
+      const text = String(value || "");
+      const start = text.indexOf("{");
+      if (start < 0) return {};
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = start; index < text.length; index += 1) {
+        const char = text[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === "\\") escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') inString = true;
+        else if (char === "{") depth += 1;
+        else if (char === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            try { return JSON.parse(text.slice(start, index + 1)); } catch { return {}; }
+          }
+        }
+      }
+      return {};
+    }
+
+    function normalizeImpactDetailsClient(value) {
+      if (!Array.isArray(value)) return [];
+      return value.filter((item) => item && typeof item === "object").map((item) => ({
+        kind: String(item.kind || ""),
+        name: String(item.name || ""),
+        symbol: item.symbol ? String(item.symbol).toUpperCase() : "",
+        direction: String(item.direction || ""),
+        confidence: item.confidence,
+        reason: String(item.reason || ""),
+      })).filter((item) => item.name || item.symbol || item.reason);
+    }
+
+    function pill(text, cls, hint = "") {
+      return '<span class="pill ' + escapeAttr(cls || "") + '" title="' + escapeAttr(hint) + '">' + escapeHtml(text) + '</span>';
+    }
+
+    function priceCell(price, at, hint) {
+      const title = [hint, at ? "Sampled: " + formatDate(at) : ""].filter(Boolean).join(" ");
+      return '<span title="' + escapeAttr(title) + '">' + escapeHtml(formatMoney(price)) + '</span>';
+    }
+
+    function impactPill(point, label) {
+      if (!point || point.change_pct === null || point.change_pct === undefined) {
+        return pill("n/a", "", "No market price at or after the " + label + " post-publication target is available yet.");
+      }
+      const value = Number(point.change_pct);
+      const cls = value > 0 ? "green" : value < 0 ? "red" : "amber";
+      return pill(
+        formatMoney(point.price) + " " + signedPct(value),
+        cls,
+        "Price sampled at " + formatDate(point.at) + ". Change at " + label + " after publication versus the closest available market price at article publication time.",
+      );
+    }
+
+    function statusClass(status) {
+      if (status === "succeeded" || status === "analyzed") return "green";
+      if (status === "failed") return "red";
+      if (status === "running") return "blue";
+      return "amber";
+    }
+
+    function directionClass(direction) {
+      if (direction === "bullish") return "green";
+      if (direction === "bearish") return "red";
+      if (direction === "mixed") return "amber";
+      return "";
+    }
+
+    function formatNumber(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number.toFixed(2) : "n/a";
+    }
+
+    function dashboardDate(value) {
+      const text = String(value || "");
+      const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)
+        ? text.replace(" ", "T") + "Z"
+        : text;
+      return new Date(normalized);
+    }
+
+    function formatDate(value) {
+      if (!value) return "unknown";
+      const date = dashboardDate(value);
+      return Number.isFinite(date.getTime()) ? date.toLocaleString() : String(value);
+    }
+
+    function formatDuration(value) {
+      if (value === null || value === undefined || value === "") return "n/a";
+      const totalSeconds = Math.max(0, Math.round(Number(value)));
+      if (!Number.isFinite(totalSeconds)) return "n/a";
+      const days = Math.floor(totalSeconds / 86400);
+      const hours = Math.floor((totalSeconds % 86400) / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      if (days) return days + "d " + hours + "h";
+      if (hours) return hours + "h " + minutes + "m";
+      if (minutes) return minutes + "m " + seconds + "s";
+      return seconds + "s";
+    }
+
+    function formatShortDate(value) {
+      if (!value) return "";
+      const date = dashboardDate(value);
+      if (!Number.isFinite(date.getTime())) return String(value);
+      return date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function formatMoney(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }) : "n/a";
+    }
+
+    function signedPct(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "n/a";
+      return (number >= 0 ? "+" : "") + number.toFixed(2) + "%";
+    }
+
+    function showError(target, error, updateGlobalStatus = true) {
+      target.innerHTML = '<div class="error">' + escapeHtml(error.message || String(error)) + '</div>';
+      if (updateGlobalStatus) lastUpdated.textContent = "Load failed";
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[char]);
+    }
+
+    function decodeHtmlEntities(value) {
+      const textarea = document.createElement("textarea");
+      textarea.innerHTML = String(value ?? "");
+      return textarea.value;
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value).replace(/\n/g, " ");
+    }
+
+    setInterval(updateRunningJobTimers, 1000);
+    if (tokenInput.value.trim()) {
+      const requestedTab = new URLSearchParams(window.location.search).get("tab");
+      if (requestedTab === "sources" || requestedTab === "overview" || requestedTab === "settings") {
+        setTab(requestedTab);
+      }
+      startLiveStatusStream();
+      loadAll();
+    }
+  </script>
+</body>
+</html>
