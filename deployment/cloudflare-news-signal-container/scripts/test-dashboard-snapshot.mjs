@@ -100,4 +100,36 @@ response = await request("/api/internal/offsite-object", {
 });
 assert.equal(response.status, 200, await response.text());
 
+const backupBody = Buffer.from("off-site postgres fixture");
+const backupHash = createHash("sha256").update(backupBody).digest("hex");
+const backupKey = "_backups/postgres/20260819T000000Z/part-0000";
+response = await request("/api/internal/offsite-object", {
+  method: "POST",
+  headers: {
+    authorization: `Bearer ${offsiteToken}`,
+    "content-type": "application/octet-stream",
+    "x-object-key": backupKey,
+    "x-content-sha256": backupHash,
+  },
+  body: backupBody,
+});
+assert.equal(response.status, 200, await response.text());
+
+response = await request(`/api/internal/offsite-object?key=${encodeURIComponent(backupKey)}`, {
+  headers: { authorization: "Bearer wrong" },
+});
+assert.equal(response.status, 401, "off-site retrieval must reject the wrong credential");
+
+response = await request(`/api/internal/offsite-object?key=${encodeURIComponent(corpusKey)}`, {
+  headers: { authorization: `Bearer ${offsiteToken}` },
+});
+assert.equal(response.status, 400, "off-site retrieval must not expose article corpus objects");
+
+response = await request(`/api/internal/offsite-object?key=${encodeURIComponent(backupKey)}`, {
+  headers: { authorization: `Bearer ${offsiteToken}` },
+});
+if (response.status !== 200) assert.fail(await response.text());
+assert.equal(response.headers.get("x-content-sha256"), backupHash);
+assert.deepEqual(Buffer.from(await response.arrayBuffer()), backupBody);
+
 console.log("Dashboard snapshot gateway checks passed.");

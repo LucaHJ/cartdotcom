@@ -45,9 +45,20 @@ older than 30 days are pruned after a successful manifest upload. New local
 article corpus documents are also mirrored to the pre-existing private R2
 bucket. Local backup retention remains 14 days.
 
-The upload path is deployed but must pass a complete dump upload and restore
-test before production cutover. The off-site credential is dedicated to the
-strict internal object-upload route; it is not the Cloudflare deployment token.
+The off-site credential is dedicated to strict internal backup-object routes;
+it is not the Cloudflare deployment token. Uploads and retrievals are limited
+to validated object-key formats. Article objects can be uploaded but never read
+through this route. PostgreSQL backup chunks can be retrieved for recovery.
+
+Verify a complete off-site dump without changing the database:
+
+```bash
+/srv/platform/scripts/verify-postgres-offsite.sh YYYYMMDDTHHMMSSZ
+```
+
+The verifier downloads the manifest and all chunks, validates each SHA-256 and
+byte count, reconstructs and validates the complete dump, and passes it through
+`pg_restore --list`. Temporary files are removed after the test.
 
 The Cloudflare snapshot is a continuity view, not a database backup. It holds
 only the latest rendered API datasets and cannot resume ingestion, inference,

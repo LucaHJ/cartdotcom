@@ -102,6 +102,13 @@ Run an additional backup manually:
 /srv/platform/scripts/backup-postgres.sh
 ```
 
+The backup command uploads the verified dump to private R2 and confirms that
+its manifest can be retrieved. Periodically test the complete off-site copy:
+
+```bash
+/srv/platform/scripts/verify-postgres-offsite.sh YYYYMMDDTHHMMSSZ
+```
+
 Local backups protect against application mistakes, but not disk failure. Before
 production cutover, replicate them to an encrypted external disk or another
 machine and test a restore into a temporary database.

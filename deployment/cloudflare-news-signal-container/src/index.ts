@@ -4764,6 +4764,13 @@ function offsiteUploadAuthorized(request: Request, env: Env): boolean {
   return Boolean(env.OFFSITE_BACKUP_TOKEN) && authorization === `Bearer ${env.OFFSITE_BACKUP_TOKEN}`;
 }
 
+function permittedOffsiteObjectKey(objectKey: string): { corpus: boolean; postgres: boolean } {
+  return {
+    corpus: /^articles\/\d{4}\/\d{2}\/\d{2}\/[a-zA-Z0-9_-]+\/[a-f0-9]{64}\.json$/.test(objectKey),
+    postgres: /^_backups\/postgres\/\d{8}T\d{6}Z\/(part-\d{4}|manifest\.json)$/.test(objectKey),
+  };
+}
+
 async function sha256Bytes(value: ArrayBuffer): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", value);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -4789,8 +4796,7 @@ async function storeOffsiteObject(request: Request, env: Env): Promise<Response>
   if (!env.OFFSITE_BACKUP_TOKEN) return json({ error: "Off-site backup upload is not configured" }, { status: 503 });
   if (!offsiteUploadAuthorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
   const objectKey = (request.headers.get("x-object-key") || "").trim();
-  const corpusObject = /^articles\/\d{4}\/\d{2}\/\d{2}\/[a-zA-Z0-9_-]+\/[a-f0-9]{64}\.json$/.test(objectKey);
-  const postgresObject = /^_backups\/postgres\/\d{8}T\d{6}Z\/(part-\d{4}|manifest\.json)$/.test(objectKey);
+  const { corpus: corpusObject, postgres: postgresObject } = permittedOffsiteObjectKey(objectKey);
   if (!corpusObject && !postgresObject) return json({ error: "Object key is not permitted" }, { status: 400 });
   const maxBytes = corpusObject ? 4 * 1024 * 1024 : 36 * 1024 * 1024;
   const contentLength = Number(request.headers.get("content-length") || 0);
@@ -4812,6 +4818,24 @@ async function storeOffsiteObject(request: Request, env: Env): Promise<Response>
     ? await prunePostgresBackups(env)
     : 0;
   return json({ ok: true, object_key: objectKey, bytes: body.byteLength, content_sha256: actualHash, pruned });
+}
+
+async function retrieveOffsiteBackupObject(request: Request, env: Env): Promise<Response> {
+  if (!env.OFFSITE_BACKUP_TOKEN) return json({ error: "Off-site backup retrieval is not configured" }, { status: 503 });
+  if (!offsiteUploadAuthorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
+  const objectKey = (new URL(request.url).searchParams.get("key") || "").trim();
+  const { postgres } = permittedOffsiteObjectKey(objectKey);
+  if (!postgres) return json({ error: "Only PostgreSQL backup objects may be retrieved" }, { status: 400 });
+  const object = await env.ARTICLE_CORPUS.get(objectKey);
+  if (!object) return json({ error: "Backup object not found" }, { status: 404 });
+  const headers = new Headers({
+    "cache-control": "private, no-store",
+    "content-length": String(object.size),
+    "content-type": object.httpMetadata?.contentType || "application/octet-stream",
+    "x-content-sha256": object.customMetadata?.contentSha256 || "",
+    "x-object-key": objectKey,
+  });
+  return new Response(object.body, { status: 200, headers });
 }
 
 function validateDashboardSnapshot(value: unknown): DashboardSnapshot {
@@ -9540,6 +9564,10 @@ export default {
 
     if (url.pathname === "/api/internal/offsite-object" && request.method === "POST") {
       return storeOffsiteObject(request, env);
+    }
+
+    if (url.pathname === "/api/internal/offsite-object" && request.method === "GET") {
+      return retrieveOffsiteBackupObject(request, env);
     }
 
     if (url.pathname === "/api/snapshot/status" && request.method === "GET") {

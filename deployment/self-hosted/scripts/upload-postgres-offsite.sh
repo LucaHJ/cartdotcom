@@ -72,5 +72,19 @@ curl --fail --silent --show-error --retry 5 --retry-all-errors \
   --data-binary "@${manifest}" \
   "${upload_url}" >/dev/null
 
+retrieved_manifest="${work_dir}/manifest.retrieved.json"
+curl --fail --silent --show-error --retry 5 --retry-all-errors \
+  --max-time 60 \
+  --get \
+  --header "Authorization: Bearer ${token}" \
+  --data-urlencode "key=_backups/postgres/${timestamp}/manifest.json" \
+  --output "${retrieved_manifest}" \
+  "${upload_url}"
+retrieved_manifest_hash="$(sha256sum "${retrieved_manifest}" | awk '{print $1}')"
+if [[ "${retrieved_manifest_hash}" != "${manifest_hash}" ]]; then
+  echo "Retrieved off-site manifest hash does not match the uploaded manifest." >&2
+  exit 1
+fi
+
 touch "${dump_path}.offsite"
-echo "Uploaded verified PostgreSQL backup ${dump_name} in ${chunk_count} chunks."
+echo "Uploaded PostgreSQL backup ${dump_name} in ${chunk_count} chunks and verified manifest retrieval."
