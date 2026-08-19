@@ -11,6 +11,7 @@ const concurrency = Math.max(1, Math.min(32, Number(process.env.CORPUS_EXPORT_CO
 const limit = Math.max(0, Number(process.env.CORPUS_EXPORT_LIMIT || 0));
 const proxyBaseUrl = process.env.CORPUS_EXPORT_PROXY_URL || null;
 const proxyToken = process.env.CORPUS_EXPORT_PROXY_TOKEN || null;
+const proxyStyle = process.env.CORPUS_EXPORT_PROXY_STYLE || "migration";
 const verifyExisting = process.env.CORPUS_EXPORT_VERIFY_EXISTING === "1";
 const authPath = process.env.WRANGLER_AUTH_FILE
   || path.join(process.env.APPDATA || "", "xdg.config", ".wrangler", "config", "default.toml");
@@ -71,10 +72,13 @@ function loadManifest() {
   WHERE storage_status = 'stored' AND object_key IS NOT NULL
   ORDER BY object_key`;
   const command = `cd /srv/platform && docker compose exec -T postgres psql -U cartdotcom -d cartdotcom -Atc "${sql.replaceAll('"', '\\"')}"`;
-  const result = spawnSync("ssh", ["cartdotcom-server", command], {
-    encoding: "utf8",
-    maxBuffer: 128 * 1024 * 1024,
-  });
+  const localManifest = process.env.CORPUS_MANIFEST_LOCAL === "1";
+  const result = localManifest
+    ? spawnSync("bash", ["-lc", command], { encoding: "utf8", maxBuffer: 128 * 1024 * 1024 })
+    : spawnSync("ssh", ["cartdotcom-server", command], {
+      encoding: "utf8",
+      maxBuffer: 128 * 1024 * 1024,
+    });
   if (result.status !== 0) throw new Error(`Could not read corpus manifest: ${result.stderr || result.stdout}`);
   const rows = result.stdout.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
   return limit ? rows.slice(0, limit) : rows;
@@ -82,7 +86,9 @@ function loadManifest() {
 
 function objectUrl(key) {
   if (proxyBaseUrl) {
-    const url = new URL("/object", proxyBaseUrl);
+    const url = proxyStyle === "offsite"
+      ? new URL(proxyBaseUrl)
+      : new URL("/object", proxyBaseUrl);
     url.searchParams.set("key", key);
     return url.toString();
   }
@@ -93,7 +99,9 @@ function objectUrl(key) {
 async function requestObject(key, forceRefresh = false) {
   if (proxyBaseUrl) {
     return fetch(objectUrl(key), {
-      headers: { "x-migration-token": proxyToken, "user-agent": "cartdotcom-r2-migration/0.1" },
+      headers: proxyStyle === "offsite"
+        ? { authorization: `Bearer ${proxyToken}`, "user-agent": "cartdotcom-r2-migration/0.1" }
+        : { "x-migration-token": proxyToken, "user-agent": "cartdotcom-r2-migration/0.1" },
       signal: AbortSignal.timeout(30000),
     });
   }

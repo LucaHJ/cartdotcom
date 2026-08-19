@@ -4826,8 +4826,11 @@ async function retrieveOffsiteBackupObject(request: Request, env: Env): Promise<
   if (!env.OFFSITE_BACKUP_TOKEN) return json({ error: "Off-site backup retrieval is not configured" }, { status: 503 });
   if (!offsiteUploadAuthorized(request, env)) return json({ error: "Unauthorized" }, { status: 401 });
   const objectKey = (new URL(request.url).searchParams.get("key") || "").trim();
-  const { postgres, d1 } = permittedOffsiteObjectKey(objectKey);
-  if (!postgres && !d1) return json({ error: "Only database backup objects may be retrieved" }, { status: 400 });
+  const { corpus, postgres, d1 } = permittedOffsiteObjectKey(objectKey);
+  const corpusMigrationAllowed = corpus && env.PROCESSING_AUTHORITY === "cloudflare";
+  if (!postgres && !d1 && !corpusMigrationAllowed) {
+    return json({ error: "Object retrieval is not permitted" }, { status: 400 });
+  }
   const object = await env.ARTICLE_CORPUS.get(objectKey);
   if (!object) return json({ error: "Backup object not found" }, { status: 404 });
   const headers = new Headers({
