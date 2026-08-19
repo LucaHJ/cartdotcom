@@ -60,6 +60,8 @@ Do not store the API token or tunnel token in Git. The tunnel token belongs at
 
 6. Deploy with `SELF_HOSTED_PROXY_ENABLED=false` and verify the binding. This
    does not move traffic.
+   The authenticated `/api/internal/self-hosted-status` route performs a live
+   Worker-to-VPC-to-server readiness check without enabling the proxy.
 7. Enable the proxy only after data reconciliation and local processing
    activation have passed the cutover runbook.
 

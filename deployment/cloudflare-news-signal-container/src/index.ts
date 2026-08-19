@@ -5007,6 +5007,40 @@ async function proxySelfHostedApi(request: Request, env: Env): Promise<Response>
   }
 }
 
+async function selfHostedConnectivityStatus(env: Env): Promise<Response> {
+  if (!env.SELF_HOSTED_API) {
+    return json({ ok: false, configured: false, error: "Workers VPC binding is not configured" }, { status: 503 });
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  const startedAt = Date.now();
+  try {
+    const request = new Request("http://news-api:3000/health/ready", {
+      headers: env.SELF_HOSTED_API_TOKEN
+        ? { authorization: `Bearer ${env.SELF_HOSTED_API_TOKEN}` }
+        : undefined,
+    });
+    const upstream = await env.SELF_HOSTED_API.fetch(request, { signal: controller.signal });
+    const body = await upstream.json().catch(() => null);
+    return json({
+      ok: upstream.ok,
+      configured: true,
+      upstream_status: upstream.status,
+      latency_ms: Date.now() - startedAt,
+      upstream: body,
+    }, { status: upstream.ok ? 200 : 503 });
+  } catch (error) {
+    return json({
+      ok: false,
+      configured: true,
+      latency_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    }, { status: 503 });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function publishDashboardEvent(env: Env, event: DashboardEvent): Promise<void> {
   try {
     const id = env.DASHBOARD_EVENTS.idFromName("news-signal-dashboard");
@@ -9568,6 +9602,12 @@ export default {
 
     if (url.pathname === "/api/internal/offsite-object" && request.method === "GET") {
       return retrieveOffsiteBackupObject(request, env);
+    }
+
+    if (url.pathname === "/api/internal/self-hosted-status" && request.method === "GET") {
+      const unauthorized = requireAuthorized(request, env);
+      if (unauthorized) return unauthorized;
+      return selfHostedConnectivityStatus(env);
     }
 
     if (url.pathname === "/api/snapshot/status" && request.method === "GET") {
