@@ -1,6 +1,6 @@
 # Current Migration State
 
-Last verified: 2026-08-19T08:15:08Z
+Last verified: 2026-08-19T08:25:38Z
 
 ## Authority and safety state
 

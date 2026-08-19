@@ -1,6 +1,6 @@
 # News Signal Dashboard Audit
 
-Verified: 2026-08-19T07:38:20Z
+Verified: 2026-08-19T08:25:38Z
 
 ## Functional scope
 
@@ -43,3 +43,22 @@ The slowest staging reads during the final check were:
 
 These are acceptable for staging but should be monitored after fresh production
 data is imported and concurrent local ingestion begins.
+
+## Offline snapshot verification
+
+The Cloudflare outage gateway was tested with a complete 1.27 MB snapshot from
+the local PostgreSQL API and an intentionally unreachable live origin.
+
+- The dated offline banner appeared and all widgets loaded without visible
+  errors or console warnings.
+- Prediction accuracy tables and the daily movement graph rendered from stored
+  data; filtering, sorting, heatmap selection, and infinite loading were
+  disabled.
+- Overview retained 20 event summaries. Sources retained 81 source rows, 27
+  ticker-pipeline rows, and its acquisition chart. Settings retained 12 recent
+  jobs, 500 archived failures, and 20 article-impact rows.
+- Desktop and 390x844 mobile layouts had no document-level horizontal overflow
+  or visible skeleton loaders after completion.
+- With the same browser page left open, changing the test gateway from a dead
+  origin to a live origin cleared snapshot mode on the next 30-second probe,
+  reloaded current data, and re-enabled all live controls automatically.
