@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -10,7 +11,10 @@ const outputRoot = path.resolve(process.argv[2] || "./cartdotcom-article-corpus"
 const concurrency = Math.max(1, Math.min(32, Number(process.env.CORPUS_EXPORT_CONCURRENCY || 16)));
 const limit = Math.max(0, Number(process.env.CORPUS_EXPORT_LIMIT || 0));
 const proxyBaseUrl = process.env.CORPUS_EXPORT_PROXY_URL || null;
-const proxyToken = process.env.CORPUS_EXPORT_PROXY_TOKEN || null;
+const proxyToken = process.env.CORPUS_EXPORT_PROXY_TOKEN
+  || (process.env.CORPUS_EXPORT_PROXY_TOKEN_FILE
+    ? readFileSync(process.env.CORPUS_EXPORT_PROXY_TOKEN_FILE, "utf8").trim()
+    : null);
 const proxyStyle = process.env.CORPUS_EXPORT_PROXY_STYLE || "migration";
 const verifyExisting = process.env.CORPUS_EXPORT_VERIFY_EXISTING === "1";
 const authPath = process.env.WRANGLER_AUTH_FILE
@@ -63,6 +67,11 @@ async function currentToken(forceRefresh = false) {
 }
 
 function loadManifest() {
+  const manifestFile = process.env.CORPUS_MANIFEST_FILE;
+  if (manifestFile) {
+    const rows = readFileSync(manifestFile, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    return limit ? rows.slice(0, limit) : rows;
+  }
   const sql = `SELECT json_build_object(
     'article_id', article_id,
     'object_key', object_key,
