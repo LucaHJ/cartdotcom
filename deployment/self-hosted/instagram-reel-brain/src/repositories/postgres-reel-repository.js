@@ -1,4 +1,37 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { instagramDedupeKey } from "../domain/instagram.js";
+
+const transactionContext = new AsyncLocalStorage();
+const clientTransactionLocks = new WeakMap();
+
+class AsyncMutex {
+  constructor() {
+    this.tail = Promise.resolve();
+  }
+
+  async runExclusive(callback) {
+    const previous = this.tail;
+    let release;
+    this.tail = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await callback();
+    } finally {
+      release();
+    }
+  }
+}
+
+function transactionLockFor(client) {
+  let lock = clientTransactionLocks.get(client);
+  if (!lock) {
+    lock = new AsyncMutex();
+    clientTransactionLocks.set(client, lock);
+  }
+  return lock;
+}
 
 export class RepositoryConflictError extends Error {
   constructor(message, detail = {}) {
@@ -15,7 +48,6 @@ export class PostgresReelRepository {
     if (!/^[a-z_][a-z0-9_]*$/i.test(schema)) throw new Error(`Invalid schema name ${schema}`);
     this.client = client;
     this.schema = schema;
-    this.transactionDepth = 0;
   }
 
   table(name) {
@@ -24,21 +56,24 @@ export class PostgresReelRepository {
   }
 
   async withTransaction(callback) {
-    if (this.transactionDepth > 0) {
+    const active = transactionContext.getStore();
+    if (active?.client === this.client) {
       return callback(this);
     }
-    await this.client.query("BEGIN");
-    this.transactionDepth += 1;
-    try {
-      const result = await callback(this);
-      await this.client.query("COMMIT");
-      return result;
-    } catch (error) {
-      await this.client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      this.transactionDepth -= 1;
-    }
+    const lock = transactionLockFor(this.client);
+    return lock.runExclusive(async () => {
+      await this.client.query("BEGIN");
+      return transactionContext.run({ client: this.client }, async () => {
+        try {
+          const result = await callback(this);
+          await this.client.query("COMMIT");
+          return result;
+        } catch (error) {
+          await this.client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        }
+      });
+    });
   }
 
   async createJob(input) {

@@ -2,7 +2,7 @@
 
 Status: corrective implementation complete; awaiting independent review.
 
-Last updated at: 2026-08-21T03:35:44+10:00 Australia/Brisbane
+Last updated at: 2026-08-21T03:42:24+10:00 Australia/Brisbane
 
 Cloudflare remains the sole production authority. This Phase 2 work does not
 authorise production import, R2 backfill, live or shadow intake, local dispatch,
@@ -86,6 +86,19 @@ backlog enumeration, real backlog replay, production delta mirroring, or Phase 3
      Docker image.
    - The symlink escape test executed and passed on Linux with zero skips.
 
+8. Execution-context-specific transaction nesting
+   - Replaced repository-global `transactionDepth` with `AsyncLocalStorage`
+     keyed by the current async execution context.
+   - Added a WeakMap-backed async mutex keyed by the client object, so unrelated
+     top-level transactions sharing a single-session client are serialized
+     rather than joined.
+   - Genuine nested calls in the same async transaction context reuse the
+     existing transaction.
+   - Unrelated concurrent public transitions cannot interleave into one
+     transaction. A failing transition rolls back only its own state update; a
+     concurrent succeeding transition begins after that rollback and commits
+     independently.
+
 ## Local files changed for this corrective gate
 
 - `deployment/self-hosted/instagram-reel-brain/docs/PHASE_2_GATE_REPORT_2026-08-21.md`
@@ -141,8 +154,8 @@ Self-hosted Reel Node tests:
 
 ```text
 deployment/self-hosted/instagram-reel-brain> npm test
-34 tests
-33 passed
+39 tests
+38 passed
 0 failed
 1 skipped: symlink creation unavailable on this Windows host: EPERM
 ```
@@ -158,6 +171,13 @@ Connected PostgreSQL coverage inside `npm test`:
   session and leaves no interrupted state or event.
 - Public transition interruption between state update and event insertion rolls
   back both the state update and event insertion.
+- Genuine nested calls share one transaction context.
+- Unrelated concurrent top-level public transitions on one client are serialized
+  and cannot share an outer transaction accidentally.
+- Transaction state is released after both rollback and commit.
+- Connected PostgreSQL proves unrelated concurrent transitions do not share a
+  transaction; the failing transition rolls back while the succeeding transition
+  commits separately.
 - Resource upsert and artifact write tracking are idempotent.
 - Carousel status and pending-part kind constraints reject invalid values.
 - Scrubbed D1-shaped export imports into an isolated PostgreSQL schema and test
@@ -220,8 +240,8 @@ deployment/instagram-reel-brain> python -m unittest discover -s container -p "te
 
 ## Health and production idle evidence
 
-Server read-only health check at 2026-08-20T17:35:19Z
-(2026-08-21T03:35:19+10:00 Brisbane):
+Server read-only health check at 2026-08-20T17:42:02Z
+(2026-08-21T03:42:02+10:00 Brisbane):
 
 - Six Reel services were running and healthy:
   - `reel-api`
@@ -231,9 +251,9 @@ Server read-only health check at 2026-08-20T17:35:19Z
   - `reel-archiver`
   - `reel-auth-rotator`
 - News Signal services were running and healthy.
-- Available memory: 13,793 MiB.
-- Root volume: 312 GiB available, 6% used.
-- Load average: `0.83, 0.48, 0.61`.
+- Available memory: 14,001 MiB.
+- Root volume: 313 GiB available, 6% used.
+- Load average: `2.35, 1.13, 0.81`.
 
 Cloudflare Worker `/health`:
 
@@ -262,7 +282,10 @@ changed_db = false
 
 The earlier Phase 2 baseline commit was `0a4d156`. The corrective implementation
 was committed separately as `1ded965`; the report-only reference update was
-`d964e75`. The second bounded corrective follow-up was committed as `4c86829`.
+`d964e75`. The second bounded corrective follow-up was committed as `4c86829`,
+with report reference `dac5e08`. A third bounded transaction-context follow-up
+commit is expected after this report update is staged with only Reel Phase 2
+files.
 
 ## Rollback
 

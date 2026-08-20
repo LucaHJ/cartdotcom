@@ -3,6 +3,43 @@ import test from "node:test";
 import { FixtureQueryClient } from "../src/repositories/fixture-client.js";
 import { PostgresReelRepository, RepositoryConflictError } from "../src/repositories/postgres-reel-repository.js";
 
+function defer() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+class BlockingFixtureClient extends FixtureQueryClient {
+  constructor({ blockPattern, failPattern } = {}) {
+    super();
+    this.blockPattern = blockPattern;
+    this.failPattern = failPattern;
+    this.blocked = defer();
+    this.releaseBlock = defer();
+    this.failed = false;
+  }
+
+  async query(text, values = []) {
+    const queryText = String(text);
+    if (this.blockPattern?.test(queryText)) {
+      this.queries.push({ text: queryText, values });
+      this.blocked.resolve();
+      await this.releaseBlock.promise;
+      return { rows: [], rowCount: 0 };
+    }
+    if (!this.failed && this.failPattern?.test(queryText)) {
+      this.failed = true;
+      this.queries.push({ text: queryText, values });
+      throw new Error("synthetic query failure");
+    }
+    return super.query(text, values);
+  }
+}
+
 test("PostgreSQL repository inserts jobs only with pre-Codex dedupe keys", async () => {
   const client = new FixtureQueryClient();
   client.enqueue({ rows: [{ id: "job-1", dedupe_key: "instagram:ABC123" }] });
@@ -97,4 +134,59 @@ test("Repository transaction rolls back interrupted fixture work", async () => {
 
   assert.equal(client.queries[0].text, "BEGIN");
   assert.equal(client.queries.at(-1).text, "ROLLBACK");
+});
+
+test("Repository genuine nested calls share one transaction context", async () => {
+  const client = new FixtureQueryClient();
+  const repo = new PostgresReelRepository(client);
+  client.enqueue({ rows: [{ id: "job-1" }] });
+  client.enqueue({ rows: [{ id: "job-1" }] });
+
+  await repo.withTransaction(async () => {
+    await repo.markStage("job-1", "downloading", "running", "nested stage");
+    await repo.completeJob("job-1", { detail: "nested complete" });
+  });
+
+  assert.equal(client.queries.filter((query) => query.text === "BEGIN").length, 1);
+  assert.equal(client.queries.filter((query) => query.text === "COMMIT").length, 1);
+  assert.equal(client.queries.filter((query) => query.text === "ROLLBACK").length, 0);
+});
+
+test("Repository serializes unrelated concurrent top-level transitions on one client", async () => {
+  const client = new BlockingFixtureClient({ blockPattern: /INSERT INTO reel_brain\.job_events/ });
+  const repo = new PostgresReelRepository(client);
+  client.enqueue({ rows: [{ id: "job-a" }] });
+  client.enqueue({ rows: [{ id: "job-b" }] });
+
+  const first = repo.markStage("job-a", "downloading", "running", "first");
+  await client.blocked.promise;
+  const second = repo.markStage("job-b", "downloading", "running", "second");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(client.queries.filter((query) => query.text === "BEGIN").length, 1);
+  assert.equal(client.queries.some((query) => query.values?.[0] === "job-b"), false);
+
+  client.releaseBlock.resolve();
+  await Promise.all([first, second]);
+
+  const beginIndexes = client.queries.flatMap((query, index) => query.text === "BEGIN" ? [index] : []);
+  const commitIndexes = client.queries.flatMap((query, index) => query.text === "COMMIT" ? [index] : []);
+  assert.equal(beginIndexes.length, 2);
+  assert.equal(commitIndexes.length, 2);
+  assert.ok(commitIndexes[0] < beginIndexes[1]);
+});
+
+test("Repository releases transaction state after failure and success", async () => {
+  const client = new BlockingFixtureClient({ failPattern: /INSERT INTO reel_brain\.job_events/ });
+  const repo = new PostgresReelRepository(client);
+  client.enqueue({ rows: [{ id: "job-fail" }] });
+  client.enqueue({ rows: [{ id: "job-ok" }] });
+
+  await assert.rejects(() => repo.markStage("job-fail", "downloading", "running", "fail"), /synthetic query failure/);
+  await repo.markStage("job-ok", "downloading", "running", "ok");
+
+  assert.equal(client.queries.filter((query) => query.text === "BEGIN").length, 2);
+  assert.equal(client.queries.filter((query) => query.text === "ROLLBACK").length, 1);
+  assert.equal(client.queries.filter((query) => query.text === "COMMIT").length, 1);
+  assert.ok(client.queries.find((query) => query.values?.[0] === "job-ok"));
 });

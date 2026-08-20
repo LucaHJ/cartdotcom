@@ -35,6 +35,16 @@ function parameterize(text, values) {
   return text.replace(/\$(\d+)/g, (_match, index) => sqlLiteral(values[Number(index) - 1]));
 }
 
+function defer() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function stripTrailingSemicolon(sql) {
   return sql.trim().replace(/;\s*$/, "");
 }
@@ -51,6 +61,7 @@ class PersistentSshPsqlClient {
     this.counter = 0;
     this.pending = null;
     this.closed = false;
+    this.queries = [];
     this.child.stdout.on("data", (chunk) => {
       this.stdout += chunk.toString("utf8");
       this.resolvePending();
@@ -87,6 +98,7 @@ class PersistentSshPsqlClient {
 
   async query(text, values = []) {
     const sql = parameterize(text, values);
+    this.queries.push({ text: String(text), values, sql });
     if (this.closed) throw new Error("persistent psql session is closed");
     if (this.pending) throw new Error("persistent psql session only supports one query at a time");
     const json = isRowsQuery(sql);
@@ -112,15 +124,20 @@ class PersistentSshPsqlClient {
 }
 
 class InterruptingClient {
-  constructor(inner, pattern) {
+  constructor(inner, pattern, { holdBeforeThrow = false } = {}) {
     this.inner = inner;
     this.pattern = pattern;
+    this.holdBeforeThrow = holdBeforeThrow;
     this.interrupted = false;
+    this.reachedInterrupt = defer();
+    this.releaseInterrupt = defer();
   }
 
   async query(text, values = []) {
     if (!this.interrupted && this.pattern.test(String(text))) {
       this.interrupted = true;
+      this.reachedInterrupt.resolve();
+      if (this.holdBeforeThrow) await this.releaseInterrupt.promise;
       throw new Error("synthetic interruption between state update and event insert");
     }
     return this.inner.query(text, values);
@@ -242,6 +259,81 @@ test("connected PostgreSQL public transition rolls back when interrupted between
     FROM ${schema}.jobs WHERE id='pg-interrupt-1'
   ) t;`, { json: true }))[0];
   assert.deepEqual(rows, { status: "queued", stage: "queued", events: 0 });
+});
+
+test("connected PostgreSQL nested transitions share one transaction and release state", async () => {
+  runPsql(`
+    INSERT INTO ${schema}.jobs(id,source_url,dedupe_key,status,stage)
+    VALUES ('pg-nested-1','https://www.instagram.com/reel/NESTED1/','instagram:NESTED1','queued','queued');
+  `);
+  const client = new PersistentSshPsqlClient();
+  await withConnectedRepo(async (repo) => {
+    await repo.withTransaction(async () => {
+      await repo.markStage("pg-nested-1", "downloading", "running", "nested stage");
+      await repo.completeJob("pg-nested-1", { detail: "nested complete" });
+    });
+    await repo.failJob("missing-after-nested", "error_missing", "missing");
+  }, client);
+
+  assert.equal(client.queries.filter((query) => query.text === "BEGIN").length, 2);
+  assert.equal(client.queries.filter((query) => query.text === "COMMIT").length, 2);
+  const firstCommit = client.queries.findIndex((query) => query.text === "COMMIT");
+  const secondBegin = client.queries.findIndex((query, index) => index > firstCommit && query.text === "BEGIN");
+  assert.ok(secondBegin > firstCommit);
+
+  const rows = JSON.parse(runPsql(`SELECT json_agg(t) FROM (
+    SELECT status, stage, (SELECT COUNT(*)::int FROM ${schema}.job_events WHERE job_id='pg-nested-1') AS events
+    FROM ${schema}.jobs WHERE id='pg-nested-1'
+  ) t;`, { json: true }))[0];
+  assert.deepEqual(rows, { status: "complete", stage: "complete", events: 2 });
+});
+
+test("connected PostgreSQL unrelated concurrent transitions do not share a transaction", async () => {
+  runPsql(`
+    INSERT INTO ${schema}.jobs(id,source_url,dedupe_key,status,stage)
+    VALUES
+      ('pg-concurrent-a','https://www.instagram.com/reel/CONCURRENTA/','instagram:CONCURRENTA','queued','queued'),
+      ('pg-concurrent-b','https://www.instagram.com/reel/CONCURRENTB/','instagram:CONCURRENTB','queued','queued');
+  `);
+  const persistent = new PersistentSshPsqlClient();
+  const interrupting = new InterruptingClient(
+    persistent,
+    new RegExp(`INSERT INTO ${schema}\\.job_events`),
+    { holdBeforeThrow: true },
+  );
+  const repo = new PostgresReelRepository(interrupting, { schema });
+
+  const failing = repo.markStage("pg-concurrent-a", "downloading", "running", "must rollback");
+  await interrupting.reachedInterrupt.promise;
+  const succeeding = repo.markStage("pg-concurrent-b", "downloading", "running", "must commit");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const queriesBeforeRelease = persistent.queries.map((query) => query.text);
+  assert.equal(queriesBeforeRelease.filter((text) => text === "BEGIN").length, 1);
+  assert.equal(persistent.queries.some((query) => query.values?.[0] === "pg-concurrent-b"), false);
+
+  interrupting.releaseInterrupt.resolve();
+  const results = await Promise.allSettled([failing, succeeding]);
+  await interrupting.close();
+  assert.equal(results[0].status, "rejected");
+  assert.equal(results[1].status, "fulfilled");
+
+  const beginIndexes = persistent.queries.flatMap((query, index) => query.text === "BEGIN" ? [index] : []);
+  const rollbackIndex = persistent.queries.findIndex((query) => query.text === "ROLLBACK");
+  const commitIndex = persistent.queries.findIndex((query) => query.text === "COMMIT");
+  assert.equal(beginIndexes.length, 2);
+  assert.ok(rollbackIndex > beginIndexes[0]);
+  assert.ok(beginIndexes[1] > rollbackIndex);
+  assert.ok(commitIndex > beginIndexes[1]);
+
+  const rows = JSON.parse(runPsql(`SELECT json_agg(t ORDER BY id) FROM (
+    SELECT id, status, stage, (SELECT COUNT(*)::int FROM ${schema}.job_events e WHERE e.job_id=jobs.id) AS events
+    FROM ${schema}.jobs WHERE id IN ('pg-concurrent-a','pg-concurrent-b')
+  ) t;`, { json: true }));
+  assert.deepEqual(rows, [
+    { id: "pg-concurrent-a", status: "queued", stage: "queued", events: 0 },
+    { id: "pg-concurrent-b", status: "running", stage: "downloading", events: 1 },
+  ]);
 });
 
 test("connected PostgreSQL resource/artifact writes are idempotent", async () => {
