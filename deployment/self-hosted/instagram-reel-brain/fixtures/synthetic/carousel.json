@@ -1,0 +1,8 @@
+{
+  "shortcode": "SYNTHETIC123",
+  "parentUrl": "https://www.instagram.com/p/SYNTHETIC123/",
+  "slides": [
+    { "index": 2, "url": "slides/2.jpg", "width": 800, "height": 1000, "checksum": "sha256-slide-2" },
+    { "index": 1, "url": "slides/1.jpg", "width": 800, "height": 1000, "checksum": "sha256-slide-1" }
+  ]
+}
