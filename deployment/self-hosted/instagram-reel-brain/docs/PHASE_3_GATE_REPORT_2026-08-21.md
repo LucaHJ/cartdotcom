@@ -4,11 +4,15 @@ Status: completed for independent review; not approved for Phase 4
 
 Initial Phase 3 run timestamp: 2026-08-21 04:20 Australia/Brisbane
 
-Corrective completion timestamp: 2026-08-21 05:22 Australia/Brisbane
+Initial corrective completion timestamp: 2026-08-21 05:22 Australia/Brisbane
+
+Second corrective completion timestamp: 2026-08-21 05:42 Australia/Brisbane
 
 Source commit at Phase 3 start: `73711e8`
 
 Prior blocked-report commit: `fd32ce7`
+
+Prior incomplete corrective commit: `30912df`
 
 Cloudflare remains the sole production authority.
 
@@ -17,18 +21,22 @@ Cloudflare remains the sole production authority.
 - Captured a read-only D1 export for `cartdotcom-instagram-reel-brain`.
 - Preserved the raw SQL export under an ignored, ACL-restricted Phase 3 run directory.
 - Generated a redacted D1 table/schema inventory from the immutable export.
-- Imported the D1 snapshot into a non-authoritative PostgreSQL shadow schema.
+- Imported the D1 snapshot into a non-authoritative PostgreSQL JSONB audit
+  schema and then into a separate typed operational shadow schema.
 - Generated an R2 transfer manifest from D1-referenced object keys.
 - Checked R2 cost using current Cloudflare R2 pricing.
 - Created a local-only migration Worker with a remote R2 binding for
   paginated read-only object listing.
 - Reconciled all R2 objects against D1-derived object keys.
-- Copied every R2 object into the ignored shadow root with restart checkpoints,
-  size verification, and local SHA-256.
+- Copied every R2 object into the ignored workstation shadow root with restart
+  checkpoints, size verification, and local SHA-256.
+- Transferred the complete shadow run to the Ubuntu server under the
+  authoritative Phase 3 run path and reverified all R2 objects server-side.
 - Generated local library manifests from copied data and reconciled D1 library
   object keys.
 - Ran read-only parity checks for jobs, status, notes, resources, retrieval
-  metadata, searchability, relational samples, and library paths.
+  metadata, searchability, relational samples, and library paths against the
+  typed operational PostgreSQL schema.
 
 No production D1 rows, R2 objects, KV keys, queues, Workers, Pages, Meta
 callback, Instagram outbound operations, local dispatch, Codex execution,
@@ -52,6 +60,19 @@ PostgreSQL shadow schema:
 
 ```text
 reel_phase3_shadow_20260821_040408
+```
+
+PostgreSQL typed operational shadow schema:
+
+```text
+reel_phase3_operational_20260821_040408
+```
+
+The original server directory that contained only the earlier PostgreSQL import
+SQL was preserved, not overwritten:
+
+```text
+/srv/cartdotcom/reel-brain-runs/phase3-shadow/2026-08-21_04-04-08.server-audit-preserved-20260820193332
 ```
 
 ## D1 snapshot
@@ -114,8 +135,10 @@ Pending DM parts:
 
 ## PostgreSQL shadow import
 
-The D1 export was imported into `reel_phase3_shadow_20260821_040408` as raw
-JSONB rows with table metadata and state-count tables.
+The D1 export was first imported into `reel_phase3_shadow_20260821_040408` as
+raw JSONB rows with table metadata and state-count tables. This schema is now
+classified as preserved audit evidence only. It is not the operational migration
+target.
 
 Import report:
 
@@ -133,6 +156,77 @@ Runtime secret handling:
 - `runtime_secrets` rows were counted.
 - `ciphertext` and `iv` were not imported as plaintext into PostgreSQL.
 - Those fields were imported only as `{ redacted, sha256, byte_length }`.
+
+## PostgreSQL typed operational shadow import
+
+A separate non-authoritative operational schema was created by applying the
+local Reel PostgreSQL migrations and then importing the production D1 snapshot
+through an explicit deterministic mapper:
+
+```text
+reel_phase3_operational_20260821_040408
+```
+
+Operational import report:
+
+```text
+d1\postgres-operational-import-report.json
+/srv/cartdotcom/reel-brain-runs/phase3-shadow/2026-08-21_04-04-08/d1/postgres-operational-import-report.json
+```
+
+Read-only repository/API parity report:
+
+```text
+d1\postgres-operational-read-api-parity-report.json
+/srv/cartdotcom/reel-brain-runs/phase3-shadow/2026-08-21_04-04-08/d1/postgres-operational-read-api-parity-report.json
+```
+
+Schema drift handled explicitly:
+
+- Added `0003_phase3_cloud_schema_drift.sql`.
+- `jobs.dedupe_key` is nullable because four historical D1 jobs have no
+  dedupe key; `source_dedupe_key_missing=true` records those rows.
+- D1-compatible uniqueness is enforced for non-null `jobs.dedupe_key` and
+  non-null `jobs.source_message_id`.
+- `resources.guide_markdown_key`, `resources.guide_html_key`, and
+  `resources.evidence_json` are retained.
+- D1 artifact IDs are retained in `artifacts.source_artifact_id`; D1
+  `kind`, `byte_size`, and `sha256` are retained in typed columns while the
+  Phase 2 repository-facing `checksum_sha256` and `byte_length` columns remain
+  populated.
+- Global `artifacts.object_key` uniqueness is enforced to match D1.
+- `instagram_carousel_resolutions.waiting_for_auth` is allowed because it is
+  present in the production D1 snapshot.
+- D1 operational tables added to the local disabled schema: `notes`,
+  `settings`, `runtime_secrets`, `dm_commands`, `outbound_events`,
+  `pilot_runs`, `pilot_items`, `pilot_candidate_cache`,
+  `inbound_webhook_events`, and `d1_migrations`.
+- Runtime secret `ciphertext` and `iv` values are not imported. The typed
+  operational table stores `__REDACTED__` plus SHA-256 evidence fields only.
+
+Typed import checks passed:
+
+- 20/20 table row-count checks passed.
+- Foreign-key checks passed for resources, artifacts, and job events.
+- D1 uniqueness checks passed for artifact object keys, job dedupe keys where
+  non-null, and resource `(job_id, slug)`.
+- Runtime secret redaction check passed.
+
+Typed parity results:
+
+- Jobs by status: `complete=215`, `failed=4`.
+- Notes: 0.
+- Resources: 1,428.
+- Jobs with original video keys: 219.
+- Jobs with audio keys: 178.
+- Jobs with library paths: 215.
+- Resources with library paths: 1,428.
+- Searchable jobs: 215.
+- Searchable resources: 1,428.
+- Job HTML keys: 215.
+- Resource guide HTML keys: 1,428.
+- Read-only repository methods returned coherent status, search, notes,
+  retrieval metadata, and library path samples from the typed schema.
 
 ## R2 cost check
 
@@ -246,6 +340,40 @@ Verification rehashed local files and checked each file size against the
 Cloudflare object listing. ETags were preserved as metadata only and were not
 treated as SHA-256.
 
+## Ubuntu server shadow placement and verification
+
+The workstation run was preserved as evidence and then streamed to the Ubuntu
+server with `tar` over SSH into a temporary incoming directory. The previous
+server directory containing only the earlier 14 MB PostgreSQL import SQL was
+renamed to the preserved path listed above. The incoming directory was then
+moved into the final Phase 3 server run path.
+
+Server final path:
+
+```text
+/srv/cartdotcom/reel-brain-runs/phase3-shadow/2026-08-21_04-04-08
+```
+
+Server-side verification report:
+
+```text
+/srv/cartdotcom/reel-brain-runs/phase3-shadow/2026-08-21_04-04-08/reports/server-r2-shadow-verify.json
+```
+
+Server verification results:
+
+- Expected objects: 5,673.
+- Verified objects: 5,673.
+- Expected bytes: 1,527,301,212.
+- Verified bytes: 1,527,301,212.
+- Missing objects: 0.
+- SHA-256 mismatches: 0.
+- Failed checkpoint records: 0.
+- Final object files under `r2/objects`: 5,673.
+- Run directory permissions restricted to owner access: `drwx------`.
+- The shadow data is not mounted into active services.
+- `/srv` after transfer: 349 GB total, 20 GB used, 311 GB available.
+
 ## Local library import/rebuild and parity
 
 The generated library was reconstructed from copied `library/` objects and D1
@@ -325,9 +453,10 @@ Representative after-state Docker resource readings:
 - Reel services remained below their configured memory limits.
 - News services remained healthy.
 - `cartdotcom-news-corpus-archiver-1` remained near its configured limit at
-  `365.9MiB / 384MiB`; it stayed healthy.
-- `cartdotcom-platform-postgres-1` reported `263.9MiB / 3GiB`.
-- PostgreSQL shadow rows: 7,991.
+  `364.8MiB / 384MiB`; it stayed healthy.
+- `cartdotcom-platform-postgres-1` reported `267.8MiB / 3GiB`.
+- PostgreSQL operational shadow imported D1 rows: 7,991.
+- `/srv` reported 311 GB available after the server-side R2 shadow transfer.
 
 ## Verification run
 
@@ -347,12 +476,16 @@ Results:
 
 - Phase 3 script compile: passed.
 - R2 inventory Worker static tests: 2/2 passed.
-- Self-hosted Node tests: 43 total; 42 passed; 1 skipped on Windows because
+- Self-hosted Node tests: 46 total; 45 passed; 1 skipped on Windows because
   symlink creation is unavailable.
 - Self-hosted media API tests: 3/3 passed.
 - Cloud Reel TypeScript typecheck: passed.
 - Cloud Reel Node tests: 63/63 passed.
 - Compose validation: passed.
+- Live Cloudflare Worker `/health`: `ok`, `ingest_mode=live`,
+  `backlog_processing=false`.
+- Production D1 active queue query: 0 active rows returned.
+- Server Docker health: all Reel and News containers healthy.
 
 `python -m pytest tests\test_media_processor_api.py -q` was attempted first and
 failed because this desktop Python environment does not have `pytest`
@@ -366,7 +499,18 @@ installed. The test file is `unittest`-based and passed with
   - ignored `deployment/self-hosted/instagram-reel-brain/.phase3-current-run`
 - `deployment/self-hosted/instagram-reel-brain/scripts/phase3_shadow_migration.py`
   - added manual Phase 3 D1 inventory/import, R2 manifest/reconcile/copy,
-    local-copy verification, library parity, and D1 parity tooling
+    local-copy verification, server operational import, library parity, and
+    D1/PostgreSQL parity tooling
+- `deployment/self-hosted/instagram-reel-brain/migrations/0003_phase3_cloud_schema_drift.sql`
+  - added disabled typed operational destinations for D1 production drift
+- `deployment/self-hosted/instagram-reel-brain/src/repositories/postgres-reel-repository.js`
+  - added read-only status, search, notes, retrieval metadata, and library path
+    query methods for parity checks
+- `deployment/self-hosted/instagram-reel-brain/tests/phase2-postgres-connected.test.mjs`
+  - applies the Phase 3 drift migration in connected tests and verifies
+    read-only repository parity methods
+- `deployment/self-hosted/instagram-reel-brain/tests/phase3-operational-shadow.test.mjs`
+  - added static tests for drift destinations and secret redaction
 - `deployment/self-hosted/instagram-reel-brain/tools/r2-inventory-worker/wrangler.jsonc`
   - added local-only Wrangler config with the existing R2 bucket bound as
     `remote: true`
@@ -395,16 +539,25 @@ Non-destructive cleanup, if explicitly approved later:
 # Preserve evidence by renaming, not deleting.
 docker exec -i cartdotcom-platform-postgres-1 psql -U cartdotcom -d cartdotcom -v ON_ERROR_STOP=1 -q <<'SQL'
 ALTER SCHEMA reel_phase3_shadow_20260821_040408 RENAME TO reel_phase3_shadow_20260821_040408_preserved;
+ALTER SCHEMA reel_phase3_operational_20260821_040408 RENAME TO reel_phase3_operational_20260821_040408_preserved;
 SQL
 ```
 
-To disable the local R2 shadow copy without deletion, rename the ignored run
-folder:
+To disable the workstation R2 shadow copy without deletion, rename the ignored
+run folder:
 
 ```powershell
 Rename-Item `
   "C:\Users\User\Documents\GitHub\cartdotcom\deployment\self-hosted\instagram-reel-brain\runs\phase3-shadow\2026-08-21_04-04-08" `
   "2026-08-21_04-04-08_preserved"
+```
+
+To disable the server R2 shadow copy without deletion, rename the server run
+folder:
+
+```bash
+mv /srv/cartdotcom/reel-brain-runs/phase3-shadow/2026-08-21_04-04-08 \
+   /srv/cartdotcom/reel-brain-runs/phase3-shadow/2026-08-21_04-04-08_preserved
 ```
 
 Do not delete:
@@ -413,7 +566,9 @@ Do not delete:
 - the redacted manifests,
 - the server-side import SQL,
 - the PostgreSQL shadow schema,
+- the PostgreSQL typed operational shadow schema,
 - the copied local R2 shadow root,
+- the copied server R2 shadow root,
 - the local library manifests,
 - or this gate report
 

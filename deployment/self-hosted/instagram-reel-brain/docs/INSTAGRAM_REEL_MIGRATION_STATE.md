@@ -15,10 +15,14 @@ The Phase 3 attempt is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`.
   `cartdotcom-reel-egress`.
 - Empty local storage roots prepared for later phases.
 - Example backup and secret contracts.
-- Non-authoritative Phase 3 PostgreSQL shadow schema
+- Non-authoritative Phase 3 PostgreSQL JSONB audit schema
   `reel_phase3_shadow_20260821_040408`.
-- ACL-restricted local Phase 3 D1 snapshot under ignored `runs/`.
-- Local R2 shadow copy of all 5,673 bucket objects under ignored `runs/`.
+- Non-authoritative Phase 3 typed operational shadow schema
+  `reel_phase3_operational_20260821_040408`.
+- ACL-restricted workstation and server Phase 3 D1 snapshots under ignored
+  run paths.
+- Server-side R2 shadow copy of all 5,673 bucket objects under
+  `/srv/cartdotcom/reel-brain-runs/phase3-shadow/2026-08-21_04-04-08`.
 - Local library manifests generated from copied data only.
 
 ## Disabled
@@ -48,4 +52,7 @@ The Phase 3 attempt is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`.
 ## Current gate
 
 Phase 3 is waiting for independent review. Phase 4 remains blocked. Cloudflare
-is still the sole production authority.
+is still the sole production authority. The typed operational shadow schema has
+passed row-count, foreign-key, uniqueness, redaction, read-only repository/API,
+library-path, search, status, notes, retrieval metadata, and server-side R2
+verification checks.

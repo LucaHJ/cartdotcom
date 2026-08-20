@@ -361,6 +361,17 @@ def run_ssh_psql(sql_file: Path, ssh_target: str, psql_command: str) -> None:
     subprocess.run(["ssh", ssh_target, f"chmod 600 {remote_file} && cat {remote_file} | {psql_command}"], check=True)
 
 
+def run_ssh_capture(sql: str, ssh_target: str, psql_command: str) -> str:
+    result = subprocess.run(
+        ["ssh", ssh_target, f"{psql_command} -t -A"],
+        input=sql,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
 def import_d1_shadow(args: argparse.Namespace) -> None:
     schema = require_schema_name(args.schema)
     run_dir = Path(args.run_dir).resolve()
@@ -398,6 +409,325 @@ def import_d1_shadow(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2))
     if not report["ok"]:
         raise SystemExit("PostgreSQL shadow import checks failed")
+
+
+def pg_value(value: Any, *, jsonb: bool = False, boolean: bool = False) -> str:
+    if value is None:
+        return "NULL"
+    if boolean:
+        return "true" if bool(value) else "false"
+    if jsonb:
+        parsed = json.loads(value) if isinstance(value, str) else value
+        return f"{sql_literal(json.dumps(parsed, ensure_ascii=False, sort_keys=True))}::jsonb"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return sql_literal(str(value))
+
+
+def sqlite_rows(connection: sqlite3.Connection, table: str) -> list[dict[str, Any]]:
+    cursor = connection.cursor()
+    columns = table_columns(cursor, table)
+    return [
+        dict(zip(columns, row))
+        for row in cursor.execute(f'SELECT * FROM "{table}"')
+    ]
+
+
+def insert_statement(schema: str, table: str, row: dict[str, str]) -> str:
+    columns = ", ".join(row.keys())
+    values = ", ".join(row.values())
+    return f"INSERT INTO {schema}.{table} ({columns}) VALUES ({values});"
+
+
+def import_job_sql(schema: str, row: dict[str, Any]) -> str:
+    columns = [
+        "id", "source_url", "canonical_url", "shortcode", "dedupe_key", "pilot_run_id",
+        "sender_id", "source_message_id", "source_media_json", "instructions", "title",
+        "author_username", "description", "status", "stage", "attempts", "status_emoji",
+        "error_code", "error_message", "upload_token_hash", "upload_token_expires_at",
+        "original_video_key", "audio_key", "audio_title", "audio_artist", "audio_source_url",
+        "audio_identification_method", "audio_confidence", "html_key", "library_path",
+        "markdown_key", "transcript_key", "synthesis_json_key", "codex_input_tokens",
+        "codex_cached_input_tokens", "codex_output_tokens", "codex_reasoning_output_tokens",
+        "codex_total_tokens", "processing_seconds", "created_at", "started_at",
+        "completed_at", "updated_at", "source_dedupe_key_missing",
+    ]
+    mapped: dict[str, str] = {}
+    for column in columns:
+        if column == "source_media_json":
+            mapped[column] = pg_value(row.get(column), jsonb=True) if row.get(column) else "NULL"
+        elif column == "source_dedupe_key_missing":
+            mapped[column] = pg_value(row.get("dedupe_key") is None, boolean=True)
+        else:
+            mapped[column] = pg_value(row.get(column))
+    return insert_statement(schema, "jobs", mapped)
+
+
+def import_resource_sql(schema: str, row: dict[str, Any]) -> str:
+    columns = [
+        "id", "job_id", "name", "slug", "kind", "canonical_url", "summary",
+        "why_useful", "guide_text", "guide_markdown_key", "evidence_json",
+        "guide_html_key", "artifact_type", "canonical_key", "media_json",
+        "library_path", "created_at",
+    ]
+    mapped: dict[str, str] = {}
+    for column in columns:
+        if column == "media_json":
+            mapped[column] = pg_value(row.get(column), jsonb=True) if row.get(column) else "NULL"
+        else:
+            mapped[column] = pg_value(row.get(column))
+    return insert_statement(schema, "resources", mapped)
+
+
+def import_artifact_sql(schema: str, row: dict[str, Any]) -> str:
+    return insert_statement(schema, "artifacts", {
+        "source_artifact_id": pg_value(row.get("id")),
+        "job_id": pg_value(row.get("job_id")),
+        "object_key": pg_value(row.get("object_key")),
+        "checksum_sha256": pg_value(row.get("sha256")),
+        "byte_length": pg_value(row.get("byte_size")),
+        "content_type": pg_value(row.get("content_type")),
+        "kind": pg_value(row.get("kind")),
+        "source_sha256": pg_value(row.get("sha256")),
+        "source_byte_size": pg_value(row.get("byte_size")),
+        "created_at": pg_value(row.get("created_at")),
+    })
+
+
+def import_runtime_secret_sql(schema: str, row: dict[str, Any]) -> str:
+    ciphertext = str(row.get("ciphertext") or "")
+    iv = str(row.get("iv") or "")
+    return insert_statement(schema, "runtime_secrets", {
+        "name": pg_value(row.get("name")),
+        "ciphertext": pg_value("__REDACTED__"),
+        "iv": pg_value("__REDACTED__"),
+        "ciphertext_sha256": pg_value(sha256_bytes(ciphertext.encode("utf-8")) if ciphertext else None),
+        "iv_sha256": pg_value(sha256_bytes(iv.encode("utf-8")) if iv else None),
+        "redacted": "true",
+        "updated_at": pg_value(row.get("updated_at")),
+    })
+
+
+def generic_insert_sql(schema: str, table: str, row: dict[str, Any], boolean_columns: set[str] | None = None) -> str:
+    boolean_columns = boolean_columns or set()
+    return insert_statement(schema, table, {
+        column: pg_value(value, boolean=column in boolean_columns)
+        for column, value in row.items()
+    })
+
+
+def operational_schema_sql(schema: str, migrations_dir: Path) -> str:
+    require_schema_name(schema)
+    statements = [f"DROP SCHEMA IF EXISTS {schema} CASCADE;"]
+    for name in [
+        "0001_phase1_inert_schema.sql",
+        "0002_phase2_local_contracts.sql",
+        "0003_phase3_cloud_schema_drift.sql",
+    ]:
+        migration = (migrations_dir / name).read_text(encoding="utf-8")
+        statements.append(migration.replace("reel_brain", schema))
+    return "\n".join(statements)
+
+
+def postgres_operational_sql(
+    connection: sqlite3.Connection,
+    schema: str,
+    source_sha256: str,
+    source_export: str,
+    migrations_dir: Path,
+) -> str:
+    cursor = connection.cursor()
+    objects = sqlite_objects(cursor)
+    statements = [
+        operational_schema_sql(schema, migrations_dir),
+        "BEGIN;",
+        insert_statement(schema, "phase3_import_metadata", {
+            "key": pg_value("source"),
+            "value": pg_value({
+                "source": "Cloudflare D1 cartdotcom-instagram-reel-brain",
+                "source_export": source_export,
+                "source_sha256": source_sha256,
+                "imported_at": utc_now(),
+                "authority": "shadow_non_authoritative",
+                "runtime_secret_values": "redacted",
+            }, jsonb=True),
+        }),
+    ]
+    table_counts = {
+        obj["name"]: int(obj.get("count") or 0)
+        for obj in objects
+        if obj["type"] == "table"
+    }
+
+    for row in sqlite_rows(connection, "d1_migrations"):
+        statements.append(generic_insert_sql(schema, "d1_migrations", row))
+    for row in sqlite_rows(connection, "jobs"):
+        statements.append(import_job_sql(schema, row))
+    for row in sqlite_rows(connection, "notes"):
+        statements.append(generic_insert_sql(schema, "notes", row))
+    for row in sqlite_rows(connection, "pilot_runs"):
+        statements.append(generic_insert_sql(schema, "pilot_runs", row))
+    for row in sqlite_rows(connection, "resources"):
+        statements.append(import_resource_sql(schema, row))
+    for row in sqlite_rows(connection, "artifacts"):
+        statements.append(import_artifact_sql(schema, row))
+    for row in sqlite_rows(connection, "job_events"):
+        statements.append(generic_insert_sql(schema, "job_events", row))
+    for row in sqlite_rows(connection, "pilot_items"):
+        statements.append(generic_insert_sql(schema, "pilot_items", row))
+    for row in sqlite_rows(connection, "pending_dm_parts"):
+        statements.append(generic_insert_sql(schema, "pending_dm_parts", row, {"is_test"}))
+    for row in sqlite_rows(connection, "instagram_carousel_resolutions"):
+        mapped = dict(row)
+        mapped["id"] = row["source_message_id"]
+        mapped["source_media_id"] = row.get("media_id")
+        mapped["canonical_url"] = row.get("source_url")
+        mapped["error_message"] = row.get("error")
+        statements.append(generic_insert_sql(schema, "instagram_carousel_resolutions", mapped))
+    for row in sqlite_rows(connection, "dm_commands"):
+        statements.append(generic_insert_sql(schema, "dm_commands", row, {"is_test"}))
+    for row in sqlite_rows(connection, "outbound_events"):
+        statements.append(generic_insert_sql(schema, "outbound_events", row))
+    for row in sqlite_rows(connection, "inbound_webhook_events"):
+        statements.append(generic_insert_sql(schema, "inbound_webhook_events", row, {"has_share_attachment"}))
+    for row in sqlite_rows(connection, "pilot_candidate_cache"):
+        statements.append(generic_insert_sql(schema, "pilot_candidate_cache", row))
+    for row in sqlite_rows(connection, "settings"):
+        statements.append(generic_insert_sql(schema, "settings", row))
+    for row in sqlite_rows(connection, "runtime_secrets"):
+        statements.append(import_runtime_secret_sql(schema, row))
+
+    for table, expected in sorted(table_counts.items()):
+        if table == "sqlite_sequence":
+            continue
+        statements.append(
+            f"""
+INSERT INTO {schema}.phase3_import_checks(check_name,expected_value,actual_value,ok,detail)
+SELECT {sql_literal('row_count:' + table)}, {sql_literal(str(expected))}, COUNT(*)::text,
+       COUNT(*) = {expected},
+       CASE WHEN COUNT(*) = {expected} THEN 'ok' ELSE 'row count mismatch' END
+FROM {schema}.{table};
+"""
+        )
+    statements.extend([
+        f"""
+INSERT INTO {schema}.phase3_import_checks(check_name,expected_value,actual_value,ok,detail)
+SELECT 'fk:resources_jobs', '0', COUNT(*)::text, COUNT(*) = 0, 'resources with missing jobs'
+FROM {schema}.resources r LEFT JOIN {schema}.jobs j ON j.id=r.job_id WHERE j.id IS NULL;
+""",
+        f"""
+INSERT INTO {schema}.phase3_import_checks(check_name,expected_value,actual_value,ok,detail)
+SELECT 'fk:artifacts_jobs', '0', COUNT(*)::text, COUNT(*) = 0, 'artifacts with missing jobs'
+FROM {schema}.artifacts a LEFT JOIN {schema}.jobs j ON j.id=a.job_id WHERE j.id IS NULL;
+""",
+        f"""
+INSERT INTO {schema}.phase3_import_checks(check_name,expected_value,actual_value,ok,detail)
+SELECT 'fk:job_events_jobs', '0', COUNT(*)::text, COUNT(*) = 0, 'job events with missing jobs'
+FROM {schema}.job_events e LEFT JOIN {schema}.jobs j ON j.id=e.job_id WHERE j.id IS NULL;
+""",
+        f"""
+INSERT INTO {schema}.phase3_import_checks(check_name,expected_value,actual_value,ok,detail)
+SELECT 'unique:artifact_object_key', COUNT(*)::text, COUNT(DISTINCT object_key)::text,
+       COUNT(*) = COUNT(DISTINCT object_key), 'D1 object_key uniqueness retained'
+FROM {schema}.artifacts;
+""",
+        f"""
+INSERT INTO {schema}.phase3_import_checks(check_name,expected_value,actual_value,ok,detail)
+SELECT 'unique:job_dedupe_key', COUNT(dedupe_key)::text, COUNT(DISTINCT dedupe_key)::text,
+       COUNT(dedupe_key) = COUNT(DISTINCT dedupe_key), 'D1 dedupe_key uniqueness retained where non-null'
+FROM {schema}.jobs;
+""",
+        f"""
+INSERT INTO {schema}.phase3_import_checks(check_name,expected_value,actual_value,ok,detail)
+SELECT 'unique:resource_job_slug', COUNT(*)::text, COUNT(DISTINCT job_id || '|' || slug)::text,
+       COUNT(*) = COUNT(DISTINCT job_id || '|' || slug), 'resource per-job slug uniqueness retained'
+FROM {schema}.resources;
+""",
+        f"""
+INSERT INTO {schema}.phase3_import_checks(check_name,expected_value,actual_value,ok,detail)
+SELECT 'redaction:runtime_secrets', '0', COUNT(*) FILTER (WHERE ciphertext <> '__REDACTED__' OR iv <> '__REDACTED__')::text,
+       COUNT(*) FILTER (WHERE ciphertext <> '__REDACTED__' OR iv <> '__REDACTED__') = 0,
+       'runtime secret ciphertext and IV values are not imported'
+FROM {schema}.runtime_secrets;
+""",
+        "COMMIT;",
+    ])
+    return "\n".join(statements)
+
+
+def import_d1_operational(args: argparse.Namespace) -> None:
+    schema = require_schema_name(args.schema)
+    run_dir = Path(args.run_dir).resolve()
+    d1_dir = run_dir / "d1"
+    sqlite_path = Path(args.sqlite).resolve()
+    sql_path = Path(args.source_sql).resolve()
+    migrations_dir = Path(args.migrations_dir).resolve()
+    connection = connect_existing_sqlite(sqlite_path)
+    import_sql = postgres_operational_sql(connection, schema, sha256_file(sql_path), str(sql_path), migrations_dir)
+    output = Path(args.output or d1_dir / f"{schema}-operational-import.sql").resolve()
+    output.write_text(import_sql, encoding="utf-8")
+    run_ssh_psql(output, args.ssh_target, args.psql_command)
+    report = operational_parity_report(schema, args.ssh_target, args.psql_command)
+    report.update({
+        "created_at": utc_now(),
+        "schema": schema,
+        "sql_file": str(output),
+        "sqlite_snapshot": str(sqlite_path),
+    })
+    report_path = d1_dir / "postgres-operational-import-report.json"
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(json.dumps(report, indent=2))
+    if not report["ok"]:
+        raise SystemExit("PostgreSQL operational shadow import checks failed")
+
+
+def operational_parity_report(schema: str, ssh_target: str, psql_command: str) -> dict[str, Any]:
+    sql = f"""
+SELECT json_build_object(
+  'checks', (SELECT COALESCE(json_agg(row_to_json(c) ORDER BY check_name), '[]'::json)
+             FROM {schema}.phase3_import_checks c),
+  'jobs_by_status', (SELECT json_object_agg(status, row_count ORDER BY status)
+                     FROM (SELECT status, COUNT(*)::int AS row_count FROM {schema}.jobs GROUP BY status) s),
+  'notes', (SELECT COUNT(*)::int FROM {schema}.notes),
+  'resources', (SELECT COUNT(*)::int FROM {schema}.resources),
+  'resources_by_artifact_type', (
+    SELECT json_object_agg(artifact_type, row_count ORDER BY artifact_type)
+    FROM (SELECT COALESCE(artifact_type,'uncategorised') AS artifact_type, COUNT(*)::int AS row_count FROM {schema}.resources GROUP BY 1) r
+  ),
+  'retrieval_metadata', json_build_object(
+    'jobs_with_original_video', (SELECT COUNT(*)::int FROM {schema}.jobs WHERE original_video_key IS NOT NULL),
+    'jobs_with_audio', (SELECT COUNT(*)::int FROM {schema}.jobs WHERE audio_key IS NOT NULL),
+    'jobs_with_library_path', (SELECT COUNT(*)::int FROM {schema}.jobs WHERE library_path IS NOT NULL),
+    'resources_with_library_path', (SELECT COUNT(*)::int FROM {schema}.resources WHERE library_path IS NOT NULL)
+  ),
+  'search', json_build_object(
+    'searchable_jobs', (SELECT COUNT(*)::int FROM {schema}.jobs WHERE title IS NOT NULL OR description IS NOT NULL OR author_username IS NOT NULL),
+    'searchable_resources', (SELECT COUNT(*)::int FROM {schema}.resources WHERE name IS NOT NULL OR summary IS NOT NULL OR guide_text IS NOT NULL)
+  ),
+  'library_paths', json_build_object(
+    'job_html_keys', (SELECT COUNT(*)::int FROM {schema}.jobs WHERE html_key IS NOT NULL),
+    'resource_guide_html_keys', (SELECT COUNT(*)::int FROM {schema}.resources WHERE guide_html_key IS NOT NULL)
+  ),
+  'sampled_relational_records', (
+    SELECT COALESCE(json_agg(row_to_json(sample)), '[]'::json)
+    FROM (
+      SELECT j.id, j.status, j.library_path IS NOT NULL AS library_path_present,
+        (SELECT COUNT(*)::int FROM {schema}.resources r WHERE r.job_id=j.id) AS resource_count,
+        (SELECT COUNT(*)::int FROM {schema}.artifacts a WHERE a.job_id=j.id) AS artifact_count,
+        (SELECT COUNT(*)::int FROM {schema}.job_events e WHERE e.job_id=j.id) AS event_count
+      FROM {schema}.jobs j
+      ORDER BY j.created_at DESC
+      LIMIT 10
+    ) sample
+  )
+)::text;
+"""
+    payload = run_ssh_capture(sql, ssh_target, psql_command)
+    report = json.loads(payload)
+    report["ok"] = all(row["ok"] for row in report.get("checks", []))
+    return report
 
 
 def collect_object_keys(connection: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -983,6 +1313,17 @@ def main(argv: list[str] | None = None) -> int:
     import_d1.add_argument("--psql-command", default=DEFAULT_PSQL_COMMAND)
     import_d1.add_argument("--output")
     import_d1.set_defaults(func=import_d1_shadow)
+
+    import_operational = subcommands.add_parser("import-d1-operational")
+    import_operational.add_argument("--run-dir", required=True)
+    import_operational.add_argument("--sqlite", required=True)
+    import_operational.add_argument("--source-sql", required=True)
+    import_operational.add_argument("--schema", required=True)
+    import_operational.add_argument("--migrations-dir", default=str(Path(__file__).resolve().parent.parent / "migrations"))
+    import_operational.add_argument("--ssh-target", default="cartdotcom-server")
+    import_operational.add_argument("--psql-command", default=DEFAULT_PSQL_COMMAND)
+    import_operational.add_argument("--output")
+    import_operational.set_defaults(func=import_d1_operational)
 
     r2_manifest = subcommands.add_parser("r2-manifest")
     r2_manifest.add_argument("--run-dir", required=True)

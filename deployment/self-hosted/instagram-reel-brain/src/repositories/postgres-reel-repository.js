@@ -245,4 +245,77 @@ export class PostgresReelRepository {
       [jobId, key, checksum, byteLength, contentType || "application/octet-stream"],
     );
   }
+
+  async getStatusSummary() {
+    const result = await this.query(
+      `SELECT status, COUNT(*)::int AS count,
+        AVG(processing_seconds)::float AS average_processing_seconds,
+        AVG(codex_total_tokens)::float AS average_codex_total_tokens
+       FROM ${this.table("jobs")}
+       GROUP BY status
+       ORDER BY status`,
+    );
+    return result.rows || [];
+  }
+
+  async searchLibrary(query, { limit = 10 } = {}) {
+    const pattern = `%${String(query || "").trim()}%`;
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 50));
+    const result = await this.query(
+      `SELECT 'job' AS record_type, id, title AS name, author_username, library_path
+       FROM ${this.table("jobs")}
+       WHERE title ILIKE $1 OR description ILIKE $1 OR author_username ILIKE $1
+       UNION ALL
+       SELECT 'resource' AS record_type, id, name, NULL AS author_username, library_path
+       FROM ${this.table("resources")}
+       WHERE name ILIKE $1 OR summary ILIKE $1 OR guide_text ILIKE $1
+       ORDER BY record_type, name
+       LIMIT ${safeLimit}`,
+      [pattern],
+    );
+    return result.rows || [];
+  }
+
+  async listNotes({ limit = 20 } = {}) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 20, 100));
+    const result = await this.query(
+      `SELECT id, sender_id, body, source_message_id, created_at
+       FROM ${this.table("notes")}
+       ORDER BY created_at DESC
+       LIMIT ${safeLimit}`,
+    );
+    return result.rows || [];
+  }
+
+  async getRetrievalMetadata(jobId) {
+    const result = await this.query(
+      `SELECT j.id, j.source_url, j.canonical_url, j.original_video_key, j.audio_key,
+        j.html_key, j.library_path, j.transcript_key, j.synthesis_json_key,
+        COUNT(DISTINCT r.id)::int AS resource_count,
+        COUNT(DISTINCT a.id)::int AS artifact_count
+       FROM ${this.table("jobs")} j
+       LEFT JOIN ${this.table("resources")} r ON r.job_id=j.id
+       LEFT JOIN ${this.table("artifacts")} a ON a.job_id=j.id
+       WHERE j.id=$1
+       GROUP BY j.id`,
+      [jobId],
+    );
+    return result.rows?.[0] || null;
+  }
+
+  async listLibraryPaths({ limit = 50 } = {}) {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
+    const result = await this.query(
+      `SELECT 'job' AS record_type, id, library_path, html_key AS object_key
+       FROM ${this.table("jobs")}
+       WHERE library_path IS NOT NULL
+       UNION ALL
+       SELECT 'resource' AS record_type, id, library_path, guide_html_key AS object_key
+       FROM ${this.table("resources")}
+       WHERE library_path IS NOT NULL
+       ORDER BY record_type, library_path
+       LIMIT ${safeLimit}`,
+    );
+    return result.rows || [];
+  }
 }

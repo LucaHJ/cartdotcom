@@ -57,8 +57,9 @@ data migration, ingress provisioning, local processing, or backlog work.
 
 Phase 3 is a manual operator workflow only. The tooling in
 `scripts/phase3_shadow_migration.py` can inventory a captured D1 export, import
-it into a non-authoritative PostgreSQL shadow schema, reconcile/copy R2
-artifacts, verify a local shadow copy, and produce library/D1 parity reports.
+it into non-authoritative PostgreSQL audit and typed operational shadow
+schemas, reconcile/copy R2 artifacts, verify workstation and server shadow
+copies, and produce library/D1/PostgreSQL parity reports.
 
 The Phase 3 gate is complete for independent review. See
 `docs/PHASE_3_GATE_REPORT_2026-08-21.md`.

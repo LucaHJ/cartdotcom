@@ -162,7 +162,7 @@ function migrationSql(name) {
 }
 
 async function setupSchema() {
-  runPsql(`DROP SCHEMA IF EXISTS ${schema} CASCADE;\n${migrationSql("0001_phase1_inert_schema.sql")}\n${migrationSql("0002_phase2_local_contracts.sql")}`);
+  runPsql(`DROP SCHEMA IF EXISTS ${schema} CASCADE;\n${migrationSql("0001_phase1_inert_schema.sql")}\n${migrationSql("0002_phase2_local_contracts.sql")}\n${migrationSql("0003_phase3_cloud_schema_drift.sql")}`);
 }
 
 async function dropSchema() {
@@ -172,7 +172,7 @@ async function dropSchema() {
 test.before(setupSchema);
 test.after(dropSchema);
 
-test("connected PostgreSQL enforces partial unique dedupe and duplicate-idempotent insert", async () => {
+test("connected PostgreSQL enforces D1-compatible dedupe and duplicate-idempotent insert", async () => {
   const { first, duplicate } = await withConnectedRepo(async (repo) => ({
     first: await repo.createJob({ id: "pg-job-1", sourceUrl: "https://www.instagram.com/reel/PG001/" }),
     duplicate: await repo.createJob({ id: "pg-job-dup", sourceUrl: "https://www.instagram.com/reel/PG001/" }),
@@ -180,9 +180,13 @@ test("connected PostgreSQL enforces partial unique dedupe and duplicate-idempote
 
   assert.equal(first.id, "pg-job-1");
   assert.equal(duplicate, null);
-  runPsql(`INSERT INTO ${schema}.jobs(id,source_url,dedupe_key,status,stage) VALUES ('pg-job-dupe-row','https://www.instagram.com/reel/PG001/','instagram:PG001','duplicate','duplicate');`);
+  assert.throws(
+    () => runPsql(`INSERT INTO ${schema}.jobs(id,source_url,dedupe_key,status,stage) VALUES ('pg-job-dupe-row','https://www.instagram.com/reel/PG001/','instagram:PG001','duplicate','duplicate');`),
+    /psql failed/,
+  );
+  runPsql(`INSERT INTO ${schema}.jobs(id,source_url,dedupe_key,status,stage,source_dedupe_key_missing) VALUES ('pg-job-dupe-row','https://www.instagram.com/reel/PG001/',NULL,'duplicate','duplicate',true);`);
   const count = JSON.parse(runPsql(`SELECT json_agg(t) FROM (SELECT COUNT(*)::int AS count FROM ${schema}.jobs WHERE dedupe_key='instagram:PG001') t;`, { json: true }))[0].count;
-  assert.equal(count, 2);
+  assert.equal(count, 1);
 });
 
 test("connected PostgreSQL SKIP LOCKED claim skips a concurrently locked queued job", async () => {
@@ -432,6 +436,7 @@ test("connected PostgreSQL resource/artifact writes are idempotent", async () =>
 test("connected PostgreSQL enforces carousel and pending-part constraints", () => {
   assert.throws(() => runPsql(`INSERT INTO ${schema}.pending_dm_parts(id,sender_id,source_message_id,kind,expires_at) VALUES ('bad','s','m','bad_kind',now());`), /psql failed/);
   assert.throws(() => runPsql(`INSERT INTO ${schema}.instagram_carousel_resolutions(id,source_message_id,status) VALUES ('bad','m','waiting');`), /psql failed/);
+  runPsql(`INSERT INTO ${schema}.instagram_carousel_resolutions(id,source_message_id,status) VALUES ('auth-wait','auth-wait-message','waiting_for_auth');`);
 });
 
 test("connected PostgreSQL imports a scrubbed D1-shaped export into isolated schema and test storage", async () => {
@@ -449,4 +454,59 @@ test("connected PostgreSQL imports a scrubbed D1-shaped export into isolated sch
       (SELECT COUNT(*)::int FROM ${schema}.artifacts WHERE job_id='synthetic-job-1') AS artifacts
   ) t;`, { json: true }))[0];
   assert.deepEqual(rows, { jobs: 1, resources: 1, artifacts: 1 });
+});
+
+test("connected PostgreSQL exposes read-only parity APIs over typed schema", async () => {
+  const result = await withConnectedRepo(async (repo) => {
+    await repo.createJob({
+      id: "pg-read-api-job",
+      sourceUrl: "https://www.instagram.com/reel/READAPI01/",
+      sourceMessageId: "read-api-message",
+    });
+    await repo.markStage("pg-read-api-job", "synthesising");
+    await repo.upsertResource({
+      id: "pg-read-api-resource",
+      jobId: "pg-read-api-job",
+      name: "Read API Resource",
+      slug: "read-api-resource",
+      summary: "Searchable read API resource",
+      guideText: "A fixture guide.",
+      libraryPath: "resources/read-api-resource.html",
+    });
+    await repo.recordArtifactWrite({
+      jobId: "pg-read-api-job",
+      key: "read-api/video.mp4",
+      checksum: "readapisha",
+      byteLength: 12,
+      contentType: "video/mp4",
+    });
+    await repo.completeJob("pg-read-api-job", {
+      processingSeconds: 12.5,
+      tokens: { total: 1234 },
+      htmlKey: "library/read-api.html",
+      libraryPath: "reels/read-api.html",
+      synthesisJsonKey: "read-api/synthesis.json",
+    });
+    await repo.query(
+      `UPDATE ${schema}.jobs SET original_video_key='read-api/video.mp4', audio_key='read-api/audio.mp3', transcript_key='read-api/transcript.txt' WHERE id='pg-read-api-job'`,
+    );
+    await repo.query(
+      `INSERT INTO ${schema}.notes(id, sender_id, body, source_message_id) VALUES ('pg-read-api-note','sender','Read API note','read-api-note-message')`,
+    );
+    return {
+      status: await repo.getStatusSummary(),
+      search: await repo.searchLibrary("Read API", { limit: 5 }),
+      notes: await repo.listNotes({ limit: 5 }),
+      retrieval: await repo.getRetrievalMetadata("pg-read-api-job"),
+      library: await repo.listLibraryPaths({ limit: 5 }),
+    };
+  });
+
+  assert.equal(result.status.some((row) => row.status === "complete" && row.count >= 1), true);
+  assert.equal(result.search.some((row) => row.id === "pg-read-api-job" || row.id === "pg-read-api-resource"), true);
+  assert.equal(result.notes.some((row) => row.id === "pg-read-api-note"), true);
+  assert.equal(result.retrieval.original_video_key, "read-api/video.mp4");
+  assert.equal(result.retrieval.resource_count, 1);
+  assert.equal(result.retrieval.artifact_count, 1);
+  assert.equal(result.library.some((row) => row.library_path === "reels/read-api.html"), true);
 });
