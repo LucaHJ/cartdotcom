@@ -2,7 +2,7 @@
 
 Status: corrective implementation complete; awaiting independent review.
 
-Recorded at: 2026-08-21T03:20:21+10:00 Australia/Brisbane
+Last updated at: 2026-08-21T03:35:44+10:00 Australia/Brisbane
 
 Cloudflare remains the sole production authority. This Phase 2 work does not
 authorise production import, R2 backfill, live or shadow intake, local dispatch,
@@ -63,12 +63,36 @@ backlog enumeration, real backlog replay, production delta mirroring, or Phase 3
    - The connected PostgreSQL test imports it into the isolated schema and test
      object root only.
 
+6. Persistent PostgreSQL session and atomic transitions
+   - The connected PostgreSQL harness now keeps one persistent
+     `ssh -> docker exec -> psql` process open per connected client.
+   - Repository `withTransaction()` is now exercised against one real database
+     session; `BEGIN`, callback queries, and `COMMIT`/`ROLLBACK` no longer run
+     in separate `psql` sessions.
+   - Public state-transition methods `markStage()`, `completeJob()`, and
+     `failJob()` are atomic by construction. Each method now wraps its guarded
+     state update and job-event insert in `withTransaction()`.
+   - The mutation bodies are private class methods, so callers cannot bypass
+     the transaction boundary through the public repository API.
+   - Added a connected interruption test that throws after the state update and
+     before event insertion. The real PostgreSQL rollback leaves the job state
+     and event table unchanged.
+
+7. Linux object-store symlink gate
+   - Copied the corrected `local-object-store.js`,
+     `disabled-adapters.js`, and `phase2-storage-adapters.test.mjs` into a
+     temporary directory on the Ubuntu server.
+   - Ran the copied test surface with the already-present `node:22-alpine`
+     Docker image.
+   - The symlink escape test executed and passed on Linux with zero skips.
+
 ## Local files changed for this corrective gate
 
 - `deployment/self-hosted/instagram-reel-brain/docs/PHASE_2_GATE_REPORT_2026-08-21.md`
 - `deployment/self-hosted/instagram-reel-brain/fixtures/synthetic/scrubbed-d1-export.json`
 - `deployment/self-hosted/instagram-reel-brain/services/media-processor-api/app.py`
 - `deployment/self-hosted/instagram-reel-brain/src/domain/authority.js`
+- `deployment/self-hosted/instagram-reel-brain/src/repositories/fixture-client.js`
 - `deployment/self-hosted/instagram-reel-brain/src/repositories/postgres-reel-repository.js`
 - `deployment/self-hosted/instagram-reel-brain/src/repositories/scrubbed-importer.js`
 - `deployment/self-hosted/instagram-reel-brain/src/storage/local-object-store.js`
@@ -117,8 +141,8 @@ Self-hosted Reel Node tests:
 
 ```text
 deployment/self-hosted/instagram-reel-brain> npm test
-33 tests
-32 passed
+34 tests
+33 passed
 0 failed
 1 skipped: symlink creation unavailable on this Windows host: EPERM
 ```
@@ -130,7 +154,10 @@ Connected PostgreSQL coverage inside `npm test`:
 - Concurrent `FOR UPDATE SKIP LOCKED` claim skips a locked queued row.
 - Completion/failure affected-row guards append events only when the guarded
   update changes a row.
-- Transaction rollback leaves no interrupted event.
+- Repository `withTransaction()` rollback uses one persistent PostgreSQL
+  session and leaves no interrupted state or event.
+- Public transition interruption between state update and event insertion rolls
+  back both the state update and event insertion.
 - Resource upsert and artifact write tracking are idempotent.
 - Carousel status and pending-part kind constraints reject invalid values.
 - Scrubbed D1-shaped export imports into an isolated PostgreSQL schema and test
@@ -162,6 +189,22 @@ deployment/self-hosted/instagram-reel-brain> docker compose -f compose.yaml conf
 passed
 ```
 
+Ubuntu object-store symlink gate:
+
+```text
+ssh cartdotcom-server
+docker run --rm -v /tmp/reel-phase2-symlink-<timestamp>:/work -w /work node:22-alpine \
+  node --test tests/phase2-storage-adapters.test.mjs
+
+4 tests
+4 passed
+0 failed
+0 skipped
+```
+
+The temporary server directory was removed after the test. No Reel service was
+deployed, enabled, restarted, or connected to real Reel data.
+
 Existing cloud Reel verification, unchanged authority:
 
 ```text
@@ -177,8 +220,8 @@ deployment/instagram-reel-brain> python -m unittest discover -s container -p "te
 
 ## Health and production idle evidence
 
-Server read-only health check at 2026-08-20T17:18:52Z
-(2026-08-21T03:18:52+10:00 Brisbane):
+Server read-only health check at 2026-08-20T17:35:19Z
+(2026-08-21T03:35:19+10:00 Brisbane):
 
 - Six Reel services were running and healthy:
   - `reel-api`
@@ -188,9 +231,9 @@ Server read-only health check at 2026-08-20T17:18:52Z
   - `reel-archiver`
   - `reel-auth-rotator`
 - News Signal services were running and healthy.
-- Available memory: 14,001 MiB.
-- Root volume: 313 GiB available, 6% used.
-- Load average: `0.33, 0.89, 0.90`.
+- Available memory: 13,793 MiB.
+- Root volume: 312 GiB available, 6% used.
+- Load average: `0.83, 0.48, 0.61`.
 
 Cloudflare Worker `/health`:
 
@@ -218,7 +261,9 @@ changed_db = false
 ## Commit
 
 The earlier Phase 2 baseline commit was `0a4d156`. The corrective implementation
-was committed separately as `1ded965` after staging only Reel Phase 2 files.
+was committed separately as `1ded965`; the report-only reference update was
+`d964e75`. A second bounded corrective follow-up commit is expected after this
+report update is staged with only Reel Phase 2 files.
 
 ## Rollback
 
@@ -234,9 +279,9 @@ unchanged.
 
 ## Remaining risks and next gate
 
-- The real symlink traversal test was present but could not execute on this
-  Windows host because symlink creation returned `EPERM`; it should be run on a
-  symlink-capable host before any object-store path is trusted with real data.
+- The real symlink traversal test still cannot execute on this Windows host
+  because symlink creation returns `EPERM`, but the same corrected source was
+  run on the Ubuntu server and passed.
 - Disabled adapters intentionally provide interfaces but no live capability.
 - No production D1/R2/KV parity, artifact backfill, local processing authority,
   shadow intake, or backlog processing has been attempted.

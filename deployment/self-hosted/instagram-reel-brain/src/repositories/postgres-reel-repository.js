@@ -15,6 +15,7 @@ export class PostgresReelRepository {
     if (!/^[a-z_][a-z0-9_]*$/i.test(schema)) throw new Error(`Invalid schema name ${schema}`);
     this.client = client;
     this.schema = schema;
+    this.transactionDepth = 0;
   }
 
   table(name) {
@@ -23,7 +24,11 @@ export class PostgresReelRepository {
   }
 
   async withTransaction(callback) {
+    if (this.transactionDepth > 0) {
+      return callback(this);
+    }
     await this.client.query("BEGIN");
+    this.transactionDepth += 1;
     try {
       const result = await callback(this);
       await this.client.query("COMMIT");
@@ -31,6 +36,8 @@ export class PostgresReelRepository {
     } catch (error) {
       await this.client.query("ROLLBACK").catch(() => undefined);
       throw error;
+    } finally {
+      this.transactionDepth -= 1;
     }
   }
 
@@ -81,6 +88,10 @@ export class PostgresReelRepository {
   }
 
   async markStage(jobId, stage, status = "running", detail = null) {
+    return this.withTransaction((repository) => repository.#markStageMutation(jobId, stage, status, detail));
+  }
+
+  async #markStageMutation(jobId, stage, status = "running", detail = null) {
     const result = await this.client.query(
       `UPDATE ${this.table("jobs")} SET stage=$2,status=$3,updated_at=now() WHERE id=$1 RETURNING id`,
       [jobId, stage, status],
@@ -91,6 +102,10 @@ export class PostgresReelRepository {
   }
 
   async completeJob(jobId, output) {
+    return this.withTransaction((repository) => repository.#completeJobMutation(jobId, output));
+  }
+
+  async #completeJobMutation(jobId, output) {
     const result = await this.client.query(
       `UPDATE ${this.table("jobs")}
        SET status='complete', stage='complete', completed_at=now(), processing_seconds=$2,
@@ -118,6 +133,10 @@ export class PostgresReelRepository {
   }
 
   async failJob(jobId, code, message) {
+    return this.withTransaction((repository) => repository.#failJobMutation(jobId, code, message));
+  }
+
+  async #failJobMutation(jobId, code, message) {
     const detail = String(message || "failed").slice(0, 500);
     const result = await this.client.query(
       `UPDATE ${this.table("jobs")}
