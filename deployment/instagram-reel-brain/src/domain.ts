@@ -169,6 +169,63 @@ export type MessageCommand =
   | { intent: "help" }
   | { intent: "unknown"; text: string };
 
+export const LIVE_ADJACENT_INSTRUCTION_WINDOW_MINUTES = 5;
+export const LIVE_INSTRUCTION_GRACE_DELAY_SECONDS = 12;
+
+export type AdjacentPairingTargetState = {
+  job?: { status: string; stage: string } | null;
+  carousel?: { status: string } | null;
+};
+
+export function shouldCreateLiveInstructionTarget(input: {
+  mode: string;
+  hasShare: boolean;
+  instructions: string;
+}): boolean {
+  return input.mode === "live" && input.hasShare && !input.instructions.trim();
+}
+
+export function shouldStoreLiveInstructionCandidate(input: {
+  mode: string;
+  hasShare: boolean;
+  emptyMessage: boolean;
+  commandIntent?: MessageCommand["intent"] | null;
+}): boolean {
+  return input.mode === "live"
+    && !input.hasShare
+    && !input.emptyMessage
+    && input.commandIntent === "unknown";
+}
+
+export function pendingPartIsTest(input: { mode: string; kind: "share" | "instruction" | "unsupported_share" }): boolean {
+  return input.mode === "test_only";
+}
+
+export function queueDelaySecondsForAdjacentInstruction(mode: string): number {
+  return mode === "live" ? LIVE_INSTRUCTION_GRACE_DELAY_SECONDS : 0;
+}
+
+export function instagramWebhookSkipReason(input: {
+  senderAllowed: boolean;
+  duplicateCommand: boolean;
+}): "sender_not_allowed" | "duplicate_command" | null {
+  if (!input.senderAllowed) return "sender_not_allowed";
+  if (input.duplicateCommand) return "duplicate_command";
+  return null;
+}
+
+export function adjacentInstructionApplication(input: AdjacentPairingTargetState): {
+  late: boolean;
+  correctiveAction: "explicit_resynthesis_required" | null;
+} {
+  const job = input.job || null;
+  const carousel = input.carousel || null;
+  const canApplyToJob = Boolean(job && job.status === "queued" && job.stage === "queued");
+  const canApplyBeforeCarouselJob = Boolean(!job && (!carousel || carousel.status === "queued"));
+  const late = Boolean((job && !canApplyToJob) || (carousel && !canApplyBeforeCarouselJob));
+  return { late, correctiveAction: late ? "explicit_resynthesis_required" : null };
+}
+
 export type CapturedComment = {
   id?: string;
   author?: string;

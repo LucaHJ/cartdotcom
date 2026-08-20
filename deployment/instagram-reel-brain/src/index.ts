@@ -1,6 +1,11 @@
 import { Container, getContainer } from "@cloudflare/containers";
 import puppeteer, { type BrowserWorker, type Cookie } from "@cloudflare/puppeteer";
 import {
+  pairLiveInstructionWithPendingShare,
+  sendQueueMessageWithAdjacentInstructionDelay,
+  takePendingInstructionForShare,
+} from "./adjacent-pairing";
+import {
   DEFAULT_STAGE_REACTIONS,
   applyMediaLinkFallbacks,
   canonicalArtifactKey,
@@ -8,6 +13,7 @@ import {
   classifyInstagramMediaPayload,
   findInstagramCarouselMediaPayload,
   findInstagramDirectPermalink,
+  pendingPartIsTest,
   instagramDedupeKey,
   instagramDirectCarousels,
   instagramPostUrlFromCdnUrl,
@@ -27,7 +33,10 @@ import {
   renderResourceMarkdown,
   renderRootHtml,
   renderRootMarkdown,
+  shouldCreateLiveInstructionTarget,
+  shouldStoreLiveInstructionCandidate,
   formatProcessingDuration,
+  instagramWebhookSkipReason,
   shouldReactToStage,
   slugify,
   youtubeVideoId,
@@ -505,7 +514,7 @@ type PendingDmPart = {
 
 async function storePendingDmPart(
   env: Env,
-  input: { senderId: string; sourceMessageId: string; kind: PendingDmPart["kind"]; sourceUrl?: string; instructions?: string; expiresIn?: "5 minutes" | "24 hours" },
+  input: { senderId: string; sourceMessageId: string; kind: PendingDmPart["kind"]; sourceUrl?: string; instructions?: string; expiresIn?: "5 minutes" | "24 hours"; isTest?: boolean },
 ): Promise<void> {
   const expiryModifier = input.expiresIn === "24 hours" ? "+24 hours" : "+5 minutes";
   await env.REEL_DB.prepare(
@@ -513,7 +522,7 @@ async function storePendingDmPart(
      VALUES (?,?,?,?,?,?,?,datetime('now',?))`,
   ).bind(
     uuid(), input.senderId, input.sourceMessageId, input.kind, input.sourceUrl || null, input.instructions || null,
-    input.kind === "instruction" ? 1 : 0, expiryModifier,
+    input.isTest ? 1 : 0, expiryModifier,
   ).run();
 }
 
@@ -530,6 +539,62 @@ async function takePendingDmPart(env: Env, senderId: string, kinds: PendingDmPar
     "UPDATE pending_dm_parts SET consumed_at=CURRENT_TIMESTAMP WHERE id=? AND consumed_at IS NULL",
   ).bind(pending.id).run();
   return claimed.meta.changes === 1 ? pending : null;
+}
+
+async function pairLiveInstructionWithShare(
+  env: Env,
+  input: { senderId: string; instructionMessageId: string; instructions: string },
+): Promise<{ paired: boolean; shareMessageId?: string; late?: boolean; result: Record<string, unknown> }> {
+  return pairLiveInstructionWithPendingShare({
+    takePendingShare: (senderId) => takePendingDmPart(env, senderId, ["share"]),
+    storePendingInstruction: (pendingInput) => storePendingDmPart(env, {
+      senderId: pendingInput.senderId,
+      sourceMessageId: pendingInput.instructionMessageId,
+      kind: "instruction",
+      instructions: pendingInput.instructions,
+      expiresIn: "5 minutes",
+    }),
+    markInstructionWaiting: ({ instructionMessageId, result }) => env.REEL_DB.prepare(
+      "UPDATE dm_commands SET status='waiting_for_share', result_summary=? WHERE source_message_id=?",
+    ).bind(JSON.stringify(result), instructionMessageId).run().then(() => undefined),
+    readTargetState: async (shareMessageId) => {
+      const job = await env.REEL_DB.prepare(
+        "SELECT id,status,stage FROM jobs WHERE source_message_id=? ORDER BY created_at DESC LIMIT 1",
+      ).bind(shareMessageId).first<{ id: string; status: string; stage: string }>();
+      const carousel = await env.REEL_DB.prepare(
+        "SELECT status FROM instagram_carousel_resolutions WHERE source_message_id=?",
+      ).bind(shareMessageId).first<{ status: string }>();
+      return { job, carousel };
+    },
+    applyInstruction: (paired) => env.REEL_DB.batch([
+      env.REEL_DB.prepare(
+        "UPDATE dm_commands SET input_text=?,result_summary=? WHERE source_message_id=?",
+      ).bind(paired.instructions, JSON.stringify(paired.originalSummary), paired.shareMessageId),
+      env.REEL_DB.prepare(
+        "UPDATE dm_commands SET status=?,result_summary=?,completed_at=CURRENT_TIMESTAMP WHERE source_message_id=?",
+      ).bind(paired.late ? "paired_late" : "paired", JSON.stringify(paired.result), paired.instructionMessageId),
+      env.REEL_DB.prepare(
+        "UPDATE jobs SET instructions=?,updated_at=CURRENT_TIMESTAMP WHERE source_message_id=? AND status='queued' AND stage='queued'",
+      ).bind(paired.instructions, paired.shareMessageId),
+    ]).then(() => undefined),
+  }, input);
+}
+
+async function takeLiveInstructionForShare(
+  env: Env,
+  input: { senderId: string; shareMessageId: string },
+): Promise<string | null> {
+  return takePendingInstructionForShare({
+    takePendingInstruction: (senderId) => takePendingDmPart(env, senderId, ["instruction"]),
+    applyPendingInstructionToShare: (paired) => env.REEL_DB.batch([
+      env.REEL_DB.prepare(
+        "UPDATE dm_commands SET status='paired',result_summary=?,completed_at=CURRENT_TIMESTAMP WHERE source_message_id=?",
+      ).bind(JSON.stringify(paired.result), paired.instructionMessageId),
+      env.REEL_DB.prepare(
+        "UPDATE dm_commands SET input_text=?,result_summary=? WHERE source_message_id=?",
+      ).bind(paired.instructions, JSON.stringify(paired.originalSummary), paired.shareMessageId),
+    ]).then(() => undefined),
+  }, input);
 }
 
 async function requestPermalinkForUnresolvedShare(
@@ -1010,7 +1075,7 @@ async function resolveInstagramCarouselPermalink(
 
 async function enqueueCarouselResolution(
   env: Env,
-  input: { senderId: string; sourceMessageId: string; raw: unknown; instructions?: string },
+  input: { senderId: string; sourceMessageId: string; raw: unknown; instructions?: string; queueDelayMode?: string },
 ): Promise<Record<string, unknown>> {
   const attachment = instagramPostAttachment(input.raw);
   if (!attachment) {
@@ -1031,7 +1096,7 @@ async function enqueueCarouselResolution(
        VALUES (?,?,?,?,'queued',NULL,CURRENT_TIMESTAMP)
        ON CONFLICT(source_message_id) DO UPDATE SET sender_id=excluded.sender_id,media_id=excluded.media_id,title=excluded.title,status='queued',error=NULL,updated_at=CURRENT_TIMESTAMP`,
     ).bind(input.sourceMessageId, input.senderId, attachment.mediaId, attachment.title).run();
-    await env.REEL_QUEUE.send({ type: "carousel_resolve", sourceMessageId: input.sourceMessageId });
+    await sendQueueMessageWithAdjacentInstructionDelay(env.REEL_QUEUE, { type: "carousel_resolve", sourceMessageId: input.sourceMessageId }, input.queueDelayMode || "");
   }
   await reactToSourceMessage(env, { id: null, source_message_id: input.sourceMessageId, sender_id: input.senderId }, "queued");
   const result = { ok: true, queued: true, status: "resolving_carousel", media_id: attachment.mediaId };
@@ -2789,6 +2854,7 @@ async function createJob(
     sourceMessageId?: string | null;
     pilotRunId?: string | null;
     sourceMediaJson?: string | null;
+    queueDelayMode?: string;
   },
 ): Promise<{ id: string; canonicalUrl: string; shortcode: string; duplicate: boolean }> {
   const canonical = canonicalizeInstagramUrl(input.sourceUrl);
@@ -2842,7 +2908,7 @@ async function createJob(
     await reactToSourceMessage(env, { id, source_message_id: input.sourceMessageId || null, sender_id: input.senderId || null }, "queued");
   }
   try {
-    await env.REEL_QUEUE.send({ jobId: id });
+    await sendQueueMessageWithAdjacentInstructionDelay(env.REEL_QUEUE, { jobId: id }, input.queueDelayMode || "");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     await setStage(env, { id, source_message_id: input.sourceMessageId || null, sender_id: input.senderId || null }, "error_queue", "failed", detail);
@@ -2888,6 +2954,7 @@ async function handleNormalizedIntake(request: Request, env: Env): Promise<Respo
     sender_id?: string;
     source_message_id?: string;
     test?: boolean;
+    queue_delay_mode?: string;
   }>(request);
   const mode = env.INGEST_MODE || "disabled";
   if (mode === "disabled") return json({ error: "Ingest is disabled" }, { status: 409 });
@@ -2901,6 +2968,7 @@ async function handleNormalizedIntake(request: Request, env: Env): Promise<Respo
       instructions: input.instructions || text,
       senderId: input.sender_id,
       sourceMessageId: input.source_message_id,
+      queueDelayMode: input.queue_delay_mode,
     });
     return json({ ok: true, ...result }, { status: result.duplicate ? 200 : 202 });
   }
@@ -2955,7 +3023,9 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
   const allowed = new Set((env.INSTAGRAM_ALLOWED_SENDER_IDS || "").split(",").map((value) => value.trim()).filter(Boolean));
   const results: unknown[] = [];
   for (const event of directMessageEvents(payload)) {
-    if (allowed.size && !allowed.has(event.senderId)) {
+    const senderAllowed = !(allowed.size && !allowed.has(event.senderId));
+    const senderSkip = instagramWebhookSkipReason({ senderAllowed, duplicateCommand: false });
+    if (senderSkip === "sender_not_allowed") {
       results.push({ message_id: event.messageId, ignored: true, reason: "sender_not_allowed" });
       continue;
     }
@@ -2987,7 +3057,8 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
     const commandIntent = sourceUrl ? "reel" : markerOnly ? "test_marker" : hasShareAttachment ? "unsupported_share" : emptyMessage ? "empty_message" : command?.intent || "unknown";
     const existingCommand = await env.REEL_DB.prepare("SELECT id, status FROM dm_commands WHERE source_message_id=?")
       .bind(event.messageId).first<{ id: string; status: string }>();
-    if (existingCommand) {
+    const duplicateSkip = instagramWebhookSkipReason({ senderAllowed: true, duplicateCommand: Boolean(existingCommand) });
+    if (duplicateSkip === "duplicate_command" && existingCommand) {
       results.push({ message_id: event.messageId, duplicate: true, command_id: existingCommand.id, status: existingCommand.status });
       continue;
     }
@@ -3025,6 +3096,7 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
             sourceMessageId: event.messageId,
             kind: "share",
             sourceUrl,
+            isTest: pendingPartIsTest({ mode: env.INGEST_MODE || "disabled", kind: "share" }),
           });
           const waiting = { ok: true, silent: true, waiting_for: "#brain-test", message_id: event.messageId };
           await env.REEL_DB.prepare(
@@ -3040,6 +3112,7 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
             senderId: event.senderId,
             sourceMessageId: event.messageId,
             kind: "instruction",
+            isTest: pendingPartIsTest({ mode: env.INGEST_MODE || "disabled", kind: "instruction" }),
           });
           const waiting = { ok: true, silent: true, waiting_for: "instagram_share", message_id: event.messageId };
           await env.REEL_DB.prepare(
@@ -3069,6 +3142,7 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
           senderId: event.senderId,
           sourceMessageId: event.messageId,
           kind: "unsupported_share",
+          isTest: pendingPartIsTest({ mode: env.INGEST_MODE || "disabled", kind: "unsupported_share" }),
         });
         const waiting = { ok: true, silent: true, waiting_for: "processable_reel_url_or_test_marker", message_id: event.messageId };
         await env.REEL_DB.prepare(
@@ -3078,12 +3152,46 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
         continue;
       }
     }
+    if ((env.INGEST_MODE || "disabled") === "live") {
+      const hasShare = Boolean(sourceUrl || hasShareAttachment);
+      if (shouldCreateLiveInstructionTarget({ mode: env.INGEST_MODE || "disabled", hasShare, instructions })) {
+        const pendingInstruction = await takeLiveInstructionForShare(env, {
+          senderId: event.senderId,
+          shareMessageId: sourceMessageId,
+        });
+        if (pendingInstruction) instructions = pendingInstruction;
+      }
+      if (shouldCreateLiveInstructionTarget({ mode: env.INGEST_MODE || "disabled", hasShare, instructions })) {
+        await storePendingDmPart(env, {
+          senderId: event.senderId,
+          sourceMessageId,
+          kind: "share",
+          sourceUrl,
+          expiresIn: "5 minutes",
+        });
+      } else if (shouldStoreLiveInstructionCandidate({
+        mode: env.INGEST_MODE || "disabled",
+        hasShare,
+        emptyMessage,
+        commandIntent: command?.intent,
+      })) {
+        const unknownInstructions = command?.intent === "unknown" ? command.text : cleanText;
+        const paired = await pairLiveInstructionWithShare(env, {
+          senderId: event.senderId,
+          instructionMessageId: event.messageId,
+          instructions: unknownInstructions,
+        });
+        results.push(paired.result);
+        continue;
+      }
+    }
     if (!sourceUrl && hasShareAttachment) {
       const unsupported = await enqueueCarouselResolution(env, {
         senderId: event.senderId,
-        sourceMessageId: event.messageId,
+        sourceMessageId,
         raw: event.raw,
-        instructions: cleanText,
+        instructions,
+        queueDelayMode: env.INGEST_MODE || "disabled",
       });
       results.push(unsupported);
       continue;
@@ -3111,6 +3219,7 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
         sender_id: event.senderId,
         source_message_id: sourceMessageId,
         test: effectiveTest,
+        queue_delay_mode: env.INGEST_MODE || "disabled",
       }),
     });
     const response = await handleNormalizedIntake(normalizedRequest, env);
