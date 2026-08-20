@@ -217,9 +217,8 @@ changed_db = false
 
 ## Commit
 
-The earlier Phase 2 baseline commit was `0a4d156`. This corrective gate should
-be committed separately after this report is reviewed locally and staged with
-only Reel Phase 2 files.
+The earlier Phase 2 baseline commit was `0a4d156`. The corrective implementation
+was committed separately as `1ded965` after staging only Reel Phase 2 files.
 
 ## Rollback
 
