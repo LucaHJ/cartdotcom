@@ -1,5 +1,15 @@
 # Server Changelog
 
+## 2026-08-20
+
+- Restored acquisition-hour ticker metrics in the self-hosted research worker.
+  Each completed synthesis now recomputes the article count and actionable
+  ticker-call count for the article's discovery hour.
+- Added an idempotent PostgreSQL repair migration that rebuilt all 788 tracked
+  hours from articles, latest research results, and prediction outcomes. The
+  repaired table reconciled with 86,429 articles and 58,360 ticker calls with
+  zero mismatched hours at deployment time.
+
 ## 2026-08-19
 
 - Completed the final Cloudflare D1 export after disabling Cloudflare

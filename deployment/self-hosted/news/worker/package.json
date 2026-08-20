@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node worker.js",
-    "check": "node --check worker.js && node --check prompt.js && node --check end-to-end-check.js && node --check ../common/queue.js && node --test *.test.js"
+    "check": "node --check worker.js && node --check prompt.js && node --check metrics.js && node --check end-to-end-check.js && node --check ../common/queue.js && node --test *.test.js"
   },
   "dependencies": {
     "pg": "^8.16.3"

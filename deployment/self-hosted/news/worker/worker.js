@@ -7,6 +7,7 @@ import { claimJobs, extendLease, releaseForRetry } from "../common/queue.js";
 import { hasLocalProcessingAuthority, processingAuthority } from "../common/authority.js";
 import { captureArticleContent } from "../common/content.js";
 import { normalizeResult, researchPrompt } from "./prompt.js";
+import { refreshSourceHourlyMetric } from "./metrics.js";
 
 const { Pool } = pg;
 const SERVICE_NAME = "news-worker";
@@ -159,6 +160,7 @@ async function storeSuccess(pool, queueJob, article, fields, durationSeconds) {
           call.reason, predictionAt],
       );
     }
+    await refreshSourceHourlyMetric(client, article.discovered_at);
     await client.query(
       `UPDATE research_jobs
        SET status = 'succeeded', last_error = NULL, finished_at = CURRENT_TIMESTAMP,
