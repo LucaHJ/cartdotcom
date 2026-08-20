@@ -50,3 +50,21 @@ docker compose up -d --build --wait
 
 Stop after Phase 1 verification. Do not begin data migration, ingress
 provisioning, local processing, or backlog work without the next gate.
+
+## Shortened Phase 1 health gate
+
+The bounded synthetic health-gate workload is intentionally separate from
+production ingestion and never processes the Instagram backlog. It exercises
+the isolated Reel network, health endpoints, CPU, memory, and the Reel runs
+volume while Cloudflare remains the sole processing authority.
+
+Start it with an explicit UTC deadline:
+
+```bash
+REEL_STRESS_DEADLINE_EPOCH=<epoch> docker compose -f compose.health-gate.yaml up -d
+```
+
+`scripts/health-gate-monitor.sh` records both Reel and News container health.
+The server cron entry runs it every five minutes and removes itself after the
+deadline. Results are written under
+`/srv/cartdotcom/reel-brain-runs/health-gate`.

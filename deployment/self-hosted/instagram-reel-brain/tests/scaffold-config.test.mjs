@@ -4,6 +4,9 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 const compose = readFileSync(new URL("compose.yaml", root), "utf8");
+const healthGateCompose = readFileSync(new URL("compose.health-gate.yaml", root), "utf8");
+const healthGateStress = readFileSync(new URL("scripts/health-gate-stress.js", root), "utf8");
+const healthGateMonitor = readFileSync(new URL("scripts/health-gate-monitor.sh", root), "utf8");
 const envExample = readFileSync(new URL(".env.example", root), "utf8");
 const migration = readFileSync(new URL("migrations/0001_phase1_inert_schema.sql", root), "utf8");
 
@@ -59,4 +62,27 @@ test("phase one database migration creates only inert authority state", () => {
   assert.match(migration, /'cloud'/);
   assert.match(migration, /false,\s*false,\s*false,\s*false/s);
   assert.doesNotMatch(migration, /COPY\s/i);
+});
+
+test("shortened health gate is bounded and isolated", () => {
+  assert.match(healthGateCompose, /mem_limit: 384m/);
+  assert.match(healthGateCompose, /cpus: 0\.50/);
+  assert.match(healthGateCompose, /pids_limit: 64/);
+  assert.match(healthGateCompose, /cartdotcom-reel-runtime/);
+  assert.doesNotMatch(healthGateCompose, /cartdotcom-reel-egress/);
+  assert.doesNotMatch(healthGateCompose, /cartdotcom-edge|cartdotcom-data|ports:/);
+});
+
+test("health gate uses synthetic work and all inert health endpoints", () => {
+  assert.match(healthGateStress, /synthetic: true/);
+  assert.match(healthGateStress, /REEL_STRESS_DEADLINE_EPOCH/);
+  assert.doesNotMatch(healthGateStress, /instagram\.com|REEL_BACKLOG|REEL_QUEUE|ADMIN_TOKEN/);
+  assert.equal((healthGateCompose.match(/\/healthz/g) || []).length, 6);
+});
+
+test("health gate monitor observes News and removes its cron entry at deadline", () => {
+  assert.match(healthGateMonitor, /\/srv\/cartdotcom\/news/);
+  assert.match(healthGateMonitor, /failure\.detected/);
+  assert.match(healthGateMonitor, /gate\.complete/);
+  assert.match(healthGateMonitor, /grep -Fv "\$\{cron_marker\}" \| crontab -/);
 });

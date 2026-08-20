@@ -1,0 +1,32 @@
+name: cartdotcom-instagram-reel-brain
+
+services:
+  reel-health-stress:
+    image: cartdotcom-instagram-reel-brain-reel-worker
+    restart: "no"
+    command: ["node", "/opt/reel-health-gate/health-gate-stress.js"]
+    environment:
+      REEL_STRESS_DEADLINE_EPOCH: "${REEL_STRESS_DEADLINE_EPOCH}"
+      REEL_STRESS_ROOT: /runs/health-gate
+      REEL_STRESS_ENDPOINTS: >-
+        http://reel-api:3100/healthz,http://reel-dispatcher:3101/healthz,http://reel-worker:3102/healthz,http://reel-publisher:3103/healthz,http://reel-archiver:3104/healthz,http://reel-auth-rotator:3105/healthz
+    volumes:
+      - type: bind
+        source: ./scripts/health-gate-stress.js
+        target: /opt/reel-health-gate/health-gate-stress.js
+        read_only: true
+      - type: bind
+        source: ${REEL_RUNS_ROOT:-/srv/cartdotcom/reel-brain-runs}
+        target: /runs
+    networks:
+      - reel-runtime
+    mem_limit: 384m
+    cpus: 0.50
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  reel-runtime:
+    name: cartdotcom-reel-runtime
+    external: true
