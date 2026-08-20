@@ -48,8 +48,23 @@ docker compose up -d --build --wait
 ./scripts/verify-scaffold.sh
 ```
 
-Stop after Phase 1 verification. Do not begin data migration, ingress
-provisioning, local processing, or backlog work without the next gate.
+The Phase 1 gate passed on 2026-08-21. Only the bounded Phase 2 contract and
+isolated-fixture work described in
+`docs/PHASE_1_GATE_REPORT_2026-08-21.md` is approved. Do not begin production
+data migration, ingress provisioning, local processing, or backlog work.
+
+## Phase 3 shadow migration tooling
+
+Phase 3 is a manual operator workflow only. The tooling in
+`scripts/phase3_shadow_migration.py` can inventory a captured D1 export, import
+it into a non-authoritative PostgreSQL shadow schema, and prepare a resumable R2
+artifact manifest/copy.
+
+The first Phase 3 attempt is blocked before artifact transfer. See
+`docs/PHASE_3_GATE_REPORT_2026-08-21.md`.
+
+The tool does not run as a service and has no intake, dispatch, Codex,
+publication, Instagram outbound, auth-rotation, or backlog authority.
 
 ## Shortened Phase 1 health gate
 

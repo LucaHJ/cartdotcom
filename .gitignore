@@ -9,3 +9,5 @@ __pycache__/
 deployment/self-hosted/secrets/
 deployment/self-hosted/*.local.yaml
 deployment/self-hosted/backups/
+deployment/self-hosted/instagram-reel-brain/runs/
+deployment/self-hosted/instagram-reel-brain/.phase3-current-run
