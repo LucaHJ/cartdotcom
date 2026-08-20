@@ -5,6 +5,7 @@ import {
   sendQueueMessageWithAdjacentInstructionDelay,
   takePendingInstructionForShare,
 } from "./adjacent-pairing";
+import { correctiveClaimApplied, correctivelyResynthesiseOne } from "./corrective-resynthesis";
 import {
   DEFAULT_STAGE_REACTIONS,
   applyMediaLinkFallbacks,
@@ -2733,6 +2734,63 @@ async function handleRetryJob(request: Request, env: Env, jobId: string): Promis
   return json({ ok: true, queued: true, job_id: job.id, attempts: job.attempts });
 }
 
+async function handleCorrectiveResynthesis(request: Request, env: Env, jobId: string): Promise<Response> {
+  const input = await readJson<{ confirm_corrective?: string; corrective_key?: string; instructions?: string; reason?: string }>(request);
+  const result = await correctivelyResynthesiseOne(
+    {
+      readJob: async (id) => env.REEL_DB.prepare("SELECT * FROM jobs WHERE id=?").bind(id).first<JobRow>(),
+      hasAuditEvent: async (id, marker) => {
+        const prior = await env.REEL_DB.prepare("SELECT id FROM job_events WHERE job_id=? AND instr(detail, ?) > 0 LIMIT 1")
+          .bind(id, marker).first<{ id: string }>();
+        return !!prior;
+      },
+      applyReset: async (reset) => {
+        const claim = await env.REEL_DB.prepare(
+          `UPDATE jobs SET instructions=?,status='queued',stage='queued',error_code=NULL,error_message=NULL,started_at=NULL,completed_at=NULL,
+            processing_seconds=NULL,codex_input_tokens=NULL,codex_cached_input_tokens=NULL,codex_output_tokens=NULL,
+            codex_reasoning_output_tokens=NULL,codex_total_tokens=NULL,synthesis_json_key=NULL,upload_token_hash=NULL,
+            upload_token_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='complete' AND pilot_run_id IS NULL`,
+        ).bind(reset.instructions, reset.job.id).run();
+        if (!correctiveClaimApplied(claim)) return { applied: false };
+        const guardedJob = "EXISTS(SELECT 1 FROM jobs WHERE id=? AND status='queued' AND pilot_run_id IS NULL AND instructions=?)";
+        const results = await env.REEL_DB.batch([
+          env.REEL_DB.prepare(`DELETE FROM resources WHERE job_id=? AND ${guardedJob}`)
+            .bind(reset.job.id, reset.job.id, reset.instructions),
+          env.REEL_DB.prepare(
+            `UPDATE dm_commands SET input_text=?,status='queued',result_job_id=?,result_summary=?,error=NULL,completed_at=NULL
+             WHERE source_message_id=? AND ${guardedJob}`,
+          ).bind(reset.instructions, reset.job.id, JSON.stringify(reset.commandSummary), reset.job.source_message_id || "", reset.job.id, reset.instructions),
+          env.REEL_DB.prepare(
+            `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+             SELECT ?,'queued','queued','⬇️',? WHERE ${guardedJob}`,
+          ).bind(reset.job.id, reset.eventDetail, reset.job.id, reset.instructions),
+        ]);
+        return { applied: correctiveClaimApplied(results[2]) };
+      },
+      queueJob: async (id) => {
+        await env.REEL_QUEUE.send({ jobId: id });
+      },
+      markQueueFailure: async (id, detail) => {
+        await env.REEL_DB.batch([
+          env.REEL_DB.prepare(
+            "UPDATE jobs SET status='failed',stage='error_queue',error_code='error_queue',error_message=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'",
+          ).bind(detail, id),
+          env.REEL_DB.prepare("INSERT INTO job_events(job_id,stage,status,emoji,detail) VALUES (?,'error_queue','failed','❓',?)")
+            .bind(id, detail),
+        ]);
+      },
+    },
+    {
+      jobId,
+      confirm: input.confirm_corrective,
+      correctiveKey: input.corrective_key || "",
+      instructions: input.instructions || "",
+      reason: input.reason,
+    },
+  );
+  return json(result.body, { status: result.status });
+}
+
 async function handlePilotSummaryDm(request: Request, env: Env): Promise<Response> {
   const input = await readJson<{ pilot_key?: string; confirm_send?: string }>(request);
   const pilotKey = String(input.pilot_key || "").trim();
@@ -4250,6 +4308,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (publishMatch && request.method === "POST") return publishJobToReelLibrary(env, publishMatch[1]);
   const retryMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)\/retry$/);
   if (retryMatch && request.method === "POST") return handleRetryJob(request, env, retryMatch[1]);
+  const correctiveMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)\/corrective-resynthesis$/);
+  if (correctiveMatch && request.method === "POST") return handleCorrectiveResynthesis(request, env, correctiveMatch[1]);
   const legacyPublishMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)\/publish-markdown$/);
   if (legacyPublishMatch && request.method === "POST") return publishJobToSecondBrain(env, legacyPublishMatch[1]);
   const match = url.pathname.match(/^\/api\/jobs\/([^/]+)(?:\/(markdown|html|video))?$/);
