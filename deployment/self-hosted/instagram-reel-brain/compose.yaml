@@ -1,0 +1,132 @@
+name: cartdotcom-instagram-reel-brain
+
+x-reel-env: &reel-env
+  NODE_ENV: production
+  REEL_PHASE: "${REEL_PHASE:-phase1-inert}"
+  REEL_PROCESSING_AUTHORITY: "${REEL_PROCESSING_AUTHORITY:-cloud}"
+  REEL_INTAKE_ENABLED: "${REEL_INTAKE_ENABLED:-false}"
+  REEL_DISPATCH_ENABLED: "${REEL_DISPATCH_ENABLED:-false}"
+  REEL_WORKER_ENABLED: "${REEL_WORKER_ENABLED:-false}"
+  REEL_CODEX_ENABLED: "${REEL_CODEX_ENABLED:-false}"
+  REEL_OUTBOUND_ENABLED: "${REEL_OUTBOUND_ENABLED:-false}"
+  REEL_MUTATIONS_ENABLED: "${REEL_MUTATIONS_ENABLED:-false}"
+  REEL_BACKLOG_ENABLED: "${REEL_BACKLOG_ENABLED:-false}"
+  REEL_PUBLISHER_ENABLED: "${REEL_PUBLISHER_ENABLED:-false}"
+  REEL_ARCHIVER_ENABLED: "${REEL_ARCHIVER_ENABLED:-false}"
+  REEL_AUTH_ROTATOR_ENABLED: "${REEL_AUTH_ROTATOR_ENABLED:-false}"
+  REEL_WORKER_CONCURRENCY: "${REEL_WORKER_CONCURRENCY:-1}"
+
+x-reel-service: &reel-service
+  build:
+    context: ./services/inert-health
+  restart: unless-stopped
+  environment:
+    <<: *reel-env
+  healthcheck:
+    test: ["CMD", "node", "healthcheck.js"]
+    interval: 15s
+    timeout: 5s
+    retries: 10
+    start_period: 10s
+  pids_limit: 128
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  reel-api:
+    <<: *reel-service
+    environment:
+      <<: *reel-env
+      REEL_SERVICE_NAME: reel-api
+      PORT: "3100"
+    networks:
+      - reel-runtime
+    expose:
+      - "3100"
+    mem_limit: 256m
+    cpus: 0.25
+
+  reel-dispatcher:
+    <<: *reel-service
+    environment:
+      <<: *reel-env
+      REEL_SERVICE_NAME: reel-dispatcher
+      PORT: "3101"
+    networks:
+      - reel-runtime
+    expose:
+      - "3101"
+    mem_limit: 160m
+    cpus: 0.15
+
+  reel-worker:
+    <<: *reel-service
+    environment:
+      <<: *reel-env
+      REEL_SERVICE_NAME: reel-worker
+      PORT: "3102"
+    volumes:
+      - type: bind
+        source: ${REEL_RUNS_ROOT:-/srv/cartdotcom/reel-brain-runs}
+        target: /runs
+    networks:
+      - reel-runtime
+      - reel-egress
+    expose:
+      - "3102"
+    mem_limit: 768m
+    cpus: 0.80
+
+  reel-publisher:
+    <<: *reel-service
+    environment:
+      <<: *reel-env
+      REEL_SERVICE_NAME: reel-publisher
+      PORT: "3103"
+    networks:
+      - reel-runtime
+    expose:
+      - "3103"
+    mem_limit: 160m
+    cpus: 0.20
+
+  reel-archiver:
+    <<: *reel-service
+    environment:
+      <<: *reel-env
+      REEL_SERVICE_NAME: reel-archiver
+      PORT: "3104"
+    volumes:
+      - type: bind
+        source: ${REEL_DATA_ROOT:-/srv/cartdotcom/reel-brain-data}
+        target: /data
+      - type: bind
+        source: ${REEL_BACKUP_ROOT:-/srv/backups/instagram-reel-brain}
+        target: /backups
+    networks:
+      - reel-runtime
+    expose:
+      - "3104"
+    mem_limit: 160m
+    cpus: 0.20
+
+  reel-auth-rotator:
+    <<: *reel-service
+    environment:
+      <<: *reel-env
+      REEL_SERVICE_NAME: reel-auth-rotator
+      PORT: "3105"
+    networks:
+      - reel-runtime
+      - reel-egress
+    expose:
+      - "3105"
+    mem_limit: 256m
+    cpus: 0.25
+
+networks:
+  reel-runtime:
+    name: cartdotcom-reel-runtime
+    internal: true
+  reel-egress:
+    name: cartdotcom-reel-egress

@@ -1,0 +1,10 @@
+{
+  "name": "cartdotcom-reel-inert-health",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "healthcheck": "node healthcheck.js"
+  }
+}

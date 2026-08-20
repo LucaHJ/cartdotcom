@@ -1,0 +1,13 @@
+{
+  "name": "instagram-reel-brain-phase1",
+  "status": "inert-scaffold",
+  "localBackupRoot": "/srv/backups/instagram-reel-brain",
+  "dataRoots": [
+    "/srv/cartdotcom/instagram-reel-brain",
+    "/srv/cartdotcom/reel-brain-data"
+  ],
+  "retentionDays": 14,
+  "containsSecrets": false,
+  "productionDataMigration": false,
+  "notes": "Phase 1 backs up scaffold/configuration only. PostgreSQL logical backup and R2 mirror jobs are later-gate work."
+}
