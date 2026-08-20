@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { canonicalArtifactKey, artifactLibraryPath, mergeArtifactSources } from "../src/domain/artifacts.js";
-import { assertPhase2FixtureAuthority, authorityFromEnv, AuthorityFenceError } from "../src/domain/authority.js";
+import { assertPhase2FixtureAuthority, authorityFromEnv, AuthorityFenceError, PHASE2_PROHIBITED_FLAGS } from "../src/domain/authority.js";
 import { carouselManifest, validateCarouselManifest } from "../src/domain/carousel.js";
 import {
   canonicalizeInstagramUrl,
@@ -31,6 +31,29 @@ test("Phase 2 authority fence keeps production authority cloud-owned and executi
 
   const local = authorityFromEnv({ REEL_PROCESSING_AUTHORITY: "self_hosted" });
   assert.throws(() => assertPhase2FixtureAuthority(local, "dispatch"), AuthorityFenceError);
+});
+
+test("Phase 2 authority fence rejects every prohibited execution and mutation flag individually", () => {
+  const envNames = {
+    intake: "REEL_INTAKE_ENABLED",
+    dispatch: "REEL_DISPATCH_ENABLED",
+    worker: "REEL_WORKER_ENABLED",
+    codex: "REEL_CODEX_ENABLED",
+    outbound: "REEL_OUTBOUND_ENABLED",
+    mutations: "REEL_MUTATIONS_ENABLED",
+    backlog: "REEL_BACKLOG_ENABLED",
+    publisher: "REEL_PUBLISHER_ENABLED",
+    archiver: "REEL_ARCHIVER_ENABLED",
+    authRotator: "REEL_AUTH_ROTATOR_ENABLED",
+  };
+  assert.deepEqual([...PHASE2_PROHIBITED_FLAGS].sort(), Object.keys(envNames).sort());
+  for (const [flag, envName] of Object.entries(envNames)) {
+    const state = authorityFromEnv({ REEL_PROCESSING_AUTHORITY: "cloud", [envName]: "true" });
+    assert.throws(
+      () => assertPhase2FixtureAuthority(state, flag),
+      (error) => error instanceof AuthorityFenceError && error.detail.flag === flag,
+    );
+  }
 });
 
 test("Instagram domain logic canonicalises, deduplicates, ranks comments, and preserves adjacent-instruction semantics", () => {

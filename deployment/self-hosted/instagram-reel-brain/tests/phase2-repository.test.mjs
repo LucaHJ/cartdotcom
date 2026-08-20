@@ -37,7 +37,9 @@ test("Repository stage, completion, failure, and resource methods produce audita
   const client = new FixtureQueryClient();
   const repo = new PostgresReelRepository(client);
 
+  client.enqueue({ rows: [{ id: "job-1" }] });
   await repo.markStage("job-1", "downloading", "running", "fixture stage");
+  client.enqueue({ rows: [{ id: "job-1" }] });
   await repo.completeJob("job-1", {
     processingSeconds: 12.5,
     tokens: { input: 10, cachedInput: 2, output: 3, reasoningOutput: 1, total: 13 },
@@ -46,6 +48,7 @@ test("Repository stage, completion, failure, and resource methods produce audita
     synthesisJsonKey: "synthesis/a.json",
     detail: "done",
   });
+  client.enqueue({ rows: [{ id: "job-2" }] });
   await repo.failJob("job-2", "error_fixture", "synthetic failure");
   client.enqueue({ rows: [{ id: "resource-1" }] });
   await repo.upsertResource({
@@ -65,6 +68,19 @@ test("Repository stage, completion, failure, and resource methods produce audita
   assert.match(sql, /status='failed'/);
   assert.match(sql, /ON CONFLICT \(job_id, slug\)/);
   assert.match(sql, /ON CONFLICT \(job_id, object_key\)/);
+});
+
+test("Repository validates schema names and does not append terminal events on lost guarded updates", async () => {
+  const client = new FixtureQueryClient();
+  assert.throws(() => new PostgresReelRepository(client, { schema: "bad;drop" }), /Invalid schema name/);
+  const repo = new PostgresReelRepository(client);
+
+  const complete = await repo.completeJob("missing", {});
+  const failed = await repo.failJob("missing", "error_missing", "missing");
+
+  assert.equal(complete, null);
+  assert.equal(failed, null);
+  assert.equal(client.queries.filter((query) => /INSERT INTO reel_brain\.job_events/.test(query.text)).length, 0);
 });
 
 test("Repository transaction rolls back interrupted fixture work", async () => {

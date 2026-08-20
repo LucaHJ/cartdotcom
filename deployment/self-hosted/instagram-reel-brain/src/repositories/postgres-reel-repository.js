@@ -12,6 +12,7 @@ export class RepositoryConflictError extends Error {
 export class PostgresReelRepository {
   constructor(client, { schema = "reel_brain" } = {}) {
     if (!client || typeof client.query !== "function") throw new TypeError("PostgresReelRepository requires a query client");
+    if (!/^[a-z_][a-z0-9_]*$/i.test(schema)) throw new Error(`Invalid schema name ${schema}`);
     this.client = client;
     this.schema = schema;
   }
@@ -80,21 +81,24 @@ export class PostgresReelRepository {
   }
 
   async markStage(jobId, stage, status = "running", detail = null) {
-    await this.client.query(
-      `UPDATE ${this.table("jobs")} SET stage=$2,status=$3,updated_at=now() WHERE id=$1`,
+    const result = await this.client.query(
+      `UPDATE ${this.table("jobs")} SET stage=$2,status=$3,updated_at=now() WHERE id=$1 RETURNING id`,
       [jobId, stage, status],
     );
+    if (!result.rows?.[0]) return null;
     await this.insertJobEvent(jobId, stage, status, null, detail);
+    return result.rows[0];
   }
 
   async completeJob(jobId, output) {
-    await this.client.query(
+    const result = await this.client.query(
       `UPDATE ${this.table("jobs")}
        SET status='complete', stage='complete', completed_at=now(), processing_seconds=$2,
            codex_input_tokens=$3, codex_cached_input_tokens=$4, codex_output_tokens=$5,
            codex_reasoning_output_tokens=$6, codex_total_tokens=$7, html_key=$8,
            library_path=$9, synthesis_json_key=$10, updated_at=now()
-       WHERE id=$1 AND status IN ('running','queued')`,
+       WHERE id=$1 AND status IN ('running','queued')
+       RETURNING id`,
       [
         jobId,
         output.processingSeconds ?? null,
@@ -108,18 +112,23 @@ export class PostgresReelRepository {
         output.synthesisJsonKey || null,
       ],
     );
+    if (!result.rows?.[0]) return null;
     await this.insertJobEvent(jobId, "complete", "complete", "✅", output.detail || null);
+    return result.rows[0];
   }
 
   async failJob(jobId, code, message) {
     const detail = String(message || "failed").slice(0, 500);
-    await this.client.query(
+    const result = await this.client.query(
       `UPDATE ${this.table("jobs")}
        SET status='failed', stage=$2, error_code=$2, error_message=$3, updated_at=now()
-       WHERE id=$1`,
+       WHERE id=$1 AND status IN ('queued','running')
+       RETURNING id`,
       [jobId, code, detail],
     );
+    if (!result.rows?.[0]) return null;
     await this.insertJobEvent(jobId, code, "failed", "❓", detail);
+    return result.rows[0];
   }
 
   async insertJobEvent(jobId, stage, status, emoji, detail) {

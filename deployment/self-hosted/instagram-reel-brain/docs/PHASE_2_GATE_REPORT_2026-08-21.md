@@ -1,90 +1,95 @@
-# Phase 2 local contract and fixture gate report
+# Phase 2 corrective local contract and fixture gate report
 
-Status: implementation complete; awaiting independent review.
+Status: corrective implementation complete; awaiting independent review.
 
-Recorded at: 2026-08-21T03:00:21+10:00 Australia/Brisbane
+Recorded at: 2026-08-21T03:20:21+10:00 Australia/Brisbane
 
 Cloudflare remains the sole production authority. This Phase 2 work does not
-authorise production import, live/shadow intake, local dispatch, Codex
-execution, publication, Instagram outbound operations, auth rotation, real
+authorise production import, R2 backfill, live or shadow intake, local dispatch,
+Codex execution, publication, Instagram outbound operations, auth rotation, real
 backlog enumeration, real backlog replay, production delta mirroring, or Phase 3.
 
-## Approved boundary
+## Supervisor defects addressed
 
-Implemented only the bounded Phase 2 scope approved after the amended Phase 1
-health gate:
+1. Authority fence
+   - `src/domain/authority.js` now exports `PHASE2_PROHIBITED_FLAGS` directly
+     from the complete flag map.
+   - `assertPhase2FixtureAuthority()` checks every prohibited flag, including
+     `mutations` and `archiver`.
+   - `tests/phase2-domain.test.mjs` asserts each individual prohibited flag is
+     rejected while authority stays `cloud`.
 
-- Cloudflare-independent domain logic in local tested modules.
-- PostgreSQL repository and local object-store contracts.
-- Internal-only Python media processor API wrapper.
-- Disabled Cloudflare Whisper, Browser Rendering, R2 mirror, KV/library
-  publication, and Instagram outbound adapters.
-- Synthetic fixtures and tests only.
+2. Real PostgreSQL integration gate
+   - Added connected PostgreSQL tests against an isolated generated schema on
+     the server PostgreSQL container.
+   - Test schema shape: `reel_phase2_test_<pid>_<timestamp>`.
+   - Migrations `0001_phase1_inert_schema.sql` and
+     `0002_phase2_local_contracts.sql` are applied into that generated schema,
+     then the schema is dropped after the test run.
+   - No production rows are imported, selected, replayed, or modified.
+   - `PostgresReelRepository` now validates schema names.
+   - `markStage()`, `completeJob()`, and `failJob()` now insert events only when
+     their guarded job update returns a row. Lost completion/failure guards
+     return `null` and create no false terminal event.
 
-## Local files changed
+3. Object-store confinement
+   - `src/storage/local-object-store.js` now checks real parent paths, rejects
+     symlink targets with `lstat()`, and verifies final object realpaths remain
+     inside the configured storage root.
+   - The symlink traversal test attempts a real symlink and skips only when the
+     local platform refuses symlink creation. On this Windows host it skipped
+     with `EPERM`; the test will execute on platforms with symlink capability.
 
-Code and contracts:
+4. Media processor scope
+   - `services/media-processor-api/app.py` now imports and calls the existing
+     cloud processor function `inspect_and_extract()` through a fixture-only
+     internal API path.
+   - Processing remains disabled by default and requires:
+     - `REEL_MEDIA_PROCESSOR_ENABLED=true`
+     - `REEL_MEDIA_FIXTURE_ONLY=true`
+     - `REEL_INTERNAL_API_TOKEN`
+     - source paths confined to `REEL_TEST_STORAGE_ROOT`
+   - Added malformed JSON, body-size, job-id, root, token, disabled-state, and
+     synthetic media tests.
+   - The end-to-end fixture uses a generated five-second local MP4 and produces
+     frame output through the existing extractor without network, production
+     data, Codex, publication, or outbound actions.
 
-- `.env.example`
-  - Added disabled media fixture flags:
-    - `REEL_MEDIA_PROCESSOR_ENABLED=false`
-    - `REEL_MEDIA_FIXTURE_ONLY=true`
-    - `REEL_TEST_STORAGE_ROOT=/srv/cartdotcom/reel-brain-runs/fixtures`
-- `migrations/0002_phase2_local_contracts.sql`
-  - Adds PostgreSQL contract tables for `jobs`, `job_events`, `resources`,
-    `artifacts`, `pending_dm_parts`, and `instagram_carousel_resolutions`.
-  - Adds active dedupe, queued-job, canonical-resource, artifact-idempotency,
-    and pending-claim indexes/constraints.
-  - Contains no production import or cloud-provider migration statement.
-- `src/domain/authority.js`
-  - `authorityFromEnv()`, `assertPhase2FixtureAuthority()`,
-    `assertCloudAuthority()`, `assertDisabled()`, `describeAuthority()`.
-- `src/domain/instagram.js`
-  - Local canonical URL, shortcode, dedupe, media payload classification,
-    adjacent instruction, test-audit, queue-grace, and comment-ranking helpers.
-- `src/domain/artifacts.js`
-  - Canonical artifact keys, library paths, slugging, and source merging.
-- `src/domain/carousel.js`
-  - Ordered carousel slide manifests and validation.
-- `src/repositories/postgres-reel-repository.js`
-  - PostgreSQL query contract for job creation, serial claim, stage/failure/
-    completion events, resource upsert, artifact write tracking, and
-    transaction rollback.
-- `src/repositories/fixture-client.js`
-  - Query-capturing fake client for implementation-connected tests.
-- `src/storage/local-object-store.js`
-  - Root-confined object store with SHA-256 checksums and path traversal
-    protection.
-- `src/adapters/disabled-adapters.js`
-  - Fail-closed disabled adapters for Cloudflare Whisper, Browser Rendering,
-    R2 mirror, KV/library publication, and Instagram outbound.
-- `services/media-processor-api/app.py`
-  - Internal-only, fixture-only Python API wrapper.
-  - Defaults disabled and binds to `127.0.0.1`.
-  - Refuses paths outside `REEL_TEST_STORAGE_ROOT`.
-- `services/media-processor-api/README.md`
-  - Operational constraints for the wrapper.
-- `fixtures/synthetic/carousel.json`
-  - Scrubbed synthetic carousel fixture; no real Instagram data.
+5. Scrubbed import fixture
+   - Added `fixtures/synthetic/scrubbed-d1-export.json`.
+   - Added `src/repositories/scrubbed-importer.js`.
+   - The fixture is deterministic and synthetic only. It contains no real user
+     content, real article/media content, or credentials.
+   - The connected PostgreSQL test imports it into the isolated schema and test
+     object root only.
 
-Tests:
+## Local files changed for this corrective gate
 
-- `tests/phase2-domain.test.mjs`
-- `tests/phase2-repository.test.mjs`
-- `tests/phase2-storage-adapters.test.mjs`
-- `tests/phase2-contract-files.test.mjs`
+- `deployment/self-hosted/instagram-reel-brain/docs/PHASE_2_GATE_REPORT_2026-08-21.md`
+- `deployment/self-hosted/instagram-reel-brain/fixtures/synthetic/scrubbed-d1-export.json`
+- `deployment/self-hosted/instagram-reel-brain/services/media-processor-api/app.py`
+- `deployment/self-hosted/instagram-reel-brain/src/domain/authority.js`
+- `deployment/self-hosted/instagram-reel-brain/src/repositories/postgres-reel-repository.js`
+- `deployment/self-hosted/instagram-reel-brain/src/repositories/scrubbed-importer.js`
+- `deployment/self-hosted/instagram-reel-brain/src/storage/local-object-store.js`
+- `deployment/self-hosted/instagram-reel-brain/tests/phase2-domain.test.mjs`
+- `deployment/self-hosted/instagram-reel-brain/tests/phase2-postgres-connected.test.mjs`
+- `deployment/self-hosted/instagram-reel-brain/tests/phase2-repository.test.mjs`
+- `deployment/self-hosted/instagram-reel-brain/tests/phase2-storage-adapters.test.mjs`
+- `deployment/self-hosted/instagram-reel-brain/tests/test_media_processor_api.py`
 
-Pre-existing uncommitted health-gate and News Signal files were not modified by
-this Phase 2 implementation and were not included in the Phase 2 commit.
+Pre-existing unrelated News Signal and price-watch working-tree changes were
+not modified for this corrective gate and must not be treated as Reel Phase 2
+evidence.
 
 ## Enabled and disabled state
 
 Still enabled:
 
-- Existing six inert Reel health services.
+- Existing six inert Reel health services from Phase 1.
 - Existing isolated `cartdotcom-reel-runtime` and `cartdotcom-reel-egress`
   networks.
-- Local synthetic/fixture tests.
+- Local and connected synthetic/fixture tests.
 
 Still disabled:
 
@@ -108,63 +113,72 @@ authority changes were performed.
 
 ## Test evidence
 
-Self-hosted Reel:
+Self-hosted Reel Node tests:
 
 ```text
-npm test
-23/23 tests passed
+deployment/self-hosted/instagram-reel-brain> npm test
+33 tests
+32 passed
+0 failed
+1 skipped: symlink creation unavailable on this Windows host: EPERM
 ```
 
-Coverage:
+Connected PostgreSQL coverage inside `npm test`:
 
-- Authority fence rejects self-hosted authority and enabled Codex/dispatch/
-  outbound/backlog flags.
-- Instagram URL canonicalisation and `instagram:<shortcode>` dedupe key.
-- Native post/Reel payload classification.
-- Five-minute adjacent instruction decision helpers and 12-second live grace
-  delay.
-- Comment ranking by likes.
-- Canonical artifact key/page generation and source deduplication.
-- Ordered carousel manifest generation and validation.
-- PostgreSQL job insert requires pre-Codex dedupe.
-- PostgreSQL serial claim SQL uses `FOR UPDATE SKIP LOCKED` and excludes
-  `pilot_run_id`.
-- Stage, completion, failure, resource, and artifact SQL creates auditable
-  mutations.
-- Transaction interruption rolls back.
-- Local object store writes fixture artifacts with checksums.
-- Local object store rejects traversal/root writes.
-- Disabled external adapters fail closed.
-- Phase 2 migration creates only local PostgreSQL contracts.
-- Media API remains internal, disabled, and fixture-only by default.
-- Existing Phase 1 scaffold/resource/network tests still pass.
+- Partial unique dedupe allows one active job per dedupe key and allows an
+  explicit duplicate-status row.
+- Concurrent `FOR UPDATE SKIP LOCKED` claim skips a locked queued row.
+- Completion/failure affected-row guards append events only when the guarded
+  update changes a row.
+- Transaction rollback leaves no interrupted event.
+- Resource upsert and artifact write tracking are idempotent.
+- Carousel status and pending-part kind constraints reject invalid values.
+- Scrubbed D1-shaped export imports into an isolated PostgreSQL schema and test
+  object root.
+- Schema-name validation rejects unsafe schema names.
+
+Self-hosted Reel Python tests:
+
+```text
+deployment/self-hosted/instagram-reel-brain> python -m unittest discover -s tests -p "test_*.py"
+3 tests passed
+```
+
+Python coverage:
+
+- Disabled-by-default media API refuses fixture processing.
+- Malformed JSON returns `400 malformed_json`.
+- Oversized body returns `413 request_body_too_large`.
+- Synthetic fixture MP4 is processed through the existing cloud
+  `inspect_and_extract()` function and emits at least one archived frame.
 
 Additional syntax/config checks:
 
 ```text
-python -m py_compile services/media-processor-api/app.py
+deployment/self-hosted/instagram-reel-brain> python -m py_compile services\media-processor-api\app.py
 passed
 
-docker compose -f compose.yaml config --quiet
+deployment/self-hosted/instagram-reel-brain> docker compose -f compose.yaml config --quiet
 passed
 ```
 
-Existing cloud Reel verification, unchanged source:
+Existing cloud Reel verification, unchanged authority:
 
 ```text
-deployment/instagram-reel-brain: npm run typecheck
+deployment/instagram-reel-brain> npm run typecheck
 passed
 
-deployment/instagram-reel-brain: npm test
+deployment/instagram-reel-brain> npm test
 63/63 tests passed
 
-deployment/instagram-reel-brain: python -m unittest discover -s container -p "test*.py"
+deployment/instagram-reel-brain> python -m unittest discover -s container -p "test*.py"
 9/9 tests passed
 ```
 
-## Health and authority evidence
+## Health and production idle evidence
 
-Server read-only health check at 2026-08-20T16:59:31Z:
+Server read-only health check at 2026-08-20T17:18:52Z
+(2026-08-21T03:18:52+10:00 Brisbane):
 
 - Six Reel services were running and healthy:
   - `reel-api`
@@ -174,43 +188,58 @@ Server read-only health check at 2026-08-20T16:59:31Z:
   - `reel-archiver`
   - `reel-auth-rotator`
 - News Signal services were running and healthy.
-- Available memory: about 13,995 MiB.
+- Available memory: 14,001 MiB.
 - Root volume: 313 GiB available, 6% used.
-- Load average: `0.50, 0.58, 0.74`.
+- Load average: `0.33, 0.89, 0.90`.
 
-Cloudflare production read-only check:
+Cloudflare Worker `/health`:
 
-- `/health`: `ok=true`, `ingest_mode=live`, `backlog_processing=false`,
-  model `gpt-5.6-luna`.
-- D1 active-state query:
-  - `active_jobs = 0`
-  - `pending_parts = 0`
-  - `active_carousel_resolutions = 0`
-  - `backlog_active = 0`
+```json
+{
+  "ok": true,
+  "service": "cartdotcom-instagram-reel-brain",
+  "ingest_mode": "live",
+  "backlog_processing": false,
+  "model": "gpt-5.6-luna"
+}
+```
+
+Remote D1 idle/backlog-off query, with `CLOUDFLARE_API_TOKEN` override removed:
+
+```text
+active_jobs = 0
+pending_dm_parts = 0
+carousel_active = 0
+backlog_runs = 0
+rows_written = 0
+changed_db = false
+```
 
 ## Commit
 
-Phase 2 implementation was committed in the `cartdotcom` repository; use the
-final handoff report for the exact commit id.
+The earlier Phase 2 baseline commit was `0a4d156`. This corrective gate should
+be committed separately after this report is reviewed locally and staged with
+only Reel Phase 2 files.
 
 ## Rollback
 
-Local rollback:
+Local rollback after commit:
 
 ```bash
-git revert <phase-2-commit>
+git revert <phase-2-corrective-commit>
 ```
 
-No server rollback is required because no Phase 2 service was deployed or
-enabled on the server. Existing Phase 1 health services remain unchanged.
+No server rollback is required because no corrective Phase 2 service was
+deployed or enabled on the server. Existing Phase 1 health services remain
+unchanged.
 
 ## Remaining risks and next gate
 
-- PostgreSQL tests use fixture query clients; a real isolated PostgreSQL test
-  database should be added before Phase 3 data import.
-- The media wrapper is a contract shell; it does not yet run the full existing
-  media processor end to end.
+- The real symlink traversal test was present but could not execute on this
+  Windows host because symlink creation returned `EPERM`; it should be run on a
+  symlink-capable host before any object-store path is trusted with real data.
 - Disabled adapters intentionally provide interfaces but no live capability.
-- No production D1/R2/KV parity or artifact backfill has been attempted.
-- Phase 3 remains blocked until this Phase 2 report is independently reviewed
-  and explicitly accepted.
+- No production D1/R2/KV parity, artifact backfill, local processing authority,
+  shadow intake, or backlog processing has been attempted.
+- Phase 3 remains blocked until this corrected Phase 2 report is independently
+  reviewed and explicitly accepted.

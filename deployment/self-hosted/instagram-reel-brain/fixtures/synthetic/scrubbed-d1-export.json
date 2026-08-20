@@ -1,0 +1,41 @@
+{
+  "source": "synthetic scrubbed D1-shaped export",
+  "jobs": [
+    {
+      "id": "synthetic-job-1",
+      "source_url": "https://www.instagram.com/reel/SYNTHETIC001/",
+      "canonical_url": "https://www.instagram.com/reel/SYNTHETIC001/",
+      "shortcode": "SYNTHETIC001",
+      "dedupe_key": "instagram:SYNTHETIC001",
+      "sender_id": "synthetic-sender",
+      "source_message_id": "synthetic-message-1",
+      "source_media_json": { "fixture": true, "media_type": "reel" },
+      "instructions": "Synthetic fixture only"
+    }
+  ],
+  "resources": [
+    {
+      "id": "synthetic-resource-1",
+      "job_id": "synthetic-job-1",
+      "name": "Synthetic Quote",
+      "slug": "synthetic-quote",
+      "kind": "reference",
+      "artifact_type": "quote",
+      "canonical_key": "quote:synthetic-quote",
+      "canonical_url": null,
+      "summary": "Synthetic quote fixture.",
+      "why_useful": "Exercises quote artifact import without real content.",
+      "guide_text": "Use only for tests.",
+      "media_json": { "fixture": true },
+      "library_path": "quotes/synthetic-quote.html"
+    }
+  ],
+  "artifacts": [
+    {
+      "job_id": "synthetic-job-1",
+      "object_key": "synthetic-job-1/metadata.json",
+      "content_type": "application/json",
+      "content": "{\"fixture\":true}"
+    }
+  ]
+}

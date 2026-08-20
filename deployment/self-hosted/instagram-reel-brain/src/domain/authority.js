@@ -24,6 +24,8 @@ const FLAG_ENV = Object.freeze({
   authRotator: "REEL_AUTH_ROTATOR_ENABLED",
 });
 
+export const PHASE2_PROHIBITED_FLAGS = Object.freeze(Object.keys(FLAG_ENV));
+
 export class AuthorityFenceError extends Error {
   constructor(message, detail = {}) {
     super(message);
@@ -67,7 +69,7 @@ export function assertDisabled(state, flag, operation) {
 
 export function assertPhase2FixtureAuthority(state, operation) {
   assertCloudAuthority(state, operation);
-  for (const flag of ["intake", "dispatch", "worker", "codex", "outbound", "backlog", "publisher", "authRotator"]) {
+  for (const flag of PHASE2_PROHIBITED_FLAGS) {
     assertDisabled(state, flag, operation);
   }
 }

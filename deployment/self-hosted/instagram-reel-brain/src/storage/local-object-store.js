@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 
 export class ObjectStorePathError extends Error {
@@ -26,11 +26,36 @@ export class LocalObjectStore {
     return target;
   }
 
+  async assertRealPathInside(path, { allowRoot = false } = {}) {
+    const rootReal = await realpath(this.root);
+    const pathReal = await realpath(path);
+    const rel = relative(rootReal, pathReal);
+    if (rel.startsWith("..") || (rel === "" && !allowRoot)) throw new ObjectStorePathError("Object path escapes storage root");
+    return pathReal;
+  }
+
+  async assertParentInside(target) {
+    await mkdir(dirname(target), { recursive: true });
+    await this.assertRealPathInside(dirname(target), { allowRoot: true });
+  }
+
+  async assertTargetIsNotSymlink(target) {
+    try {
+      const info = await lstat(target);
+      if (info.isSymbolicLink()) throw new ObjectStorePathError("Object target must not be a symlink");
+    } catch (error) {
+      if (error instanceof ObjectStorePathError) throw error;
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+
   async put(key, data, { contentType = "application/octet-stream" } = {}) {
     const target = this.resolveKey(key);
     const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    await mkdir(dirname(target), { recursive: true });
+    await this.assertParentInside(target);
+    await this.assertTargetIsNotSymlink(target);
     await writeFile(target, buffer);
+    await this.assertRealPathInside(target);
     return {
       key,
       contentType,
@@ -40,11 +65,16 @@ export class LocalObjectStore {
   }
 
   async get(key) {
-    return readFile(this.resolveKey(key));
+    const target = this.resolveKey(key);
+    await this.assertTargetIsNotSymlink(target);
+    await this.assertRealPathInside(target);
+    return readFile(target);
   }
 
   async head(key) {
     const target = this.resolveKey(key);
+    await this.assertTargetIsNotSymlink(target);
+    await this.assertRealPathInside(target);
     const info = await stat(target);
     const hash = createHash("sha256");
     await new Promise((resolvePromise, reject) => {

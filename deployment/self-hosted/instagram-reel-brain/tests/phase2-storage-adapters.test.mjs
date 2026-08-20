@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,6 +24,25 @@ test("Local object store prevents path traversal and root overwrite", async () =
 
   await assert.rejects(() => store.put("../escape.txt", "bad"), ObjectStorePathError);
   await assert.rejects(() => store.put("", "bad"), ObjectStorePathError);
+});
+
+test("Local object store rejects symlink escapes on supported platforms", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "reel-object-store-"));
+  const outside = await mkdtemp(join(tmpdir(), "reel-object-outside-"));
+  await writeFile(join(outside, "secret.txt"), "outside");
+  try {
+    await symlink(join(outside, "secret.txt"), join(root, "linked.txt"));
+  } catch (error) {
+    if (["EPERM", "EACCES", "EINVAL"].includes(error?.code)) {
+      context.skip(`symlink creation unavailable on this platform: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+  const store = new LocalObjectStore(root);
+
+  await assert.rejects(() => store.get("linked.txt"), ObjectStorePathError);
+  await assert.rejects(() => store.put("linked.txt", "overwrite"), ObjectStorePathError);
 });
 
 test("Phase 2 Cloudflare and Instagram adapters are disabled and fail closed", async () => {
