@@ -2,6 +2,13 @@
 
 ## 2026-08-20
 
+- Assigned stable addresses to the four services on the private edge network
+  and made the tunnel wait for API health. This prevents the Workers VPC
+  Service from retaining a stale API address when Docker containers start in a
+  different order after an abrupt power loss.
+- Corrected the corpus archiver's pending-object query by restoring its missing
+  source metadata join, allowing local and offsite article archiving to resume
+  after boot.
 - Restored acquisition-hour ticker metrics in the self-hosted research worker.
   Each completed synthesis now recomputes the article count and actionable
   ticker-call count for the article's discovery hour.

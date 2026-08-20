@@ -43,8 +43,9 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - edge
-      - data
+      edge:
+        ipv4_address: 172.19.0.5
+      data:
     mem_limit: 512m
     cpus: 1.0
     pids_limit: 256

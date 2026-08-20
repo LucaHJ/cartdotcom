@@ -70,6 +70,7 @@ async function pendingArticles(pool) {
        results.memo
      FROM article_corpus_objects AS corpus
      INNER JOIN articles ON articles.id = corpus.article_id
+     LEFT JOIN sources ON sources.id = articles.source_id
      INNER JOIN research_jobs AS jobs ON jobs.article_id = articles.id AND jobs.status = 'succeeded'
      LEFT JOIN research_results AS results ON results.job_id = jobs.id
      WHERE corpus.storage_status = 'pending'

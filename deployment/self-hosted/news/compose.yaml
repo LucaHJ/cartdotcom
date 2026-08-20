@@ -25,9 +25,10 @@ services:
     volumes:
       - /srv/cartdotcom/article-corpus:/data/article-corpus:ro
     networks:
-      - edge
-      - data
-      - runtime
+      edge:
+        ipv4_address: 172.19.0.3
+      data:
+      runtime:
     healthcheck:
       test: ["CMD", "node", "healthcheck.js"]
       interval: 10s
@@ -257,8 +258,9 @@ services:
       - dashboard_token
       - snapshot_upload_token
     networks:
-      - edge
-      - egress
+      edge:
+        ipv4_address: 172.19.0.4
+      egress:
     healthcheck:
       test: ["CMD", "node", "healthcheck.js"]
       interval: 15s
@@ -275,12 +277,16 @@ services:
     image: cloudflare/cloudflared:latest
     profiles: ["ingress"]
     restart: unless-stopped
+    depends_on:
+      news-api:
+        condition: service_healthy
     user: "1000:1000"
     command: ["tunnel", "--no-autoupdate", "--protocol", "quic", "--metrics", "0.0.0.0:2000", "run", "--token-file", "/run/secrets/cloudflare_tunnel_token"]
     secrets:
       - cloudflare_tunnel_token
     networks:
-      - edge
+      edge:
+        ipv4_address: 172.19.0.2
     healthcheck:
       test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:2000", "ready"]
       interval: 15s
