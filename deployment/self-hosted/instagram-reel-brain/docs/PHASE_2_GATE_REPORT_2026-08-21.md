@@ -284,8 +284,7 @@ The earlier Phase 2 baseline commit was `0a4d156`. The corrective implementation
 was committed separately as `1ded965`; the report-only reference update was
 `d964e75`. The second bounded corrective follow-up was committed as `4c86829`,
 with report reference `dac5e08`. A third bounded transaction-context follow-up
-commit is expected after this report update is staged with only Reel Phase 2
-files.
+was committed as `67c4861` after staging only Reel Phase 2 files.
 
 ## Rollback
 
