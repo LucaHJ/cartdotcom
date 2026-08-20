@@ -1,0 +1,12 @@
+{
+  "name": "cartdotcom-instagram-reel-brain-phase3-r2-inventory-local",
+  "main": "src/index.js",
+  "compatibility_date": "2026-06-10",
+  "r2_buckets": [
+    {
+      "binding": "REEL_ARCHIVE",
+      "bucket_name": "cartdotcom-instagram-reel-brain",
+      "remote": true
+    }
+  ]
+}

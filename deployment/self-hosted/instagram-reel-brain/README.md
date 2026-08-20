@@ -57,14 +57,17 @@ data migration, ingress provisioning, local processing, or backlog work.
 
 Phase 3 is a manual operator workflow only. The tooling in
 `scripts/phase3_shadow_migration.py` can inventory a captured D1 export, import
-it into a non-authoritative PostgreSQL shadow schema, and prepare a resumable R2
-artifact manifest/copy.
+it into a non-authoritative PostgreSQL shadow schema, reconcile/copy R2
+artifacts, verify a local shadow copy, and produce library/D1 parity reports.
 
-The first Phase 3 attempt is blocked before artifact transfer. See
+The Phase 3 gate is complete for independent review. See
 `docs/PHASE_3_GATE_REPORT_2026-08-21.md`.
 
 The tool does not run as a service and has no intake, dispatch, Codex,
 publication, Instagram outbound, auth-rotation, or backlog authority.
+
+The local R2 inventory Worker under `tools/r2-inventory-worker/` is for local
+`wrangler dev` only. It is GET-only, list-only, and must not be deployed.
 
 ## Shortened Phase 1 health gate
 

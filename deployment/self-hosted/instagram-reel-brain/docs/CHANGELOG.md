@@ -6,9 +6,13 @@
 - Captured a read-only D1 export, imported it into an isolated
   non-authoritative PostgreSQL shadow schema, and reconciled all D1 table row
   counts.
-- Stopped before R2 artifact transfer because bucket info reports 5,673
-  objects while the D1-derived manifest contains 5,120 keys, and full R2 object
-  listing is blocked by the available API credential.
+- Resolved R2 object inventory through a local-only Wrangler dev Worker with a
+  `remote: true` R2 binding; no Worker was deployed.
+- Reconciled all 5,673 R2 bucket objects against 5,120 D1-derived keys,
+  classified 553 unreferenced objects, and copied every bucket object into the
+  ignored shadow root with size verification and local SHA-256 checkpoints.
+- Generated local library manifests and read-only parity reports; Phase 3 is
+  complete for independent review and Phase 4 remains blocked.
 - Adjudicated the deadline-only synthetic stress stop as a monitor false
   positive; raw gate evidence remains preserved.
 - Approved bounded Phase 2 contract and isolated-fixture implementation after

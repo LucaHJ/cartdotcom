@@ -1,10 +1,14 @@
 # Instagram Reel Brain Phase 3 Gate Report
 
-Status: blocked, not approved for Phase 4
+Status: completed for independent review; not approved for Phase 4
 
-Timestamp: 2026-08-21 04:20 Australia/Brisbane
+Initial Phase 3 run timestamp: 2026-08-21 04:20 Australia/Brisbane
 
-Source commit at start: `73711e8`
+Corrective completion timestamp: 2026-08-21 05:22 Australia/Brisbane
+
+Source commit at Phase 3 start: `73711e8`
+
+Prior blocked-report commit: `fd32ce7`
 
 Cloudflare remains the sole production authority.
 
@@ -16,11 +20,19 @@ Cloudflare remains the sole production authority.
 - Imported the D1 snapshot into a non-authoritative PostgreSQL shadow schema.
 - Generated an R2 transfer manifest from D1-referenced object keys.
 - Checked R2 cost using current Cloudflare R2 pricing.
-- Stopped before artifact transfer because full R2 object reconciliation is blocked.
+- Created a local-only migration Worker with a remote R2 binding for
+  paginated read-only object listing.
+- Reconciled all R2 objects against D1-derived object keys.
+- Copied every R2 object into the ignored shadow root with restart checkpoints,
+  size verification, and local SHA-256.
+- Generated local library manifests from copied data and reconciled D1 library
+  object keys.
+- Ran read-only parity checks for jobs, status, notes, resources, retrieval
+  metadata, searchability, relational samples, and library paths.
 
-No production D1 rows, R2 objects, KV keys, queues, Workers, Pages, Meta callback,
-Instagram outbound operations, local dispatch, Codex execution, publication, or
-processing authority were changed.
+No production D1 rows, R2 objects, KV keys, queues, Workers, Pages, Meta
+callback, Instagram outbound operations, local dispatch, Codex execution,
+publication, or processing authority were changed.
 
 ## Run paths
 
@@ -144,41 +156,159 @@ D1-derived transfer manifest:
 - Projected egress: 1.53 GB
 - Cost gate: covered by the Standard free tier if the bucket is only Standard storage.
 
-## R2 blocker
+## R2 inventory correction
 
-Phase 3 is blocked before artifact transfer.
+The earlier R2 list blocker was resolved without new credentials or production
+deployment.
 
-The D1-derived object manifest contains 5,120 expected keys, while Cloudflare
-bucket info reports 5,673 objects. The 553-object difference is unexplained.
+Added local-only files:
 
-Attempted full R2 object listing through the official Cloudflare REST endpoint
-`GET /accounts/{account_id}/r2/buckets/{bucket_name}/objects`, documented at
-<https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/objects/methods/list/>.
+```text
+tools/r2-inventory-worker/wrangler.jsonc
+tools/r2-inventory-worker/src/index.js
+tests/phase3-r2-inventory-worker.test.mjs
+```
 
-Result:
+The Worker was run only through local `wrangler dev` on `127.0.0.1:8791`.
+It was not deployed and no route/resource was created. Its only binding was:
 
-- The endpoint rejected the available `CLOUDFLARE_API_TOKEN` with
-  `Authentication error`.
-- Wrangler OAuth can list buckets and fetch bucket info, but Wrangler `4.120.0`
-  does not expose an object-list command.
-- R2 artifact download was not started because the gate requires object count,
-  byte, checksum, and manifest reconciliation before copying.
+```json
+{
+  "binding": "REEL_ARCHIVE",
+  "bucket_name": "cartdotcom-instagram-reel-brain",
+  "remote": true
+}
+```
 
-This is an unexplained object-count mismatch and therefore a Phase 3 blocker.
+The only endpoint was `GET /inventory/r2/list`. Static tests assert that R2
+mutation calls (`put`, `delete`, multipart upload, `get`, and `head`) are
+absent and that D1, KV, Queue, AI, Browser, Durable Object, Container, route,
+and trigger bindings are absent.
+
+Full R2 manifest:
+
+```text
+r2\r2-cloudflare-full-object-manifest.json
+```
+
+- Objects: 5,673
+- Bytes: 1,527,301,212
+- Manifest SHA-256: `66bdcfd6f525e7e115a2dd4ed3cf3e44f0fb5356680732852e1f56d8d6f4fe70`
+
+## R2 reconciliation and copy
+
+Reconciliation report:
+
+```text
+r2\r2-reconciliation-report.json
+```
+
+- D1-derived object keys: 5,120
+- Cloudflare bucket objects: 5,673
+- Referenced objects present: 5,120
+- Missing D1-referenced objects: 0
+- Extra/unreferenced objects: 553
+
+Extra object classification:
+
+- `unreferenced_library_object`: 122
+- `unreferenced_reel_artifact`: 201
+- `unreferenced_superseded_attempt_artifact`: 230
+
+No extra object was discarded. Every bucket object was included in the transfer
+manifest.
+
+Transfer manifest:
+
+```text
+r2\r2-shadow-transfer-manifest.json
+```
+
+Copy root:
+
+```text
+r2\objects
+```
+
+Copy result:
+
+- Expected objects: 5,673
+- Copied this run: 5,408
+- Skipped from existing checkpoint: 265
+- Failed: 0
+- Verified local objects: 5,673
+- Verified local bytes: 1,527,301,212
+- Checkpoint: `r2\r2-shadow-copy-checkpoint.jsonl`
+- Verify report: `r2\r2-shadow-copy-verify-report.json`
+
+Each object was written through a `.tmp-phase3` temp file followed by rename.
+Verification rehashed local files and checked each file size against the
+Cloudflare object listing. ETags were preserved as metadata only and were not
+treated as SHA-256.
+
+## Local library import/rebuild and parity
+
+The generated library was reconstructed from copied `library/` objects and D1
+`html_key` / `guide_html_key` metadata only.
+
+Reports:
+
+```text
+library\library-shadow-manifest.json
+library\library-readable-path-manifest.json
+library\library-parity-report.json
+```
+
+Results:
+
+- Cloudflare/R2 library objects copied locally: 1,677
+- D1 library object keys: 1,555
+- D1 library object keys missing from Cloudflare: 0
+- D1 library object keys missing from local copy: 0
+- Extra copied library objects: 122
+
+The 122 extra library objects are the same deterministic
+`unreferenced_library_object` class from R2 reconciliation. They were preserved
+in the local shadow root and listed in the parity report.
+
+## Read-only D1 parity
+
+Report:
+
+```text
+d1\d1-readonly-parity-report.json
+```
+
+Results:
+
+- Jobs by status: `complete=215`, `failed=4`
+- Notes: 0
+- Resources: 1,428
+- Jobs with original video keys: 219
+- Jobs with audio keys: 178
+- Jobs with library paths: 215
+- Resources with library paths: 1,428
+- Searchable jobs: 215
+- Searchable resources: 1,428
+- Duplicate active dedupe keys: 0
+- Resources missing jobs: 0
+- Artifacts missing jobs: 0
+- Events missing jobs: 0
+- Sampled 10 recent relational job records with resource/artifact/event counts.
 
 ## Health and resource checks
 
-Before Phase 3:
+Before/during Phase 3:
 
 - Six Reel self-hosted services healthy.
 - News Signal services healthy.
 - Live Cloudflare health: not mutated.
 
-After blocked stop:
+After Phase 3 correction:
 
 - Six Reel self-hosted services healthy.
 - News Signal services healthy.
-- Live Cloudflare `/health` returned:
+- Live Cloudflare Worker `/health` returned:
 
 ```json
 {
@@ -194,8 +324,10 @@ Representative after-state Docker resource readings:
 
 - Reel services remained below their configured memory limits.
 - News services remained healthy.
-- `cartdotcom-news-corpus-archiver-1` was at `365.3MiB / 384MiB`; this was
-  already near its limit and no Reel artifact transfer was started.
+- `cartdotcom-news-corpus-archiver-1` remained near its configured limit at
+  `365.9MiB / 384MiB`; it stayed healthy.
+- `cartdotcom-platform-postgres-1` reported `263.9MiB / 3GiB`.
+- PostgreSQL shadow rows: 7,991.
 
 ## Verification run
 
@@ -203,6 +335,7 @@ Commands:
 
 ```powershell
 python -m py_compile scripts\phase3_shadow_migration.py
+node --test tests\phase3-r2-inventory-worker.test.mjs
 npm test
 python -m unittest tests.test_media_processor_api -v
 npm run typecheck
@@ -213,7 +346,8 @@ docker compose -f deployment\self-hosted\instagram-reel-brain\compose.yaml confi
 Results:
 
 - Phase 3 script compile: passed.
-- Self-hosted Node tests: 41 total; 40 passed; 1 skipped on Windows because
+- R2 inventory Worker static tests: 2/2 passed.
+- Self-hosted Node tests: 43 total; 42 passed; 1 skipped on Windows because
   symlink creation is unavailable.
 - Self-hosted media API tests: 3/3 passed.
 - Cloud Reel TypeScript typecheck: passed.
@@ -231,13 +365,21 @@ installed. The test file is `unittest`-based and passed with
   - ignored `deployment/self-hosted/instagram-reel-brain/runs/`
   - ignored `deployment/self-hosted/instagram-reel-brain/.phase3-current-run`
 - `deployment/self-hosted/instagram-reel-brain/scripts/phase3_shadow_migration.py`
-  - added manual Phase 3 D1 inventory/import and R2 manifest/copy tooling
+  - added manual Phase 3 D1 inventory/import, R2 manifest/reconcile/copy,
+    local-copy verification, library parity, and D1 parity tooling
+- `deployment/self-hosted/instagram-reel-brain/tools/r2-inventory-worker/wrangler.jsonc`
+  - added local-only Wrangler config with the existing R2 bucket bound as
+    `remote: true`
+- `deployment/self-hosted/instagram-reel-brain/tools/r2-inventory-worker/src/index.js`
+  - added GET-only paginated R2 list endpoint for local development
+- `deployment/self-hosted/instagram-reel-brain/tests/phase3-r2-inventory-worker.test.mjs`
+  - added static assertions that mutation methods and non-R2 bindings are absent
 - `deployment/self-hosted/instagram-reel-brain/docs/PHASE_3_GATE_REPORT_2026-08-21.md`
-  - added this blocked gate report
+  - updated this Phase 3 gate report
 - `deployment/self-hosted/instagram-reel-brain/docs/INSTAGRAM_REEL_MIGRATION_STATE.md`
-  - updated current state to Phase 3 blocked
+  - updated current state to Phase 3 completed for review
 - `deployment/self-hosted/instagram-reel-brain/docs/CHANGELOG.md`
-  - added Phase 3 blocked entry
+  - added Phase 3 correction/completion entry
 - `deployment/self-hosted/instagram-reel-brain/README.md`
   - added Phase 3 operator note
 
@@ -252,8 +394,17 @@ Non-destructive cleanup, if explicitly approved later:
 ```bash
 # Preserve evidence by renaming, not deleting.
 docker exec -i cartdotcom-platform-postgres-1 psql -U cartdotcom -d cartdotcom -v ON_ERROR_STOP=1 -q <<'SQL'
-ALTER SCHEMA reel_phase3_shadow_20260821_040408 RENAME TO reel_phase3_shadow_20260821_040408_blocked_preserved;
+ALTER SCHEMA reel_phase3_shadow_20260821_040408 RENAME TO reel_phase3_shadow_20260821_040408_preserved;
 SQL
+```
+
+To disable the local R2 shadow copy without deletion, rename the ignored run
+folder:
+
+```powershell
+Rename-Item `
+  "C:\Users\User\Documents\GitHub\cartdotcom\deployment\self-hosted\instagram-reel-brain\runs\phase3-shadow\2026-08-21_04-04-08" `
+  "2026-08-21_04-04-08_preserved"
 ```
 
 Do not delete:
@@ -262,29 +413,14 @@ Do not delete:
 - the redacted manifests,
 - the server-side import SQL,
 - the PostgreSQL shadow schema,
+- the copied local R2 shadow root,
+- the local library manifests,
 - or this gate report
 
 until independent review has completed.
 
 ## Required next action
 
-Resolve full R2 object inventory access without rotating or exposing secrets.
-
-Acceptable paths:
-
-1. Provide or approve a read-only R2 object-list credential through the normal
-   secret channel.
-2. Use an approved Cloudflare connector/tool that can list R2 objects without
-   exposing secret values.
-3. Add a bounded, reviewed, read-only Cloudflare Worker/admin endpoint in a
-   later approved scope if connector/credential access is unavailable.
-
-After complete R2 inventory is available:
-
-1. Reconcile the 5,673 Cloudflare objects against the D1-derived 5,120 keys.
-2. Classify every extra object as expected orphan, stale library artifact, or
-   mismatch.
-3. Only then run the resumable R2 copy.
-4. Continue Phase 3 parity checks.
+Independent review of this Phase 3 gate report.
 
 Phase 4 remains blocked.

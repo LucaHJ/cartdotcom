@@ -1,7 +1,6 @@
 # Instagram Reel Migration State
 
-Status: Phase 2 accepted; Phase 3 shadow data migration started and blocked
-before R2 artifact transfer.
+Status: Phase 3 shadow data migration completed for independent review.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
@@ -19,6 +18,8 @@ The Phase 3 attempt is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`.
 - Non-authoritative Phase 3 PostgreSQL shadow schema
   `reel_phase3_shadow_20260821_040408`.
 - ACL-restricted local Phase 3 D1 snapshot under ignored `runs/`.
+- Local R2 shadow copy of all 5,673 bucket objects under ignored `runs/`.
+- Local library manifests generated from copied data only.
 
 ## Disabled
 
@@ -32,7 +33,8 @@ The Phase 3 attempt is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`.
 - Publisher.
 - Archiver.
 - Auth rotation.
-- R2 artifact transfer, blocked by unresolved object inventory mismatch.
+- Phase 4 shadow live intake.
+- Production delta mirroring.
 
 ## Limits
 
@@ -43,8 +45,7 @@ The Phase 3 attempt is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`.
 - No host ports.
 - No shared `cartdotcom-edge` or `cartdotcom-data` membership in Phase 1.
 
-## Current blocker
+## Current gate
 
-R2 bucket info reports 5,673 objects, while the D1-derived artifact/key
-manifest contains 5,120 object keys. Full R2 object-list access is required to
-reconcile the 553-object gap before any artifact transfer can safely begin.
+Phase 3 is waiting for independent review. Phase 4 remains blocked. Cloudflare
+is still the sole production authority.
