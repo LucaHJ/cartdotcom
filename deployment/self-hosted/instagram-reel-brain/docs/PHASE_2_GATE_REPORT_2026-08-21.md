@@ -306,8 +306,7 @@ was committed separately as `1ded965`; the report-only reference update was
 `d964e75`. The second bounded corrective follow-up was committed as `4c86829`,
 with report reference `dac5e08`. A third bounded transaction-context follow-up
 was committed as `67c4861`, with report reference `5481103`. A final standalone
-query isolation commit is expected after this report update is staged with only
-Reel Phase 2 files.
+query isolation follow-up was committed as `c5989f1`.
 
 ## Rollback
 
