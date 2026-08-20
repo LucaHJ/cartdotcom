@@ -336,6 +336,77 @@ test("connected PostgreSQL unrelated concurrent transitions do not share a trans
   ]);
 });
 
+test("connected PostgreSQL standalone create/resource/artifact waits for unrelated rollback and survives", async () => {
+  runPsql(`
+    INSERT INTO ${schema}.jobs(id,source_url,dedupe_key,status,stage)
+    VALUES ('pg-standalone-txn','https://www.instagram.com/reel/STANDALONETXN/','instagram:STANDALONETXN','queued','queued');
+  `);
+  const persistent = new PersistentSshPsqlClient();
+  const interrupting = new InterruptingClient(
+    persistent,
+    new RegExp(`INSERT INTO ${schema}\\.job_events`),
+    { holdBeforeThrow: true },
+  );
+  const repo = new PostgresReelRepository(interrupting, { schema });
+
+  const failing = repo.markStage("pg-standalone-txn", "downloading", "running", "must rollback");
+  await interrupting.reachedInterrupt.promise;
+  const created = repo.createJob({ id: "pg-standalone-job", sourceUrl: "https://www.instagram.com/reel/STANDALONEJOB/" });
+  const resource = repo.upsertResource({
+    id: "pg-standalone-resource",
+    jobId: "pg-standalone-job",
+    name: "Standalone Resource",
+    slug: "standalone-resource",
+  });
+  const artifact = repo.recordArtifactWrite({
+    jobId: "pg-standalone-job",
+    key: "standalone/metadata.json",
+    checksum: "abc123",
+    byteLength: 12,
+    contentType: "application/json",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(persistent.queries.some((query) => query.values?.includes("pg-standalone-job")), false);
+  assert.equal(persistent.queries.some((query) => query.values?.includes("pg-standalone-resource")), false);
+
+  interrupting.releaseInterrupt.resolve();
+  const results = await Promise.allSettled([failing, created, resource, artifact]);
+  await interrupting.close();
+  assert.equal(results[0].status, "rejected");
+  assert.equal(results[1].status, "fulfilled");
+  assert.equal(results[2].status, "fulfilled");
+  assert.equal(results[3].status, "fulfilled");
+
+  const rollbackIndex = persistent.queries.findIndex((query) => query.text === "ROLLBACK");
+  const createIndex = persistent.queries.findIndex((query) => query.values?.includes("pg-standalone-job"));
+  const resourceIndex = persistent.queries.findIndex((query) => query.values?.includes("pg-standalone-resource"));
+  const artifactIndex = persistent.queries.findIndex((query) => query.values?.includes("standalone/metadata.json"));
+  assert.ok(rollbackIndex > -1);
+  assert.ok(createIndex > rollbackIndex);
+  assert.ok(resourceIndex > createIndex);
+  assert.ok(artifactIndex > resourceIndex);
+
+  const rows = JSON.parse(runPsql(`SELECT json_agg(t ORDER BY kind) FROM (
+    SELECT 'artifact' AS kind, COUNT(*)::int AS count FROM ${schema}.artifacts WHERE job_id='pg-standalone-job'
+    UNION ALL
+    SELECT 'resource' AS kind, COUNT(*)::int AS count FROM ${schema}.resources WHERE job_id='pg-standalone-job'
+    UNION ALL
+    SELECT 'standalone_job' AS kind, COUNT(*)::int AS count FROM ${schema}.jobs WHERE id='pg-standalone-job'
+    UNION ALL
+    SELECT 'transaction_job_events' AS kind, COUNT(*)::int AS count FROM ${schema}.job_events WHERE job_id='pg-standalone-txn'
+    UNION ALL
+    SELECT 'transaction_job_running' AS kind, COUNT(*)::int AS count FROM ${schema}.jobs WHERE id='pg-standalone-txn' AND status='running'
+  ) t;`, { json: true }));
+  assert.deepEqual(rows, [
+    { kind: "artifact", count: 1 },
+    { kind: "resource", count: 1 },
+    { kind: "standalone_job", count: 1 },
+    { kind: "transaction_job_events", count: 0 },
+    { kind: "transaction_job_running", count: 0 },
+  ]);
+});
+
 test("connected PostgreSQL resource/artifact writes are idempotent", async () => {
   await withConnectedRepo(async (repo) => {
     await repo.createJob({ id: "pg-artifact-1", sourceUrl: "https://www.instagram.com/reel/ARTIFACT1/" });

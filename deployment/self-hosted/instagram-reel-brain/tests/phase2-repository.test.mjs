@@ -14,10 +14,11 @@ function defer() {
 }
 
 class BlockingFixtureClient extends FixtureQueryClient {
-  constructor({ blockPattern, failPattern } = {}) {
+  constructor({ blockPattern, failPattern, failAfterBlock = false } = {}) {
     super();
     this.blockPattern = blockPattern;
     this.failPattern = failPattern;
+    this.failAfterBlock = failAfterBlock;
     this.blocked = defer();
     this.releaseBlock = defer();
     this.failed = false;
@@ -29,6 +30,7 @@ class BlockingFixtureClient extends FixtureQueryClient {
       this.queries.push({ text: queryText, values });
       this.blocked.resolve();
       await this.releaseBlock.promise;
+      if (this.failAfterBlock) throw new Error("synthetic blocked query failure");
       return { rows: [], rowCount: 0 };
     }
     if (!this.failed && this.failPattern?.test(queryText)) {
@@ -189,4 +191,52 @@ test("Repository releases transaction state after failure and success", async ()
   assert.equal(client.queries.filter((query) => query.text === "ROLLBACK").length, 1);
   assert.equal(client.queries.filter((query) => query.text === "COMMIT").length, 1);
   assert.ok(client.queries.find((query) => query.values?.[0] === "job-ok"));
+});
+
+test("Repository standalone SQL waits for an unrelated rollback and then survives independently", async () => {
+  const client = new BlockingFixtureClient({
+    blockPattern: /INSERT INTO reel_brain\.job_events/,
+    failAfterBlock: true,
+  });
+  const repo = new PostgresReelRepository(client);
+  client.enqueue({ rows: [{ id: "job-txn" }] });
+  client.enqueue({ rows: [{ id: "job-standalone" }] });
+  client.enqueue({ rows: [{ id: "resource-standalone" }] });
+
+  const failing = repo.markStage("job-txn", "downloading", "running", "must rollback");
+  await client.blocked.promise;
+  const created = repo.createJob({ id: "job-standalone", sourceUrl: "https://www.instagram.com/reel/STANDALONE1/" });
+  const resource = repo.upsertResource({
+    id: "resource-standalone",
+    jobId: "job-standalone",
+    name: "Standalone Resource",
+    slug: "standalone-resource",
+  });
+  const artifact = repo.recordArtifactWrite({
+    jobId: "job-standalone",
+    key: "standalone/metadata.json",
+    checksum: "abc123",
+    byteLength: 12,
+    contentType: "application/json",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(client.queries.some((query) => query.values?.includes("job-standalone")), false);
+  assert.equal(client.queries.some((query) => query.values?.includes("resource-standalone")), false);
+
+  client.releaseBlock.resolve();
+  const results = await Promise.allSettled([failing, created, resource, artifact]);
+  assert.equal(results[0].status, "rejected");
+  assert.equal(results[1].status, "fulfilled");
+  assert.equal(results[2].status, "fulfilled");
+  assert.equal(results[3].status, "fulfilled");
+
+  const rollbackIndex = client.queries.findIndex((query) => query.text === "ROLLBACK");
+  const createIndex = client.queries.findIndex((query) => query.values?.includes("job-standalone"));
+  const resourceIndex = client.queries.findIndex((query) => query.values?.includes("resource-standalone"));
+  const artifactIndex = client.queries.findIndex((query) => query.values?.includes("standalone/metadata.json"));
+  assert.ok(rollbackIndex > -1);
+  assert.ok(createIndex > rollbackIndex);
+  assert.ok(resourceIndex > createIndex);
+  assert.ok(artifactIndex > resourceIndex);
 });

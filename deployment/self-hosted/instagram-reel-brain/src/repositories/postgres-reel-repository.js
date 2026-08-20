@@ -55,6 +55,19 @@ export class PostgresReelRepository {
     return `${this.schema}.${name}`;
   }
 
+  async #rawQuery(text, values = []) {
+    return this.client.query(text, values);
+  }
+
+  async query(text, values = []) {
+    const active = transactionContext.getStore();
+    if (active?.client === this.client) {
+      return this.#rawQuery(text, values);
+    }
+    const lock = transactionLockFor(this.client);
+    return lock.runExclusive(() => this.#rawQuery(text, values));
+  }
+
   async withTransaction(callback) {
     const active = transactionContext.getStore();
     if (active?.client === this.client) {
@@ -62,14 +75,14 @@ export class PostgresReelRepository {
     }
     const lock = transactionLockFor(this.client);
     return lock.runExclusive(async () => {
-      await this.client.query("BEGIN");
+      await this.#rawQuery("BEGIN");
       return transactionContext.run({ client: this.client }, async () => {
         try {
           const result = await callback(this);
-          await this.client.query("COMMIT");
+          await this.#rawQuery("COMMIT");
           return result;
         } catch (error) {
-          await this.client.query("ROLLBACK").catch(() => undefined);
+          await this.#rawQuery("ROLLBACK").catch(() => undefined);
           throw error;
         }
       });
@@ -79,7 +92,7 @@ export class PostgresReelRepository {
   async createJob(input) {
     const dedupeKey = input.dedupeKey || instagramDedupeKey(input.sourceUrl);
     if (!dedupeKey) throw new RepositoryConflictError("A canonical Instagram dedupe key is required before job insert");
-    const result = await this.client.query(
+    const result = await this.query(
       `INSERT INTO ${this.table("jobs")} (
         id, source_url, canonical_url, shortcode, dedupe_key, sender_id, source_message_id,
         source_media_json, instructions, status, stage, status_emoji
@@ -104,7 +117,7 @@ export class PostgresReelRepository {
   }
 
   async claimNextQueuedJob(workerId) {
-    const result = await this.client.query(
+    const result = await this.query(
       `WITH candidate AS (
         SELECT id FROM ${this.table("jobs")}
         WHERE status='queued' AND pilot_run_id IS NULL
@@ -127,7 +140,7 @@ export class PostgresReelRepository {
   }
 
   async #markStageMutation(jobId, stage, status = "running", detail = null) {
-    const result = await this.client.query(
+    const result = await this.query(
       `UPDATE ${this.table("jobs")} SET stage=$2,status=$3,updated_at=now() WHERE id=$1 RETURNING id`,
       [jobId, stage, status],
     );
@@ -141,7 +154,7 @@ export class PostgresReelRepository {
   }
 
   async #completeJobMutation(jobId, output) {
-    const result = await this.client.query(
+    const result = await this.query(
       `UPDATE ${this.table("jobs")}
        SET status='complete', stage='complete', completed_at=now(), processing_seconds=$2,
            codex_input_tokens=$3, codex_cached_input_tokens=$4, codex_output_tokens=$5,
@@ -173,7 +186,7 @@ export class PostgresReelRepository {
 
   async #failJobMutation(jobId, code, message) {
     const detail = String(message || "failed").slice(0, 500);
-    const result = await this.client.query(
+    const result = await this.query(
       `UPDATE ${this.table("jobs")}
        SET status='failed', stage=$2, error_code=$2, error_message=$3, updated_at=now()
        WHERE id=$1 AND status IN ('queued','running')
@@ -186,7 +199,7 @@ export class PostgresReelRepository {
   }
 
   async insertJobEvent(jobId, stage, status, emoji, detail) {
-    await this.client.query(
+    await this.query(
       `INSERT INTO ${this.table("job_events")} (job_id, stage, status, emoji, detail)
        VALUES ($1,$2,$3,$4,$5)`,
       [jobId, stage, status, emoji, detail],
@@ -194,7 +207,7 @@ export class PostgresReelRepository {
   }
 
   async upsertResource(resource) {
-    const result = await this.client.query(
+    const result = await this.query(
       `INSERT INTO ${this.table("resources")} (
         id, job_id, name, slug, kind, canonical_url, summary, why_useful,
         guide_text, artifact_type, canonical_key, media_json, library_path
@@ -223,7 +236,7 @@ export class PostgresReelRepository {
   }
 
   async recordArtifactWrite({ jobId, key, checksum, byteLength, contentType }) {
-    await this.client.query(
+    await this.query(
       `INSERT INTO ${this.table("artifacts")} (job_id, object_key, checksum_sha256, byte_length, content_type)
        VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (job_id, object_key)

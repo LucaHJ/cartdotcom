@@ -2,7 +2,7 @@
 
 Status: corrective implementation complete; awaiting independent review.
 
-Last updated at: 2026-08-21T03:42:24+10:00 Australia/Brisbane
+Last updated at: 2026-08-21T03:52:10+10:00 Australia/Brisbane
 
 Cloudflare remains the sole production authority. This Phase 2 work does not
 authorise production import, R2 backfill, live or shadow intake, local dispatch,
@@ -99,6 +99,24 @@ backlog enumeration, real backlog replay, production delta mirroring, or Phase 3
      concurrent succeeding transition begins after that rollback and commits
      independently.
 
+9. Context-aware standalone query isolation
+   - Added one repository query gate used by every job, event, resource, and
+     artifact SQL operation.
+   - When the current async context owns this client's transaction, the query
+     executes directly inside that transaction.
+   - Otherwise the query acquires the same client lock used by
+     `withTransaction()` for the duration of that standalone statement.
+   - `insertJobEvent()` remains callable inside a transaction without deadlock
+     because the transaction-owning async context bypasses the standalone lock.
+   - Audited `PostgresReelRepository`: the only direct `this.client.query` call
+     is the private raw-query helper used by the context-aware gate and
+     transaction-control statements. All repository SQL operation call sites use
+     `this.query()`.
+   - Added fixture and connected PostgreSQL tests where a transaction pauses and
+     fails while unrelated `createJob()`, `upsertResource()`, and
+     `recordArtifactWrite()` calls are started. Those calls wait until rollback,
+     then commit independently and persist.
+
 ## Local files changed for this corrective gate
 
 - `deployment/self-hosted/instagram-reel-brain/docs/PHASE_2_GATE_REPORT_2026-08-21.md`
@@ -154,8 +172,8 @@ Self-hosted Reel Node tests:
 
 ```text
 deployment/self-hosted/instagram-reel-brain> npm test
-39 tests
-38 passed
+41 tests
+40 passed
 0 failed
 1 skipped: symlink creation unavailable on this Windows host: EPERM
 ```
@@ -178,6 +196,9 @@ Connected PostgreSQL coverage inside `npm test`:
 - Connected PostgreSQL proves unrelated concurrent transitions do not share a
   transaction; the failing transition rolls back while the succeeding transition
   commits separately.
+- Standalone `createJob()`, `upsertResource()`, and `recordArtifactWrite()`
+  calls started during an unrelated open transaction wait for rollback, then
+  commit independently and survive the failed transaction.
 - Resource upsert and artifact write tracking are idempotent.
 - Carousel status and pending-part kind constraints reject invalid values.
 - Scrubbed D1-shaped export imports into an isolated PostgreSQL schema and test
@@ -240,8 +261,8 @@ deployment/instagram-reel-brain> python -m unittest discover -s container -p "te
 
 ## Health and production idle evidence
 
-Server read-only health check at 2026-08-20T17:42:02Z
-(2026-08-21T03:42:02+10:00 Brisbane):
+Server read-only health check at 2026-08-20T17:51:50Z
+(2026-08-21T03:51:50+10:00 Brisbane):
 
 - Six Reel services were running and healthy:
   - `reel-api`
@@ -251,9 +272,9 @@ Server read-only health check at 2026-08-20T17:42:02Z
   - `reel-archiver`
   - `reel-auth-rotator`
 - News Signal services were running and healthy.
-- Available memory: 14,001 MiB.
+- Available memory: 14,021 MiB.
 - Root volume: 313 GiB available, 6% used.
-- Load average: `2.35, 1.13, 0.81`.
+- Load average: `0.46, 0.55, 0.63`.
 
 Cloudflare Worker `/health`:
 
@@ -284,7 +305,9 @@ The earlier Phase 2 baseline commit was `0a4d156`. The corrective implementation
 was committed separately as `1ded965`; the report-only reference update was
 `d964e75`. The second bounded corrective follow-up was committed as `4c86829`,
 with report reference `dac5e08`. A third bounded transaction-context follow-up
-was committed as `67c4861` after staging only Reel Phase 2 files.
+was committed as `67c4861`, with report reference `5481103`. A final standalone
+query isolation commit is expected after this report update is staged with only
+Reel Phase 2 files.
 
 ## Rollback
 
