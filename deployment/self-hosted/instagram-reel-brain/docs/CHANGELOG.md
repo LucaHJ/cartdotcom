@@ -2,6 +2,25 @@
 
 ## 2026-08-21
 
+- Corrected a Phase 4 mirror timestamp bug after production D1 proved two
+  post-watermark jobs were missed: D1 timestamps stored as
+  `YYYY-MM-DD HH:MM:SS` are now compared through SQLite `datetime(...)` against
+  ISO watermarks/cursors, object authorisation uses bounded `EXISTS` checks,
+  and the normal mirror credential cannot lower its watermark below
+  `2026-08-21T01:42:46Z`.
+- Deployed Worker versions `6b996b47-1efc-4d51-be4f-9a75e0352a54` and
+  `e655c493-fc02-4d01-98e6-5cd1659fe77d` for the correction; temporary replay
+  credential versions `d4240023-fd6e-437b-aa52-64645103f5e7` and
+  `b7d06948-4cd5-4d59-a88d-56049b0ce53d` were created and revoked without
+  exposing plaintext.
+- The existing live mirror recovered through the supervised path:
+  `2026-08-21T03:01:28Z` mirrored 134 rows and 92 objects; `03:06:35Z`
+  mirrored 41 additional rows and 24 objects. Local Phase 4 state had 0
+  divergences and 0 mirror errors at verification.
+- Blocked the proposed historical acceleration rather than widening scope:
+  exact cutoff `2026-08-19T05:18:26Z` currently returns 48 jobs / 192 events /
+  697 artifacts / 251 resources, while the delegated aggregate expected 50 /
+  200 / 731 / 268. No historical replay schema/run/object root was created.
 - Started bounded Phase 4 shadow live intake after explicit approval for a
   dedicated mirror credential.
 - Added `PHASE4_MIRROR_TOKEN`, a scoped authenticated GET-only Worker mirror
