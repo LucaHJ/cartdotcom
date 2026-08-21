@@ -294,6 +294,12 @@ def atomic_write(path: Path, data: bytes) -> None:
     os.replace(temp_name, path)
 
 
+def quarantine_path(object_root: Path, key: str, reason: str) -> Path:
+    safe = require_safe_object_key(key).replace("/", "__")
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return object_root / ".quarantine" / f"{stamp}-{reason}-{safe}"
+
+
 def download_object(base_url: str, token: str, watermark: str, object_root: Path, key: str, expected_size: int | None, expected_sha256: str | None) -> dict[str, Any]:
     path = local_object_path(object_root, key)
     if path.exists():
@@ -301,13 +307,38 @@ def download_object(base_url: str, token: str, watermark: str, object_root: Path
         actual_sha = sha256_file(path)
         if (expected_size is None or actual_size == expected_size) and (not expected_sha256 or actual_sha == expected_sha256):
             return {"object_key": key, "local_path": str(path), "actual_byte_size": actual_size, "actual_sha256": actual_sha, "verified": True, "detail": "already_present"}
+        preserved = quarantine_path(object_root, key, "existing-divergent")
+        preserved.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, preserved)
+        return {
+            "object_key": key,
+            "local_path": str(path),
+            "quarantine_path": str(preserved),
+            "actual_byte_size": actual_size,
+            "actual_sha256": actual_sha,
+            "verified": False,
+            "detail": "existing_final_file_diverges",
+        }
     status, headers, body = mirror_request(base_url, token, "/api/phase4/mirror/object", {"watermark": watermark, "key": key}, timeout=180)
     if status != 200:
         raise RuntimeError(f"object fetch failed for {key}: HTTP {status} {body[:160]!r}")
-    atomic_write(path, body)
-    actual_size = path.stat().st_size
-    actual_sha = sha256_file(path)
+    actual_size = len(body)
+    actual_sha = sha256_bytes(body)
     verified = (expected_size is None or actual_size == expected_size) and (not expected_sha256 or actual_sha == expected_sha256)
+    if not verified:
+        quarantine = quarantine_path(object_root, key, "download-divergent")
+        atomic_write(quarantine, body)
+        return {
+            "object_key": key,
+            "local_path": str(path),
+            "quarantine_path": str(quarantine),
+            "actual_byte_size": actual_size,
+            "actual_sha256": actual_sha,
+            "content_type": headers.get("content-type"),
+            "verified": False,
+            "detail": "size_or_sha_mismatch",
+        }
+    atomic_write(path, body)
     return {
         "object_key": key,
         "local_path": str(path),
@@ -413,6 +444,58 @@ def receipt_sql(schema: str, table: str, row: dict[str, Any]) -> str:
     }, "ON CONFLICT (table_name, source_key, mirror_updated_at, row_sha256) DO UPDATE SET last_seen_at=now()")
 
 
+def row_conflict_guard_sql(schema: str, table: str, row: dict[str, Any]) -> str:
+    key = row_key(table, row)
+    mirror_updated_at = row.get("mirror_updated_at") or row.get("updated_at") or row.get("created_at")
+    payload_hash = row_sha256(row)
+    detail_same_version = f"same source version has different payload hash for {table}:{key}"
+    detail_backwards = f"local typed row is newer than incoming source version for {table}:{key}"
+    return f"""
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM {schema}.phase4_mirror_row_versions
+    WHERE table_name={sql_literal(table)}
+      AND source_key={sql_literal(key)}
+      AND mirror_updated_at={sql_literal(mirror_updated_at)}
+      AND row_sha256 <> {sql_literal(payload_hash)}
+  ) THEN
+    INSERT INTO {schema}.phase4_mirror_divergences(surface, table_name, source_key, expected_json, actual_json, detail)
+    VALUES ('row', {sql_literal(table)}, {sql_literal(key)},
+      jsonb_build_object('mirror_updated_at', {sql_literal(mirror_updated_at)}),
+      {sql_literal(row, jsonb=True)},
+      {sql_literal(detail_same_version)});
+    RAISE EXCEPTION {sql_literal(detail_same_version)};
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM {schema}.phase4_mirror_typed_hashes
+    WHERE table_name={sql_literal(table)}
+      AND source_key={sql_literal(key)}
+      AND mirror_updated_at > {sql_literal(mirror_updated_at)}
+  ) THEN
+    INSERT INTO {schema}.phase4_mirror_divergences(surface, table_name, source_key, expected_json, actual_json, detail)
+    VALUES ('row', {sql_literal(table)}, {sql_literal(key)},
+      (SELECT row_to_json(h)::jsonb FROM {schema}.phase4_mirror_typed_hashes h WHERE table_name={sql_literal(table)} AND source_key={sql_literal(key)}),
+      {sql_literal(row, jsonb=True)},
+      {sql_literal(detail_backwards)});
+    RAISE EXCEPTION {sql_literal(detail_backwards)};
+  END IF;
+END $$;
+"""
+
+
+def typed_hash_sql(schema: str, table: str, row: dict[str, Any]) -> str:
+    key = row_key(table, row)
+    mirror_updated_at = row.get("mirror_updated_at") or row.get("updated_at") or row.get("created_at")
+    payload_hash = row_sha256(row)
+    return insert_statement(schema, "phase4_mirror_typed_hashes", {
+        "table_name": sql_literal(table),
+        "source_key": sql_literal(key),
+        "mirror_updated_at": sql_literal(mirror_updated_at),
+        "row_sha256": sql_literal(payload_hash),
+    }, "ON CONFLICT (table_name, source_key) DO UPDATE SET mirror_updated_at=excluded.mirror_updated_at, row_sha256=excluded.row_sha256, updated_at=now()")
+
+
 def cursor_sql(schema: str, table: str, watermark: str, cursor: str | None, rows: list[dict[str, Any]]) -> str:
     last = rows[-1] if rows else {}
     last_time = last.get("mirror_updated_at") or None
@@ -425,6 +508,20 @@ def cursor_sql(schema: str, table: str, watermark: str, cursor: str | None, rows
         f"rows_seen=rows_seen+{len(rows)}, last_poll_at=now(), updated_at=now() "
         f"WHERE table_name={sql_literal(table)} AND watermark={sql_literal(watermark)};"
     )
+
+
+def load_db_cursors(schema: str, psql_command: str) -> dict[str, str | None]:
+    rows = capture_psql(
+        f"SELECT table_name || '|' || COALESCE(cursor_token,'') FROM {schema}.phase4_mirror_cursors ORDER BY table_name;",
+        psql_command,
+    )
+    cursors: dict[str, str | None] = {}
+    for line in rows.splitlines():
+        if "|" not in line:
+            continue
+        table, cursor = line.split("|", 1)
+        cursors[table] = cursor or None
+    return cursors
 
 
 def object_keys_from_rows(rows_by_table: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
@@ -459,6 +556,29 @@ def object_receipt_sql(schema: str, receipt: dict[str, Any], expected_size: int 
     }, "ON CONFLICT (object_key) DO UPDATE SET local_path=excluded.local_path, expected_byte_size=excluded.expected_byte_size, actual_byte_size=excluded.actual_byte_size, expected_sha256=excluded.expected_sha256, actual_sha256=excluded.actual_sha256, content_type=excluded.content_type, downloaded_at=now(), verified=excluded.verified, detail=excluded.detail")
 
 
+def divergence_sql(schema: str, surface: str, detail: str, *, table: str | None = None, source_key: str | None = None, object_key: str | None = None, expected: Any = None, actual: Any = None) -> str:
+    return insert_statement(schema, "phase4_mirror_divergences", {
+        "surface": sql_literal(surface),
+        "table_name": sql_literal(table),
+        "source_key": sql_literal(source_key),
+        "object_key": sql_literal(object_key),
+        "expected_json": sql_literal(expected, jsonb=True) if expected is not None else "NULL",
+        "actual_json": sql_literal(actual, jsonb=True) if actual is not None else "NULL",
+        "detail": sql_literal(detail),
+    }, "")
+
+
+def record_divergence(schema: str, args: argparse.Namespace, *, surface: str, detail: str, table: str | None = None, source_key: str | None = None, object_key: str | None = None, expected: Any = None, actual: Any = None) -> None:
+    run_psql("BEGIN;\n" + divergence_sql(schema, surface, detail, table=table, source_key=source_key, object_key=object_key, expected=expected, actual=actual) + "\nCOMMIT;", args.psql_command)
+
+
+def write_cursor_files_after_commit(run_dir: Path, watermark: str, cursor_updates: dict[str, str | None]) -> None:
+    for table, cursor in cursor_updates.items():
+        state_path = run_dir / "cursors" / f"{table}.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(state_path, json.dumps({"table": table, "cursor": cursor, "watermark": watermark, "updated_at": utc_now()}, indent=2).encode("utf-8"))
+
+
 def mirror_once(args: argparse.Namespace) -> dict[str, Any]:
     schema = require_schema_name(args.schema)
     watermark = parse_watermark(args.watermark)
@@ -468,39 +588,43 @@ def mirror_once(args: argparse.Namespace) -> dict[str, Any]:
     run_dir.mkdir(parents=True, exist_ok=True)
     object_root.mkdir(parents=True, exist_ok=True)
     rows_by_table: dict[str, list[dict[str, Any]]] = {}
+    db_cursors = load_db_cursors(schema, args.psql_command)
     sql_parts = ["BEGIN;"]
     total_rows = 0
+    cursor_updates: dict[str, str | None] = {}
     for table in MIRROR_TABLES:
-        state_path = run_dir / "cursors" / f"{table}.json"
-        cursor = None
-        if state_path.exists():
-            cursor = json.loads(state_path.read_text(encoding="utf-8")).get("cursor")
+        cursor = db_cursors.get(table)
         payload = fetch_delta(args.base_url, token, watermark, table, cursor, args.limit)
         rows = list(payload.get("rows") or [])
         rows_by_table[table] = rows
         for row in rows:
+            sql_parts.append(row_conflict_guard_sql(schema, table, row))
             sql_parts.append(receipt_sql(schema, table, row))
             sql_parts.append(upsert_typed_sql(schema, table, row))
-        next_cursor = payload.get("next_cursor") or cursor
+            sql_parts.append(typed_hash_sql(schema, table, row))
+        next_cursor = payload.get("next_cursor") if rows else cursor
         sql_parts.append(cursor_sql(schema, table, watermark, next_cursor, rows))
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(state_path, json.dumps({"table": table, "cursor": next_cursor, "watermark": watermark, "updated_at": utc_now()}, indent=2).encode("utf-8"))
+        cursor_updates[table] = next_cursor
         total_rows += len(rows)
     object_count = 0
     for key, expected in sorted(object_keys_from_rows(rows_by_table).items()):
         receipt = download_object(args.base_url, token, watermark, object_root, key, expected.get("expected_byte_size"), expected.get("expected_sha256"))
+        if not receipt["verified"]:
+            record_divergence(
+                schema,
+                args,
+                surface="object",
+                object_key=key,
+                detail=receipt["detail"],
+                expected=expected,
+                actual=receipt,
+            )
+            raise RuntimeError(f"object verification failed for {key}: {receipt['detail']}")
         sql_parts.append(object_receipt_sql(schema, receipt, expected.get("expected_byte_size"), expected.get("expected_sha256")))
         object_count += 1
-        if not receipt["verified"]:
-            sql_parts.append(insert_statement(schema, "phase4_mirror_divergences", {
-                "surface": sql_literal("object"),
-                "object_key": sql_literal(key),
-                "detail": sql_literal(receipt["detail"]),
-                "expected_json": sql_literal(expected, jsonb=True),
-                "actual_json": sql_literal(receipt, jsonb=True),
-            }, ""))
     sql_parts.append("COMMIT;")
     run_psql("\n".join(sql_parts), args.psql_command)
+    write_cursor_files_after_commit(run_dir, watermark, cursor_updates)
     report = {
         "ok": True,
         "schema": schema,

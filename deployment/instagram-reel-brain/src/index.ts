@@ -3667,7 +3667,7 @@ async function handlePhase4Mirror(request: Request, env: Env): Promise<Response>
       limit,
       count: rows.length,
       rows,
-      next_cursor: rows.length === limit ? phase4NextCursor(table, rows) : null,
+      next_cursor: phase4NextCursor(table, rows),
     });
   }
 

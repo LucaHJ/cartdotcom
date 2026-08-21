@@ -13,6 +13,12 @@
 - Kept Cloudflare as sole production authority; no local claims, Codex,
   publication, Instagram outbound operations, auth rotation, or backlog work
   were enabled.
+- Corrected Phase 4 reliability defects before any nonempty live row/object was
+  mirrored: fixed partial-page cursors, enforced command/pending created-time
+  watermarks, moved cursor authority to PostgreSQL, quarantined bad objects
+  before final rename, added row/typed-hash conflict guards, replaced raw
+  `nohup` loops with boot-enabled cron watchdog supervision, and reset the
+  formal observation start to `2026-08-21T02:05:01Z`.
 - Started bounded Phase 3 shadow migration after Phase 2 acceptance.
 - Captured a read-only D1 export, imported it into an isolated
   non-authoritative PostgreSQL shadow schema, and reconciled all D1 table row

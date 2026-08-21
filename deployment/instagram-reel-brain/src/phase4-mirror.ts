@@ -83,6 +83,7 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
       "id", "sender_id", "source_message_id", "intent", "input_text", "normalized_query",
       "status", "result_job_id", "result_summary", "error", "is_test", "created_at", "completed_at",
     ],
+    extraWhere: "created_at >= ?",
   },
   outbound_events: {
     table: "outbound_events",
@@ -101,6 +102,7 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
       "id", "sender_id", "source_message_id", "kind", "source_url", "instructions",
       "is_test", "consumed_at", "expires_at", "created_at",
     ],
+    extraWhere: "created_at >= ?",
   },
   instagram_carousel_resolutions: {
     table: "instagram_carousel_resolutions",

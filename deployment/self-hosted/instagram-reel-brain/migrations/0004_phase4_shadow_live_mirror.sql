@@ -34,6 +34,15 @@ CREATE TABLE IF NOT EXISTS reel_brain.phase4_mirror_row_versions (
   PRIMARY KEY (table_name, source_key, mirror_updated_at, row_sha256)
 );
 
+CREATE TABLE IF NOT EXISTS reel_brain.phase4_mirror_typed_hashes (
+  table_name text NOT NULL,
+  source_key text NOT NULL,
+  mirror_updated_at timestamptz NOT NULL,
+  row_sha256 text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (table_name, source_key)
+);
+
 CREATE TABLE IF NOT EXISTS reel_brain.phase4_mirror_object_receipts (
   object_key text PRIMARY KEY,
   local_path text NOT NULL,

@@ -8,6 +8,7 @@ import {
   phase4DeltaQuery,
   phase4MirrorAllowsMethod,
   phase4MirrorAuthorized,
+  phase4NextCursor,
   phase4ObjectAccessQuery,
   phase4Tables,
   parsePhase4Limit,
@@ -87,6 +88,27 @@ test("Phase 4 delta queries enforce watermark, cursor, pagination, and post-wate
 
   const resources = phase4DeltaQuery("resources", watermark, decodePhase4Cursor(null, watermark), 10);
   assert.match(resources.sql, /COALESCE\(\(SELECT updated_at FROM jobs WHERE jobs.id=resources.job_id\), created_at\) AS mirror_updated_at/);
+
+  const oldPending = phase4DeltaQuery("pending_dm_parts", watermark, decodePhase4Cursor(null, watermark), 10);
+  assert.match(oldPending.sql, /COALESCE\(consumed_at, created_at\) >= \?/);
+  assert.match(oldPending.sql, /created_at >= \?/);
+
+  const oldCommand = phase4DeltaQuery("dm_commands", watermark, decodePhase4Cursor(null, watermark), 10);
+  assert.match(oldCommand.sql, /COALESCE\(completed_at, created_at\) >= \?/);
+  assert.match(oldCommand.sql, /created_at >= \?/);
+});
+
+test("Phase 4 cursor advances for every nonempty page including partial pages", () => {
+  const cursor = phase4NextCursor("jobs", [{
+    id: "job-1",
+    created_at: "2026-08-20T20:05:00.000Z",
+    updated_at: "2026-08-20T20:06:00.000Z",
+    mirror_updated_at: "2026-08-20T20:06:00.000Z",
+  }]);
+  assert.equal(typeof cursor, "string");
+  const decoded = decodePhase4Cursor(cursor, "2026-08-20T20:05:00.000Z");
+  assert.deepEqual(decoded, { created_at: "2026-08-20T20:06:00.000Z", key: "job-1" });
+  assert.equal(phase4NextCursor("jobs", []), null);
 });
 
 test("Phase 4 object access is GET-only scoped to post-watermark D1 references", () => {

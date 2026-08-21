@@ -29,14 +29,18 @@ recorded in `PHASE_4_START_REPORT_2026-08-21.md`.
 - Dedicated Phase 4 mirror credential `PHASE4_MIRROR_TOKEN`, stored as a
   Cloudflare Worker secret and on the Ubuntu server at
   `/srv/cartdotcom/reel-brain-secrets/phase4-mirror-token` with mode `0600`.
-- Read-only authenticated Phase 4 Worker endpoints:
+- Read-only authenticated Phase 4 Worker endpoints on corrected Worker version
+  `dda475df-5a3b-4b6f-bcbb-d538c4f96f18`:
   `/api/phase4/mirror/delta` and `/api/phase4/mirror/object`.
 - Non-authoritative Phase 4 shadow schema
   `reel_phase4_shadow_20260821_014246`.
-- Phase 4 start watermark `2026-08-21T01:42:46Z`.
+- Phase 4 start watermark `2026-08-21T01:42:46Z`; corrected formal
+  observation start `2026-08-21T02:05:01Z`.
 - Server-side Phase 4 mirror run directory
   `/srv/cartdotcom/reel-brain-runs/phase4-shadow/2026-08-21_01-42-46`.
-- Background Phase 4 mirror loop and health sampler for the observation gate.
+- Cron-supervised Phase 4 mirror watchdog and health sampler for the
+  observation gate. The old raw `nohup` PIDs are stopped and preserved only as
+  evidence.
 
 ## Disabled
 

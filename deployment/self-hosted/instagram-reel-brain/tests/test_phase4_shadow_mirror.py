@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import unittest
+import re
 from argparse import Namespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -174,6 +175,29 @@ class Phase4ShadowMirrorTest(unittest.TestCase):
             psql_command="unused",
         )
 
+    def patch_db(self, cursor_store: dict[str, str | None], sql_batches: list[str], *, fail_commit: bool = False):
+        original_run_psql = mirror.run_psql
+        original_capture_psql = mirror.capture_psql
+
+        def fake_capture(_sql, _cmd):
+            return "\n".join(f"{table}|{cursor or ''}" for table, cursor in sorted(cursor_store.items()))
+
+        def fake_run(sql, _cmd):
+            sql_batches.append(sql)
+            if fail_commit:
+                raise RuntimeError("synthetic PostgreSQL commit failure")
+            for cursor, table in re.findall(r"cursor_token='([^']*)'.*?WHERE table_name='([^']*)'", sql, flags=re.S):
+                cursor_store[table] = cursor or None
+
+        mirror.run_psql = fake_run
+        mirror.capture_psql = fake_capture
+
+        def restore():
+            mirror.run_psql = original_run_psql
+            mirror.capture_psql = original_capture_psql
+
+        return restore
+
     def test_static_audit_and_schema_validation(self):
         mirror.verify_no_mutation_surface(Namespace())
         self.assertEqual(mirror.require_schema_name("reel_phase4_shadow_20260821"), "reel_phase4_shadow_20260821")
@@ -195,19 +219,22 @@ class Phase4ShadowMirrorTest(unittest.TestCase):
             server = FakeMirrorServer(token)
             server.start()
             sql_batches = []
-            original_run_psql = mirror.run_psql
-            mirror.run_psql = lambda sql, _cmd: sql_batches.append(sql)
+            cursor_store = {table: None for table in mirror.MIRROR_TABLES}
+            restore = self.patch_db(cursor_store, sql_batches)
             try:
                 first = mirror.mirror_once(self.args(root, server, token_path))
                 second = mirror.mirror_once(self.args(root, server, token_path))
+                cursor_file = root / "run" / "cursors" / "jobs.json"
+                self.assertEqual(json.loads(cursor_file.read_text(encoding="utf-8"))["cursor"], "cursor-jobs")
             finally:
-                mirror.run_psql = original_run_psql
+                restore()
                 server.close()
         self.assertEqual(first["rows"], 2)
         self.assertEqual(first["objects_checked"], 1)
         self.assertEqual(second["rows"], 0)
         self.assertIn("ON CONFLICT (id) DO UPDATE", sql_batches[0])
         self.assertIn("phase4_mirror_row_versions", sql_batches[0])
+        self.assertIn("phase4_mirror_typed_hashes", sql_batches[0])
         self.assertTrue(any(request["cursor"] == "cursor-jobs" for request in server.delta_requests))
 
     def test_network_interruption_does_not_write_partial_batch(self):
@@ -218,15 +245,34 @@ class Phase4ShadowMirrorTest(unittest.TestCase):
             server = FakeMirrorServer(token, fail_table="resources")
             server.start()
             sql_batches = []
-            original_run_psql = mirror.run_psql
-            mirror.run_psql = lambda sql, _cmd: sql_batches.append(sql)
+            cursor_store = {table: None for table in mirror.MIRROR_TABLES}
+            restore = self.patch_db(cursor_store, sql_batches)
             try:
                 with self.assertRaises(RuntimeError):
                     mirror.mirror_once(self.args(root, server, token_path))
             finally:
-                mirror.run_psql = original_run_psql
+                restore()
                 server.close()
         self.assertEqual(sql_batches, [])
+
+    def test_postgresql_failure_does_not_advance_filesystem_cursor(self):
+        token = "mirror-token-" + "f" * 40
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            token_path = self.token_file(root, token)
+            server = FakeMirrorServer(token)
+            server.start()
+            sql_batches = []
+            cursor_store = {table: None for table in mirror.MIRROR_TABLES}
+            restore = self.patch_db(cursor_store, sql_batches, fail_commit=True)
+            try:
+                with self.assertRaises(RuntimeError):
+                    mirror.mirror_once(self.args(root, server, token_path))
+                self.assertFalse((root / "run" / "cursors" / "jobs.json").exists())
+                self.assertIsNone(cursor_store["jobs"])
+            finally:
+                restore()
+                server.close()
 
     def test_corrupt_object_is_preserved_as_divergence_not_false_success(self):
         token = "mirror-token-" + "z" * 40
@@ -236,16 +282,52 @@ class Phase4ShadowMirrorTest(unittest.TestCase):
             server = FakeMirrorServer(token, corrupt_object=True)
             server.start()
             sql_batches = []
-            original_run_psql = mirror.run_psql
-            mirror.run_psql = lambda sql, _cmd: sql_batches.append(sql)
+            cursor_store = {table: None for table in mirror.MIRROR_TABLES}
+            restore = self.patch_db(cursor_store, sql_batches)
             try:
-                report = mirror.mirror_once(self.args(root, server, token_path))
+                with self.assertRaises(RuntimeError):
+                    mirror.mirror_once(self.args(root, server, token_path))
+                final_path = root / "objects" / "library" / "reels" / "job-post-watermark" / "index.html"
+                self.assertFalse(final_path.exists())
+                self.assertTrue(list((root / "objects" / ".quarantine").glob("*download-divergent*")))
+                self.assertIsNone(cursor_store["jobs"])
             finally:
-                mirror.run_psql = original_run_psql
+                restore()
                 server.close()
-        self.assertTrue(report["ok"])
         self.assertIn("phase4_mirror_divergences", sql_batches[0])
         self.assertIn("size_or_sha_mismatch", sql_batches[0])
+
+    def test_existing_divergent_final_file_is_preserved_and_blocks_cursor(self):
+        token = "mirror-token-" + "e" * 40
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            token_path = self.token_file(root, token)
+            final_path = root / "objects" / "library" / "reels" / "job-post-watermark" / "index.html"
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            final_path.write_bytes(b"unexpected existing content")
+            server = FakeMirrorServer(token)
+            server.start()
+            sql_batches = []
+            cursor_store = {table: None for table in mirror.MIRROR_TABLES}
+            restore = self.patch_db(cursor_store, sql_batches)
+            try:
+                with self.assertRaises(RuntimeError):
+                    mirror.mirror_once(self.args(root, server, token_path))
+                self.assertEqual(final_path.read_bytes(), b"unexpected existing content")
+                self.assertTrue(list((root / "objects" / ".quarantine").glob("*existing-divergent*")))
+                self.assertIsNone(cursor_store["jobs"])
+            finally:
+                restore()
+                server.close()
+        self.assertIn("existing_final_file_diverges", sql_batches[0])
+
+    def test_row_conflict_guard_records_and_raises_before_overwrite(self):
+        row = {"id": "job-1", "created_at": "2026-08-20T20:05:00Z", "updated_at": "2026-08-20T20:05:00Z", "mirror_updated_at": "2026-08-20T20:05:00Z"}
+        sql = mirror.row_conflict_guard_sql("reel_phase4_shadow_test", "jobs", row)
+        self.assertIn("phase4_mirror_row_versions", sql)
+        self.assertIn("phase4_mirror_typed_hashes", sql)
+        self.assertIn("phase4_mirror_divergences", sql)
+        self.assertIn("RAISE EXCEPTION", sql)
 
 
 if __name__ == "__main__":
