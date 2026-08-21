@@ -7,6 +7,18 @@ import {
 } from "./adjacent-pairing";
 import { correctiveClaimApplied, correctivelyResynthesiseOne } from "./corrective-resynthesis";
 import {
+  decodePhase4Cursor,
+  phase4DeltaQuery,
+  phase4MirrorAllowsMethod,
+  phase4MirrorAuthorized,
+  phase4NextCursor,
+  phase4ObjectAccessQuery,
+  phase4Tables,
+  parsePhase4Limit,
+  parsePhase4Watermark,
+  isPhase4MirrorTable,
+} from "./phase4-mirror";
+import {
   DEFAULT_STAGE_REACTIONS,
   applyMediaLinkFallbacks,
   canonicalArtifactKey,
@@ -188,6 +200,7 @@ export interface Env {
   INGEST_MODE?: "disabled" | "test_only" | "live";
   PUBLIC_BASE_URL?: string;
   ADMIN_TOKEN?: string;
+  PHASE4_MIRROR_TOKEN?: string;
   CALLBACK_SIGNING_KEY?: string;
   DOWNLOAD_SIGNING_KEY?: string;
   CODEX_AUTH_JSON?: string;
@@ -3625,6 +3638,61 @@ async function getJobResponse(env: Env, id: string): Promise<Response> {
   return json({ job, artifacts: artifacts.results, resources: resources.results, events: events.results });
 }
 
+function requirePhase4Mirror(request: Request, env: Env): Response | null {
+  if (!phase4MirrorAuthorized(bearer(request), env.PHASE4_MIRROR_TOKEN)) {
+    return json({ error: "Unauthorised" }, { status: 401 });
+  }
+  return null;
+}
+
+async function handlePhase4Mirror(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  if (!phase4MirrorAllowsMethod(request.method)) return json({ error: "Method not allowed" }, { status: 405 });
+  const unauthorized = requirePhase4Mirror(request, env);
+  if (unauthorized) return unauthorized;
+  const watermark = parsePhase4Watermark(url.searchParams.get("watermark"));
+  if (!watermark) return json({ error: "A valid ISO watermark is required" }, { status: 400 });
+
+  if (url.pathname === "/api/phase4/mirror/delta") {
+    const table = url.searchParams.get("table") || "";
+    if (!isPhase4MirrorTable(table)) return json({ error: "Unsupported Phase 4 mirror table", supported_tables: phase4Tables() }, { status: 400 });
+    const limit = parsePhase4Limit(url.searchParams.get("limit"));
+    const cursor = decodePhase4Cursor(url.searchParams.get("cursor"), watermark);
+    const query = phase4DeltaQuery(table, watermark, cursor, limit);
+    const rows = (await env.REEL_DB.prepare(query.sql).bind(...query.binds).all<Record<string, unknown>>()).results || [];
+    return json({
+      ok: true,
+      table,
+      watermark,
+      limit,
+      count: rows.length,
+      rows,
+      next_cursor: rows.length === limit ? phase4NextCursor(table, rows) : null,
+    });
+  }
+
+  if (url.pathname === "/api/phase4/mirror/object") {
+    const key = String(url.searchParams.get("key") || "").trim();
+    if (!key || key.includes("..") || key.startsWith("/") || key.startsWith("\\")) return json({ error: "A valid object key is required" }, { status: 400 });
+    const query = phase4ObjectAccessQuery(key, watermark);
+    const allowed = await env.REEL_DB.prepare(`SELECT object_key FROM (${query.sql}) AS allowed_objects WHERE object_key IS NOT NULL LIMIT 1`)
+      .bind(...query.binds)
+      .first<{ object_key: string }>();
+    if (!allowed) return json({ error: "Object is outside the Phase 4 post-watermark mirror scope" }, { status: 404 });
+    const object = await env.REEL_ARCHIVE.get(key);
+    if (!object) return json({ error: "Artifact object is missing" }, { status: 404 });
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set("etag", object.httpEtag);
+    headers.set("cache-control", "no-store");
+    headers.set("x-phase4-object-key", key);
+    headers.set("x-phase4-object-size", String(object.size));
+    return new Response(object.body, { headers });
+  }
+
+  return json({ error: "Not found" }, { status: 404 });
+}
+
 async function streamObject(env: Env, objectKey: string | null, disposition: string): Promise<Response> {
   if (!objectKey) return json({ error: "Artifact is not available" }, { status: 404 });
   const object = await env.REEL_ARCHIVE.get(objectKey);
@@ -4268,6 +4336,7 @@ async function processJob(env: Env, jobId: string): Promise<void> {
 
 async function handleApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  if (url.pathname.startsWith("/api/phase4/mirror/")) return handlePhase4Mirror(request, env);
   if (url.pathname === "/api/test/jobs" && request.method === "POST") return handleTestCreate(request, env);
   if (url.pathname === "/api/intake" && request.method === "POST") return handleNormalizedIntake(request, env);
   const unauthorized = requireAdmin(request, env);

@@ -1,12 +1,14 @@
 # Instagram Reel Migration State
 
-Status: Phase 3 shadow data migration completed for independent review.
+Status: Phase 4 shadow live intake observation started; waiting for gate
+evidence and independent review.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
 Pages/KV/R2 data, or process backlog.
 
-The Phase 3 attempt is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`.
+Phase 3 is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`. Phase 4 start is
+recorded in `PHASE_4_START_REPORT_2026-08-21.md`.
 
 ## Enabled
 
@@ -24,6 +26,17 @@ The Phase 3 attempt is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`.
 - Server-side R2 shadow copy of all 5,673 bucket objects under
   `/srv/cartdotcom/reel-brain-runs/phase3-shadow/2026-08-21_04-04-08`.
 - Local library manifests generated from copied data only.
+- Dedicated Phase 4 mirror credential `PHASE4_MIRROR_TOKEN`, stored as a
+  Cloudflare Worker secret and on the Ubuntu server at
+  `/srv/cartdotcom/reel-brain-secrets/phase4-mirror-token` with mode `0600`.
+- Read-only authenticated Phase 4 Worker endpoints:
+  `/api/phase4/mirror/delta` and `/api/phase4/mirror/object`.
+- Non-authoritative Phase 4 shadow schema
+  `reel_phase4_shadow_20260821_014246`.
+- Phase 4 start watermark `2026-08-21T01:42:46Z`.
+- Server-side Phase 4 mirror run directory
+  `/srv/cartdotcom/reel-brain-runs/phase4-shadow/2026-08-21_01-42-46`.
+- Background Phase 4 mirror loop and health sampler for the observation gate.
 
 ## Disabled
 
@@ -37,8 +50,14 @@ The Phase 3 attempt is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`.
 - Publisher.
 - Archiver.
 - Auth rotation.
-- Phase 4 shadow live intake.
-- Production delta mirroring.
+- Local processing authority.
+- Local job claims.
+- Local Codex execution.
+- Local publisher.
+- Instagram outbound actions.
+- Historical backlog enumeration, replay, selection, or processing.
+- Production D1/R2/KV mutation.
+- Phase 5 authority cutover.
 
 ## Limits
 
@@ -51,8 +70,10 @@ The Phase 3 attempt is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`.
 
 ## Current gate
 
-Phase 3 is waiting for independent review. Phase 4 remains blocked. Cloudflare
-is still the sole production authority. The typed operational shadow schema has
-passed row-count, foreign-key, uniqueness, redaction, read-only repository/API,
-library-path, search, status, notes, retrieval metadata, and server-side R2
-verification checks.
+Phase 4 observation has started but is not approved for Phase 5. Cloudflare is
+still the sole production authority. The mirror is allowed to pull only
+post-watermark rows and referenced artifacts through authenticated GET-only
+endpoints. The gate requires at least seven days or 50 varied post-watermark
+inputs, including Reel, native post, carousel, adjacent instruction, duplicate,
+note, retrieval, and controlled-failure coverage, with zero unexplained
+divergence.

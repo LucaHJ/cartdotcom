@@ -2,6 +2,17 @@
 
 ## 2026-08-21
 
+- Started bounded Phase 4 shadow live intake after explicit approval for a
+  dedicated mirror credential.
+- Added `PHASE4_MIRROR_TOKEN`, a scoped authenticated GET-only Worker mirror
+  surface, local Phase 4 cursor/receipt/divergence tables, and a Python
+  server-side pull mirror.
+- Established Phase 4 watermark `2026-08-21T01:42:46Z` and started the
+  server-side mirror/health observation under
+  `/srv/cartdotcom/reel-brain-runs/phase4-shadow/2026-08-21_01-42-46`.
+- Kept Cloudflare as sole production authority; no local claims, Codex,
+  publication, Instagram outbound operations, auth rotation, or backlog work
+  were enabled.
 - Started bounded Phase 3 shadow migration after Phase 2 acceptance.
 - Captured a read-only D1 export, imported it into an isolated
   non-authoritative PostgreSQL shadow schema, and reconciled all D1 table row
