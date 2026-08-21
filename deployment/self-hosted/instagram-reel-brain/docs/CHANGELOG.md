@@ -2,6 +2,20 @@
 
 ## 2026-08-21
 
+- Completed the corrected Phase 4 historical replay validation after
+  independent reconciliation of the replay slice. The immutable read-only
+  slice is `2026-08-19T04:19:57Z <= created_at < 2026-08-21T01:42:46Z`,
+  `status=complete`; it validated 50 jobs, 44 reels, 6 post/carousels, 200 job
+  events, 722 artifacts, 258 resources, 1,075 object receipts, 0 divergences,
+  and 0 mirror errors in isolated schema `reel_phase4_replay_20260821_031920`.
+- Deployed replay-scope Worker version `dfbc9b8e-e442-45c1-a71a-57907606d393`;
+  temporary replay-token versions `77de0a23-ce02-4566-8da4-d577b7bf73ae` and
+  `710dd991-3780-43a5-b60a-8616788c49d3` installed and then removed
+  `PHASE4_REPLAY_TOKEN` without retaining plaintext.
+- Proved replay restart/idempotency with a first committed 25-row checkpoint,
+  resumed full drain, then a zero-row second pass. No production D1/R2/KV
+  writes, backlog consumption, Codex execution, publication, Instagram outbound
+  action, or authority change occurred.
 - Corrected a Phase 4 mirror timestamp bug after production D1 proved two
   post-watermark jobs were missed: D1 timestamps stored as
   `YYYY-MM-DD HH:MM:SS` are now compared through SQLite `datetime(...)` against
