@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "phase4_shadow_mirror.py"
+WATCHDOG_PATH = Path(__file__).resolve().parents[1] / "scripts" / "phase4_mirror_watchdog.sh"
 spec = importlib.util.spec_from_file_location("phase4_shadow_mirror", MODULE_PATH)
 mirror = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mirror)
@@ -179,7 +180,9 @@ class Phase4ShadowMirrorTest(unittest.TestCase):
         original_run_psql = mirror.run_psql
         original_capture_psql = mirror.capture_psql
 
-        def fake_capture(_sql, _cmd):
+        def fake_capture(sql, _cmd):
+            if "phase4_mirror_cursors" not in sql:
+                return "[]"
             return "\n".join(f"{table}|{cursor or ''}" for table, cursor in sorted(cursor_store.items()))
 
         def fake_run(sql, _cmd):
@@ -323,11 +326,20 @@ class Phase4ShadowMirrorTest(unittest.TestCase):
 
     def test_row_conflict_guard_records_and_raises_before_overwrite(self):
         row = {"id": "job-1", "created_at": "2026-08-20T20:05:00Z", "updated_at": "2026-08-20T20:05:00Z", "mirror_updated_at": "2026-08-20T20:05:00Z"}
-        sql = mirror.row_conflict_guard_sql("reel_phase4_shadow_test", "jobs", row)
+        sql = mirror.row_conflict_queries_sql("reel_phase4_shadow_test", "jobs", row)
         self.assertIn("phase4_mirror_row_versions", sql)
         self.assertIn("phase4_mirror_typed_hashes", sql)
-        self.assertIn("phase4_mirror_divergences", sql)
-        self.assertIn("RAISE EXCEPTION", sql)
+        self.assertIn("local_typed_row_drift", sql)
+        self.assertNotIn("RAISE EXCEPTION", sql)
+
+    def test_watchdog_validates_process_identity_not_only_pid_liveness(self):
+        source = WATCHDOG_PATH.read_text(encoding="utf-8")
+        self.assertIn("pid_matches_expected_mirror", source)
+        self.assertIn("/proc/$pid/cmdline", source)
+        self.assertIn("phase4_shadow_mirror.py loop", source)
+        self.assertIn("--schema $EXPECTED_SCHEMA", source)
+        self.assertIn("stale_or_unexpected_pid", source)
+        self.assertNotRegex(source, r"kill -0 \"\\$\\(cat \"\\$PID_FILE\"\\)\" 2>/dev/null; then\\s*exit 0")
 
 
 if __name__ == "__main__":

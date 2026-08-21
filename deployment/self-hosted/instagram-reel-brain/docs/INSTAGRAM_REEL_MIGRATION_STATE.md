@@ -34,13 +34,15 @@ recorded in `PHASE_4_START_REPORT_2026-08-21.md`.
   `/api/phase4/mirror/delta` and `/api/phase4/mirror/object`.
 - Non-authoritative Phase 4 shadow schema
   `reel_phase4_shadow_20260821_014246`.
-- Phase 4 start watermark `2026-08-21T01:42:46Z`; corrected formal
-  observation start `2026-08-21T02:05:01Z`.
+- Phase 4 start watermark `2026-08-21T01:42:46Z`; latest corrected formal
+  observation start `2026-08-21T02:26:10Z`.
 - Server-side Phase 4 mirror run directory
   `/srv/cartdotcom/reel-brain-runs/phase4-shadow/2026-08-21_01-42-46`.
 - Cron-supervised Phase 4 mirror watchdog and health sampler for the
   observation gate. The old raw `nohup` PIDs are stopped and preserved only as
-  evidence.
+  evidence. The mirror watchdog now verifies process command identity before
+  trusting `mirror-supervised.pid`; corrected mirror PID `3168918` is running
+  after a stale/reused-PID replacement test.
 
 ## Disabled
 

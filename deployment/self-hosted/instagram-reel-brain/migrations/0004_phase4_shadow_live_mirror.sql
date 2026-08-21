@@ -39,9 +39,13 @@ CREATE TABLE IF NOT EXISTS reel_brain.phase4_mirror_typed_hashes (
   source_key text NOT NULL,
   mirror_updated_at timestamptz NOT NULL,
   row_sha256 text NOT NULL,
+  typed_row_json jsonb,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (table_name, source_key)
 );
+
+ALTER TABLE reel_brain.phase4_mirror_typed_hashes
+  ADD COLUMN IF NOT EXISTS typed_row_json jsonb;
 
 CREATE TABLE IF NOT EXISTS reel_brain.phase4_mirror_object_receipts (
   object_key text PRIMARY KEY,

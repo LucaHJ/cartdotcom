@@ -19,6 +19,12 @@
   before final rename, added row/typed-hash conflict guards, replaced raw
   `nohup` loops with boot-enabled cron watchdog supervision, and reset the
   formal observation start to `2026-08-21T02:05:01Z`.
+- Applied a second bounded Phase 4 reliability correction while live mirror
+  state was still empty: row conflicts now persist divergence evidence outside
+  the failing upsert transaction, actual typed-row JSON snapshots detect local
+  manual drift before overwrite, the watchdog rejects stale/reused PIDs by
+  command identity, and the formal observation start moved to
+  `2026-08-21T02:26:10Z`. No Worker redeploy was needed.
 - Started bounded Phase 3 shadow migration after Phase 2 acceptance.
 - Captured a read-only D1 export, imported it into an isolated
   non-authoritative PostgreSQL shadow schema, and reconciled all D1 table row

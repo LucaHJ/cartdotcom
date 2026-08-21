@@ -24,9 +24,10 @@ objects:
 - filesystem cursor evidence: present, but all cursors were null and all
   row-count state was zero.
 
-Corrected formal observation gate start:
-`2026-08-21T02:05:01Z`, the first healthy supervised health sample after the
-corrected Worker, corrected puller, and supervised cron watchdogs were running.
+Latest corrected formal observation gate start:
+`2026-08-21T02:26:10Z`, the first healthy supervised health sample after the
+second reliability correction, hardened watchdog replacement, and successful
+corrected mirror poll.
 
 Corrections applied:
 
@@ -53,6 +54,24 @@ Corrections applied:
   priority via `nice`/`ionice`, restart-safe, and do not contain the token
   value.
 
+Second reliability correction applied after independent review:
+
+- Row conflict detection now runs before the main upsert/cursor transaction.
+  Same-source-version payload conflicts, backwards source versions, and local
+  typed-row drift record a committed `phase4_mirror_divergences` row in an
+  independent transaction before the cycle fails.
+- `phase4_mirror_typed_hashes` now stores `typed_row_json`, the actual
+  PostgreSQL typed row snapshot after each successful upsert. Later cycles
+  compare the current typed row to this stored expected state before allowing
+  another upsert.
+- Legitimate newer Cloudflare source versions still update typed rows when the
+  local typed row matches the stored expected snapshot.
+- The mirror watchdog validates `/proc/<pid>/cmdline` or `ps` output before
+  trusting `mirror-supervised.pid`. A live but unrelated PID is now treated as
+  stale and replaced.
+- No Worker code changed in this second correction, so no Worker redeploy was
+  performed. Worker version remains `dda475df-5a3b-4b6f-bcbb-d538c4f96f18`.
+
 ## Start watermark
 
 - Watermark: `2026-08-21T01:42:46Z`.
@@ -73,6 +92,8 @@ Corrections applied:
 - Initial report metadata commit: `879d821`.
 - Corrective implementation commit:
   `7cf904e9002319de3cc5bba709678e8819e8d3b5`.
+- Second corrective implementation commit: pending at time of this report
+  update.
 - Previous live deployment version recorded before deploy:
   `ad8103cc-2995-4ee8-9ed1-d1dee24ad6c1`.
 - Deployment inventory command:
@@ -151,6 +172,14 @@ Live endpoint checks from the Ubuntu server:
 - Supervised mirror PID before interruption test: `3107256`, intentionally
   killed.
 - Supervised mirror PID after cron watchdog restart: `3107996`.
+- Second correction watchdog test:
+  - pre-correction supervised PID `3107996` was stopped after evidence was
+    preserved.
+  - `mirror-supervised.pid` was deliberately set to an unrelated live shell PID.
+  - hardened watchdog rejected it with `stale_or_unexpected_pid=3168905` and
+    started corrected mirror PID `3168918`.
+  - a second watchdog invocation retained PID `3168918`, proving the expected
+    process identity is accepted without duplicate restart.
 - Supervision:
   - `@reboot /srv/cartdotcom/instagram-reel-brain/scripts/phase4_mirror_watchdog.sh`
   - `* * * * * /srv/cartdotcom/instagram-reel-brain/scripts/phase4_mirror_watchdog.sh`
@@ -177,6 +206,17 @@ Live endpoint checks from the Ubuntu server:
   - typed hashes: 0
   - mirror errors: 0
   - divergences: 0
+- Second correction post-restart poll:
+  - created at: `2026-08-21T02:25:52.670626+00:00`
+  - rows: `0`
+  - objects checked: `0`
+  - all DB cursor and filesystem cursor values remained `null`
+  - row versions/object receipts/typed hashes/divergences/errors remained `0`
+- Second correction health sample:
+  - created at: `2026-08-21T02:26:10.519357+00:00`
+  - Cloudflare `/health`: ok, `ingest_mode=live`,
+    `backlog_processing=false`
+  - all Reel, News, Caddy, and PostgreSQL containers healthy.
 
 ## Tests and verification
 
@@ -187,11 +227,16 @@ Cloud Worker:
 
 Self-hosted:
 
-- `python -m py_compile scripts/phase4_shadow_mirror.py`: passed.
+- `python -m py_compile scripts/phase4_shadow_mirror.py
+  scripts/phase4_health_sample.py`: passed.
 - `python scripts/phase4_shadow_mirror.py static-audit`: passed.
-- `python tests/test_phase4_shadow_mirror.py`: 8/8 passed.
+- `python tests/test_phase4_shadow_mirror.py`: 9/9 passed.
+- `python tests/test_phase4_shadow_mirror_connected.py`: 5/5 passed against
+  isolated server PostgreSQL schemas.
 - `npm test`: 45/46 passed, with the known Windows symlink capability skip.
 - `python -m unittest tests/test_media_processor_api.py`: 3/3 passed.
+- Server-side `sh -n scripts/phase4_mirror_watchdog.sh`: passed.
+- Server-side `python3 -m py_compile scripts/phase4_shadow_mirror.py`: passed.
 
 Production checks:
 
@@ -229,6 +274,7 @@ Server health/resource checks:
 - `deployment/self-hosted/instagram-reel-brain/scripts/phase4_mirror_watchdog.sh`
 - `deployment/self-hosted/instagram-reel-brain/scripts/phase4_health_watchdog.sh`
 - `deployment/self-hosted/instagram-reel-brain/tests/test_phase4_shadow_mirror.py`
+- `deployment/self-hosted/instagram-reel-brain/tests/test_phase4_shadow_mirror_connected.py`
 - `deployment/self-hosted/instagram-reel-brain/docs/PHASE_4_START_REPORT_2026-08-21.md`
 - `deployment/self-hosted/instagram-reel-brain/docs/INSTAGRAM_REEL_MIGRATION_STATE.md`
 - `deployment/self-hosted/instagram-reel-brain/docs/CHANGELOG.md`
@@ -242,6 +288,8 @@ Server-side copied files:
 - `/srv/cartdotcom/instagram-reel-brain/scripts/phase4_health_sample.py`
 - `/srv/cartdotcom/instagram-reel-brain/scripts/phase4_mirror_watchdog.sh`
 - `/srv/cartdotcom/instagram-reel-brain/scripts/phase4_health_watchdog.sh`
+- `/srv/cartdotcom/instagram-reel-brain/tests/test_phase4_shadow_mirror.py`
+- `/srv/cartdotcom/instagram-reel-brain/tests/test_phase4_shadow_mirror_connected.py`
 
 Server-side supervisor state:
 
@@ -254,8 +302,8 @@ Server-side supervisor state:
 
 ## Remaining risks and gate conditions
 
-- The seven-day or 50-varied-input Phase 4 observation gate has only started;
-  it has not passed.
+- The seven-day or 50-varied-input Phase 4 observation gate restarted at
+  `2026-08-21T02:26:10Z`; it has not passed.
 - No post-watermark Instagram input has arrived yet, so nonempty row/object
   mirroring is proven by implementation-connected synthetic tests rather than
   live Instagram traffic.

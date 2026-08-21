@@ -33,7 +33,7 @@ from typing import Any
 
 DEFAULT_PSQL_COMMAND = (
     "docker exec -i cartdotcom-platform-postgres-1 "
-    "psql -U cartdotcom -d cartdotcom -v ON_ERROR_STOP=1 -q"
+    "psql -U cartdotcom -d cartdotcom -v ON_ERROR_STOP=1 -q -t -A"
 )
 
 DEFAULT_BASE_URL = "https://cartdotcom-instagram-reel-brain.lucajeannin.workers.dev"
@@ -61,6 +61,19 @@ TABLE_KEY_COLUMNS = {
     "pending_dm_parts": "id",
     "instagram_carousel_resolutions": "source_message_id",
     "inbound_webhook_events": "source_message_id",
+}
+
+TYPED_TARGET_KEYS = {
+    "jobs": ("jobs", "id", "id"),
+    "job_events": ("job_events", "id", "id"),
+    "artifacts": ("artifacts", "object_key", "object_key"),
+    "resources": ("resources", "id", "id"),
+    "notes": ("notes", "id", "id"),
+    "dm_commands": ("dm_commands", "id", "id"),
+    "outbound_events": ("outbound_events", "id", "id"),
+    "pending_dm_parts": ("pending_dm_parts", "id", "id"),
+    "instagram_carousel_resolutions": ("instagram_carousel_resolutions", "source_message_id", "source_message_id"),
+    "inbound_webhook_events": ("inbound_webhook_events", "source_message_id", "source_message_id"),
 }
 
 BOOL_COLUMNS = {
@@ -146,6 +159,7 @@ def run_psql(sql: str, psql_command: str = DEFAULT_PSQL_COMMAND) -> None:
         psql_command,
         input=sql,
         text=True,
+        encoding="utf-8",
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -160,6 +174,7 @@ def capture_psql(sql: str, psql_command: str = DEFAULT_PSQL_COMMAND) -> str:
         psql_command,
         input=sql,
         text=True,
+        encoding="utf-8",
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -168,6 +183,15 @@ def capture_psql(sql: str, psql_command: str = DEFAULT_PSQL_COMMAND) -> str:
     if result.returncode != 0:
         raise RuntimeError(f"psql failed: {result.stderr.strip()}")
     return result.stdout.strip()
+
+
+def capture_json_rows(sql: str, psql_command: str = DEFAULT_PSQL_COMMAND) -> list[dict[str, Any]]:
+    wrapped = f"WITH q AS ({sql.rstrip().rstrip(';')}) SELECT COALESCE(json_agg(q),'[]'::json) FROM q;"
+    output = capture_psql(wrapped, psql_command)
+    if not output:
+        return []
+    last_line = output.splitlines()[-1]
+    return list(json.loads(last_line))
 
 
 def operational_schema_sql(schema: str, migrations_dir: Path) -> str:
@@ -444,56 +468,107 @@ def receipt_sql(schema: str, table: str, row: dict[str, Any]) -> str:
     }, "ON CONFLICT (table_name, source_key, mirror_updated_at, row_sha256) DO UPDATE SET last_seen_at=now()")
 
 
-def row_conflict_guard_sql(schema: str, table: str, row: dict[str, Any]) -> str:
+def typed_target_lookup(table: str, row: dict[str, Any]) -> tuple[str, str, str]:
+    target_table, target_column, source_column = TYPED_TARGET_KEYS[table]
+    value = row.get(source_column)
+    if value is None:
+        raise ValueError(f"missing typed target key for {table}.{source_column}")
+    return target_table, target_column, str(value)
+
+
+def row_conflict_queries_sql(schema: str, table: str, row: dict[str, Any]) -> str:
     key = row_key(table, row)
     mirror_updated_at = row.get("mirror_updated_at") or row.get("updated_at") or row.get("created_at")
     payload_hash = row_sha256(row)
     detail_same_version = f"same source version has different payload hash for {table}:{key}"
     detail_backwards = f"local typed row is newer than incoming source version for {table}:{key}"
+    target_table, target_column, target_value = typed_target_lookup(table, row)
+    detail_local_drift = f"local typed row drift before incoming source update for {table}:{key}"
     return f"""
-DO $$
-BEGIN
-  IF EXISTS (
+SELECT 'same_version_payload_conflict' AS code,
+  {sql_literal(detail_same_version)} AS detail,
+  jsonb_build_object('mirror_updated_at', {sql_literal(mirror_updated_at)}) AS expected_json,
+  {sql_literal(row, jsonb=True)} AS actual_json
+WHERE EXISTS (
     SELECT 1 FROM {schema}.phase4_mirror_row_versions
     WHERE table_name={sql_literal(table)}
       AND source_key={sql_literal(key)}
       AND mirror_updated_at={sql_literal(mirror_updated_at)}
       AND row_sha256 <> {sql_literal(payload_hash)}
-  ) THEN
-    INSERT INTO {schema}.phase4_mirror_divergences(surface, table_name, source_key, expected_json, actual_json, detail)
-    VALUES ('row', {sql_literal(table)}, {sql_literal(key)},
-      jsonb_build_object('mirror_updated_at', {sql_literal(mirror_updated_at)}),
-      {sql_literal(row, jsonb=True)},
-      {sql_literal(detail_same_version)});
-    RAISE EXCEPTION {sql_literal(detail_same_version)};
-  END IF;
-  IF EXISTS (
+)
+UNION ALL
+SELECT 'backwards_source_version' AS code,
+  {sql_literal(detail_backwards)} AS detail,
+  (SELECT to_jsonb(h) FROM {schema}.phase4_mirror_typed_hashes h WHERE table_name={sql_literal(table)} AND source_key={sql_literal(key)}) AS expected_json,
+  {sql_literal(row, jsonb=True)} AS actual_json
+WHERE EXISTS (
     SELECT 1 FROM {schema}.phase4_mirror_typed_hashes
     WHERE table_name={sql_literal(table)}
       AND source_key={sql_literal(key)}
       AND mirror_updated_at > {sql_literal(mirror_updated_at)}
-  ) THEN
-    INSERT INTO {schema}.phase4_mirror_divergences(surface, table_name, source_key, expected_json, actual_json, detail)
-    VALUES ('row', {sql_literal(table)}, {sql_literal(key)},
-      (SELECT row_to_json(h)::jsonb FROM {schema}.phase4_mirror_typed_hashes h WHERE table_name={sql_literal(table)} AND source_key={sql_literal(key)}),
-      {sql_literal(row, jsonb=True)},
-      {sql_literal(detail_backwards)});
-    RAISE EXCEPTION {sql_literal(detail_backwards)};
-  END IF;
-END $$;
+)
+UNION ALL
+SELECT 'local_typed_row_drift' AS code,
+  {sql_literal(detail_local_drift)} AS detail,
+  expected.typed_row_json AS expected_json,
+  COALESCE(actual.typed_row_json, 'null'::jsonb) AS actual_json
+FROM (
+  SELECT typed_row_json
+  FROM {schema}.phase4_mirror_typed_hashes
+  WHERE table_name={sql_literal(table)}
+    AND source_key={sql_literal(key)}
+    AND typed_row_json IS NOT NULL
+) expected
+LEFT JOIN (
+  SELECT to_jsonb(t) AS typed_row_json
+  FROM {schema}.{target_table} t
+  WHERE t.{target_column}={sql_literal(target_value)}
+) actual ON true
+WHERE COALESCE(actual.typed_row_json, 'null'::jsonb) <> expected.typed_row_json
 """
+
+
+def assert_no_row_conflict(schema: str, args: argparse.Namespace, table: str, row: dict[str, Any]) -> None:
+    conflicts = capture_json_rows(row_conflict_queries_sql(schema, table, row), args.psql_command)
+    if not conflicts:
+        return
+    key = row_key(table, row)
+    conflict = conflicts[0]
+    record_divergence(
+        schema,
+        args,
+        surface="row",
+        table=table,
+        source_key=key,
+        detail=str(conflict.get("detail") or conflict.get("code") or "row conflict"),
+        expected=conflict.get("expected_json"),
+        actual=conflict.get("actual_json"),
+    )
+    raise RuntimeError(str(conflict.get("detail") or conflict.get("code") or "row conflict"))
 
 
 def typed_hash_sql(schema: str, table: str, row: dict[str, Any]) -> str:
     key = row_key(table, row)
     mirror_updated_at = row.get("mirror_updated_at") or row.get("updated_at") or row.get("created_at")
     payload_hash = row_sha256(row)
-    return insert_statement(schema, "phase4_mirror_typed_hashes", {
-        "table_name": sql_literal(table),
-        "source_key": sql_literal(key),
-        "mirror_updated_at": sql_literal(mirror_updated_at),
-        "row_sha256": sql_literal(payload_hash),
-    }, "ON CONFLICT (table_name, source_key) DO UPDATE SET mirror_updated_at=excluded.mirror_updated_at, row_sha256=excluded.row_sha256, updated_at=now()")
+    target_table, target_column, target_value = typed_target_lookup(table, row)
+    return f"""
+INSERT INTO {schema}.phase4_mirror_typed_hashes
+  (table_name, source_key, mirror_updated_at, row_sha256, typed_row_json)
+SELECT
+  {sql_literal(table)},
+  {sql_literal(key)},
+  {sql_literal(mirror_updated_at)},
+  {sql_literal(payload_hash)},
+  to_jsonb(t)
+FROM {schema}.{target_table} t
+WHERE t.{target_column}={sql_literal(target_value)}
+ON CONFLICT (table_name, source_key) DO UPDATE SET
+  mirror_updated_at=excluded.mirror_updated_at,
+  row_sha256=excluded.row_sha256,
+  typed_row_json=excluded.typed_row_json,
+  updated_at=now();
+"""
 
 
 def cursor_sql(schema: str, table: str, watermark: str, cursor: str | None, rows: list[dict[str, Any]]) -> str:
@@ -598,7 +673,7 @@ def mirror_once(args: argparse.Namespace) -> dict[str, Any]:
         rows = list(payload.get("rows") or [])
         rows_by_table[table] = rows
         for row in rows:
-            sql_parts.append(row_conflict_guard_sql(schema, table, row))
+            assert_no_row_conflict(schema, args, table, row)
             sql_parts.append(receipt_sql(schema, table, row))
             sql_parts.append(upsert_typed_sql(schema, table, row))
             sql_parts.append(typed_hash_sql(schema, table, row))
