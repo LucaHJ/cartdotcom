@@ -215,10 +215,12 @@ test("Phase 4 replay scope is bounded to exactly completed historical job-linked
   const db = createPhase4Sqlite();
   db.exec(`
     INSERT INTO jobs(id, status, created_at, updated_at, shortcode) VALUES
-      ('historical-complete', 'complete', '2026-08-19 05:18:26', '2026-08-19 05:20:00', 'historical-complete'),
+      ('before-replay', 'complete', '2026-08-19 04:19:56', '2026-08-19 04:20:00', 'before-replay'),
+      ('historical-complete', 'complete', '2026-08-19 04:19:57', '2026-08-19 04:21:00', 'historical-complete'),
       ('historical-failed', 'failed', '2026-08-19 05:30:00', '2026-08-19 05:31:00', 'historical-failed'),
       ('live-complete', 'complete', '2026-08-21 02:33:57', '2026-08-21 02:37:16', 'live-complete');
     INSERT INTO artifacts(id, job_id, kind, object_key, content_type, byte_size, sha256, created_at) VALUES
+      ('artifact-before', 'before-replay', 'html', 'before.html', 'text/html', '1', 'sha', '2026-08-19 04:20:00'),
       ('artifact-historical', 'historical-complete', 'html', 'historical.html', 'text/html', '1', 'sha', '2026-08-19 05:20:00'),
       ('artifact-live', 'live-complete', 'html', 'live.html', 'text/html', '1', 'sha', '2026-08-21 02:37:16');
   `);
