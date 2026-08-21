@@ -92,8 +92,8 @@ Second reliability correction applied after independent review:
 - Initial report metadata commit: `879d821`.
 - Corrective implementation commit:
   `7cf904e9002319de3cc5bba709678e8819e8d3b5`.
-- Second corrective implementation commit: pending at time of this report
-  update.
+- Second corrective implementation commit:
+  `990bbad33f7dc29367bad8c733590182f30d92dd`.
 - Previous live deployment version recorded before deploy:
   `ad8103cc-2995-4ee8-9ed1-d1dee24ad6c1`.
 - Deployment inventory command:
