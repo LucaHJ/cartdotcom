@@ -10,13 +10,15 @@ import {
   decodePhase4Cursor,
   phase4DeltaQuery,
   phase4MirrorAllowsMethod,
-  phase4MirrorAuthorized,
+  phase4MirrorScopeForToken,
   phase4NextCursor,
   phase4ObjectAccessQuery,
   phase4Tables,
+  phase4WatermarkAllowed,
   parsePhase4Limit,
   parsePhase4Watermark,
   isPhase4MirrorTable,
+  type Phase4MirrorScope,
 } from "./phase4-mirror";
 import {
   DEFAULT_STAGE_REACTIONS,
@@ -201,6 +203,7 @@ export interface Env {
   PUBLIC_BASE_URL?: string;
   ADMIN_TOKEN?: string;
   PHASE4_MIRROR_TOKEN?: string;
+  PHASE4_REPLAY_TOKEN?: string;
   CALLBACK_SIGNING_KEY?: string;
   DOWNLOAD_SIGNING_KEY?: string;
   CODEX_AUTH_JSON?: string;
@@ -3638,27 +3641,32 @@ async function getJobResponse(env: Env, id: string): Promise<Response> {
   return json({ job, artifacts: artifacts.results, resources: resources.results, events: events.results });
 }
 
-function requirePhase4Mirror(request: Request, env: Env): Response | null {
-  if (!phase4MirrorAuthorized(bearer(request), env.PHASE4_MIRROR_TOKEN)) {
+function requirePhase4Mirror(request: Request, env: Env): Response | { scope: Phase4MirrorScope } {
+  const scope = phase4MirrorScopeForToken(bearer(request), env.PHASE4_MIRROR_TOKEN, env.PHASE4_REPLAY_TOKEN);
+  if (!scope) {
     return json({ error: "Unauthorised" }, { status: 401 });
   }
-  return null;
+  return { scope };
 }
 
 async function handlePhase4Mirror(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (!phase4MirrorAllowsMethod(request.method)) return json({ error: "Method not allowed" }, { status: 405 });
-  const unauthorized = requirePhase4Mirror(request, env);
-  if (unauthorized) return unauthorized;
+  const authorization = requirePhase4Mirror(request, env);
+  if (authorization instanceof Response) return authorization;
+  const { scope } = authorization;
   const watermark = parsePhase4Watermark(url.searchParams.get("watermark"));
   if (!watermark) return json({ error: "A valid ISO watermark is required" }, { status: 400 });
+  if (!phase4WatermarkAllowed(scope, watermark)) {
+    return json({ error: "Requested watermark is outside the authorised Phase 4 mirror scope" }, { status: 403 });
+  }
 
   if (url.pathname === "/api/phase4/mirror/delta") {
     const table = url.searchParams.get("table") || "";
     if (!isPhase4MirrorTable(table)) return json({ error: "Unsupported Phase 4 mirror table", supported_tables: phase4Tables() }, { status: 400 });
     const limit = parsePhase4Limit(url.searchParams.get("limit"));
     const cursor = decodePhase4Cursor(url.searchParams.get("cursor"), watermark);
-    const query = phase4DeltaQuery(table, watermark, cursor, limit);
+    const query = phase4DeltaQuery(table, watermark, cursor, limit, scope);
     const rows = (await env.REEL_DB.prepare(query.sql).bind(...query.binds).all<Record<string, unknown>>()).results || [];
     return json({
       ok: true,
@@ -3674,7 +3682,7 @@ async function handlePhase4Mirror(request: Request, env: Env): Promise<Response>
   if (url.pathname === "/api/phase4/mirror/object") {
     const key = String(url.searchParams.get("key") || "").trim();
     if (!key || key.includes("..") || key.startsWith("/") || key.startsWith("\\")) return json({ error: "A valid object key is required" }, { status: 400 });
-    const query = phase4ObjectAccessQuery(key, watermark);
+    const query = phase4ObjectAccessQuery(key, watermark, scope);
     const allowed = await env.REEL_DB.prepare(`SELECT object_key FROM (${query.sql}) AS allowed_objects WHERE object_key IS NOT NULL LIMIT 1`)
       .bind(...query.binds)
       .first<{ object_key: string }>();

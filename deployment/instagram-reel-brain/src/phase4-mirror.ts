@@ -25,6 +25,16 @@ export type Phase4TableSpec = {
 
 export const PHASE4_MAX_LIMIT = 200;
 export const PHASE4_DEFAULT_LIMIT = 100;
+export const PHASE4_NORMAL_MIN_WATERMARK = "2026-08-21T01:42:46.000Z";
+export const PHASE4_REPLAY_WATERMARK = "2026-08-19T05:18:26.000Z";
+export const PHASE4_REPLAY_MAX_EXCLUSIVE_WATERMARK = PHASE4_NORMAL_MIN_WATERMARK;
+
+export type Phase4MirrorScope = {
+  kind: "live" | "historical_replay";
+  minWatermark: string;
+  maxExclusiveWatermark?: string;
+  completedJobsOnly?: boolean;
+};
 
 export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = {
   jobs: {
@@ -42,21 +52,21 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
       "codex_reasoning_output_tokens", "codex_total_tokens", "processing_seconds",
       "created_at", "started_at", "completed_at", "updated_at",
     ],
-    extraWhere: "created_at >= ?",
+    extraWhere: "datetime(created_at) >= datetime(?)",
   },
   job_events: {
     table: "job_events",
     keyColumn: "id",
     cursorExpression: "created_at",
     columns: ["id", "job_id", "stage", "status", "emoji", "detail", "created_at"],
-    extraWhere: "job_id IN (SELECT id FROM jobs WHERE created_at >= ?)",
+    extraWhere: "job_id IN (SELECT id FROM jobs WHERE datetime(created_at) >= datetime(?))",
   },
   artifacts: {
     table: "artifacts",
     keyColumn: "id",
     cursorExpression: "created_at",
     columns: ["id", "job_id", "kind", "object_key", "content_type", "byte_size", "sha256", "created_at"],
-    extraWhere: "job_id IN (SELECT id FROM jobs WHERE created_at >= ?)",
+    extraWhere: "job_id IN (SELECT id FROM jobs WHERE datetime(created_at) >= datetime(?))",
   },
   resources: {
     table: "resources",
@@ -67,7 +77,7 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
       "guide_markdown_key", "evidence_json", "created_at", "guide_html_key", "library_path",
       "artifact_type", "canonical_key", "guide_text", "media_json",
     ],
-    extraWhere: "job_id IN (SELECT id FROM jobs WHERE created_at >= ?)",
+    extraWhere: "job_id IN (SELECT id FROM jobs WHERE datetime(created_at) >= datetime(?))",
   },
   notes: {
     table: "notes",
@@ -83,7 +93,7 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
       "id", "sender_id", "source_message_id", "intent", "input_text", "normalized_query",
       "status", "result_job_id", "result_summary", "error", "is_test", "created_at", "completed_at",
     ],
-    extraWhere: "created_at >= ?",
+    extraWhere: "datetime(created_at) >= datetime(?)",
   },
   outbound_events: {
     table: "outbound_events",
@@ -102,7 +112,7 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
       "id", "sender_id", "source_message_id", "kind", "source_url", "instructions",
       "is_test", "consumed_at", "expires_at", "created_at",
     ],
-    extraWhere: "created_at >= ?",
+    extraWhere: "datetime(created_at) >= datetime(?)",
   },
   instagram_carousel_resolutions: {
     table: "instagram_carousel_resolutions",
@@ -112,7 +122,7 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
       "source_message_id", "sender_id", "media_id", "title", "status", "source_url",
       "resolution_method", "attempts", "error", "created_at", "updated_at", "completed_at",
     ],
-    extraWhere: "created_at >= ?",
+    extraWhere: "datetime(created_at) >= datetime(?)",
   },
   inbound_webhook_events: {
     table: "inbound_webhook_events",
@@ -122,7 +132,7 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
       "source_message_id", "sender_id", "has_share_attachment", "extracted_urls_json",
       "raw_json", "recovery_json", "recovered_url", "created_at", "updated_at",
     ],
-    extraWhere: "created_at >= ?",
+    extraWhere: "datetime(created_at) >= datetime(?)",
   },
 };
 
@@ -143,6 +153,28 @@ export function constantTimeEqual(left: string, right: string): boolean {
 
 export function phase4MirrorAuthorized(provided: string, expected: string | undefined): boolean {
   return Boolean(expected) && constantTimeEqual(provided, expected || "");
+}
+
+export function phase4MirrorScopeForToken(provided: string, liveToken: string | undefined, replayToken?: string | undefined): Phase4MirrorScope | null {
+  if (phase4MirrorAuthorized(provided, liveToken)) {
+    return { kind: "live", minWatermark: PHASE4_NORMAL_MIN_WATERMARK };
+  }
+  if (replayToken && phase4MirrorAuthorized(provided, replayToken)) {
+    return {
+      kind: "historical_replay",
+      minWatermark: PHASE4_REPLAY_WATERMARK,
+      maxExclusiveWatermark: PHASE4_REPLAY_MAX_EXCLUSIVE_WATERMARK,
+      completedJobsOnly: true,
+    };
+  }
+  return null;
+}
+
+export function phase4WatermarkAllowed(scope: Phase4MirrorScope, requestedWatermark: string): boolean {
+  if (scope.kind === "historical_replay") {
+    return Date.parse(requestedWatermark) === Date.parse(scope.minWatermark);
+  }
+  return Date.parse(requestedWatermark) >= Date.parse(scope.minWatermark);
 }
 
 export function parsePhase4Limit(raw: string | null | undefined): number {
@@ -175,22 +207,59 @@ export function decodePhase4Cursor(raw: string | null | undefined, watermark: st
   }
 }
 
-export function phase4DeltaQuery(table: Phase4MirrorTable, watermark: string, cursor: Phase4Cursor, limit: number): { sql: string; binds: Array<string | number> } {
+function phase4NormalizedTimestampExpression(expression: string): string {
+  return `datetime(${expression})`;
+}
+
+function phase4MirrorTimestampExpression(expression: string): string {
+  return `strftime('%Y-%m-%dT%H:%M:%fZ', datetime(${expression}))`;
+}
+
+function phase4ReplayJobScope(scope: Phase4MirrorScope | undefined): { sql: string; binds: string[] } | null {
+  if (!scope?.completedJobsOnly) return null;
+  const where = ["datetime(created_at) >= datetime(?)"];
+  const binds = [scope.minWatermark];
+  if (scope.maxExclusiveWatermark) {
+    where.push("datetime(created_at) < datetime(?)");
+    binds.push(scope.maxExclusiveWatermark);
+  }
+  where.push("status = 'complete'");
+  return { sql: where.join(" AND "), binds };
+}
+
+function phase4ReplayLinkedJobScope(table: Phase4MirrorTable, scope: Phase4MirrorScope | undefined): { sql: string; binds: string[] } | null {
+  const jobScope = phase4ReplayJobScope(scope);
+  if (!jobScope) return null;
+  if (table === "jobs") return jobScope;
+  if (["job_events", "artifacts", "resources", "outbound_events"].includes(table)) {
+    return { sql: `job_id IN (SELECT id FROM jobs WHERE ${jobScope.sql})`, binds: jobScope.binds };
+  }
+  return { sql: "0 = 1", binds: [] };
+}
+
+export function phase4DeltaQuery(table: Phase4MirrorTable, watermark: string, cursor: Phase4Cursor, limit: number, scope?: Phase4MirrorScope): { sql: string; binds: Array<string | number> } {
   const spec = PHASE4_MIRROR_TABLES[table];
   const keyExpression = `CAST(${spec.keyColumn} AS TEXT)`;
   const cursorExpression = spec.cursorExpression;
+  const normalizedCursorExpression = phase4NormalizedTimestampExpression(cursorExpression);
+  const mirrorTimestampExpression = phase4MirrorTimestampExpression(cursorExpression);
   const where = [
-    `${cursorExpression} >= ?`,
-    `(${cursorExpression} > ? OR (${cursorExpression} = ? AND ${keyExpression} > ?))`,
+    `${normalizedCursorExpression} >= datetime(?)`,
+    `(${normalizedCursorExpression} > datetime(?) OR (${normalizedCursorExpression} = datetime(?) AND ${keyExpression} > ?))`,
   ];
   const binds: Array<string | number> = [watermark, cursor.created_at, cursor.created_at, cursor.key];
   if (spec.extraWhere) {
     where.push(spec.extraWhere);
     binds.push(watermark);
   }
+  const replayScope = phase4ReplayLinkedJobScope(table, scope);
+  if (replayScope) {
+    where.push(replayScope.sql);
+    binds.push(...replayScope.binds);
+  }
   binds.push(limit);
   return {
-    sql: `SELECT ${spec.columns.join(", ")}, ${cursorExpression} AS mirror_updated_at FROM ${spec.table} WHERE ${where.join(" AND ")} ORDER BY mirror_updated_at ASC, ${keyExpression} ASC LIMIT ?`,
+    sql: `SELECT ${spec.columns.join(", ")}, ${mirrorTimestampExpression} AS mirror_updated_at FROM ${spec.table} WHERE ${where.join(" AND ")} ORDER BY ${normalizedCursorExpression} ASC, ${keyExpression} ASC LIMIT ?`,
     binds,
   };
 }
@@ -204,26 +273,47 @@ export function phase4NextCursor(table: Phase4MirrorTable, rows: Array<Record<st
   return createdAt && key ? encodePhase4Cursor({ created_at: createdAt, key }) : null;
 }
 
-export function phase4ObjectAccessQuery(key: string, watermark: string): { sql: string; binds: string[] } {
+export function phase4ObjectAccessQuery(key: string, watermark: string, scope?: Phase4MirrorScope): { sql: string; binds: string[] } {
+  const jobWhere = ["datetime(created_at) >= datetime(?)"];
+  const jobBinds = [watermark];
+  if (scope?.completedJobsOnly) jobWhere.push("status = 'complete'");
+  if (scope?.maxExclusiveWatermark) {
+    jobWhere.push("datetime(created_at) < datetime(?)");
+    jobBinds.push(scope.maxExclusiveWatermark);
+  }
+  const jobScopeSql = jobWhere.join(" AND ");
+  const jobScopeBinds = () => [...jobBinds];
+  const jobObjectColumns = [
+    "original_video_key",
+    "audio_key",
+    "markdown_key",
+    "transcript_key",
+    "synthesis_json_key",
+    "html_key",
+  ].join(", ");
   return {
     sql: `
-      SELECT object_key FROM artifacts WHERE object_key=? AND created_at >= ? AND job_id IN (SELECT id FROM jobs WHERE created_at >= ?)
-      UNION
-      SELECT original_video_key AS object_key FROM jobs WHERE original_video_key=? AND created_at >= ?
-      UNION
-      SELECT audio_key AS object_key FROM jobs WHERE audio_key=? AND created_at >= ?
-      UNION
-      SELECT markdown_key AS object_key FROM jobs WHERE markdown_key=? AND created_at >= ?
-      UNION
-      SELECT transcript_key AS object_key FROM jobs WHERE transcript_key=? AND created_at >= ?
-      UNION
-      SELECT synthesis_json_key AS object_key FROM jobs WHERE synthesis_json_key=? AND created_at >= ?
-      UNION
-      SELECT html_key AS object_key FROM jobs WHERE html_key=? AND created_at >= ?
-      UNION
-      SELECT guide_html_key AS object_key FROM resources WHERE guide_html_key=? AND created_at >= ? AND job_id IN (SELECT id FROM jobs WHERE created_at >= ?)
+      SELECT ? AS object_key
+      WHERE EXISTS (
+        SELECT 1 FROM artifacts
+        WHERE object_key=? AND datetime(created_at) >= datetime(?) AND job_id IN (SELECT id FROM jobs WHERE ${jobScopeSql})
+      )
+      OR EXISTS (
+        SELECT 1 FROM jobs
+        WHERE ? IN (${jobObjectColumns}) AND ${jobScopeSql}
+      )
+      OR EXISTS (
+        SELECT 1 FROM resources
+        WHERE guide_html_key=? AND datetime(created_at) >= datetime(?) AND job_id IN (SELECT id FROM jobs WHERE ${jobScopeSql})
+      )
+      LIMIT 1
     `,
-    binds: [key, watermark, watermark, key, watermark, key, watermark, key, watermark, key, watermark, key, watermark, key, watermark, key, watermark, watermark],
+    binds: [
+      key,
+      key, watermark, ...jobScopeBinds(),
+      key, ...jobScopeBinds(),
+      key, watermark, ...jobScopeBinds(),
+    ],
   };
 }
 
