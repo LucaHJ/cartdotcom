@@ -24,6 +24,7 @@ outbound operations, auth rotation, backlog processing, or any Phase 5 work.
 
 ## Worker backup and deployment
 
+- Implementation commit: `fa7eb3c` (amended after report finalisation).
 - Previous live deployment version recorded before deploy:
   `ad8103cc-2995-4ee8-9ed1-d1dee24ad6c1`.
 - Deployment inventory command:
