@@ -260,3 +260,21 @@ active. See `PHASE_5C_INERT_RUNTIME_REPORT_2026-08-22.md` and
 
 No carousel, retrieval case, second pilot, Phase 6 work, or authority cutover is
 approved before Phase 5C receives independent review.
+## 2026-08-23 Phase 5C checkpoint integrity correction
+
+- Commit `fa37942` replaced the mutually writable staged checkpoint with a
+  signed control-owned state and a separate untrusted compute result.
+- `phase5-compute` mounts control state read-only; `phase5-control` mounts
+  compute output read-only.
+- The host orchestrator no longer trusts JSON stage values to skip work. Every
+  invocation reconciles control, compute, finalize, and status idempotently.
+- Focused Phase 5 tests passed 15/15. The Ubuntu 11-case synthetic fault matrix
+  passed, including forged stage/index, result tampering, compute write denial,
+  expiry, duplicate delivery, and restart boundaries.
+- Final images: control
+  `sha256:d5f7ca1814d572eaaf49b85918292f04c4a2caf1988346e3dce0cbaf7d071b3f`;
+  compute
+  `sha256:ababd6f3a1ef297952193f01411ecc5ffc5135c8f3e958f08acc7410c35e3cdc`.
+- Phase 5 services remain stopped. Cloudflare remains sole production
+  authority. The next gate is a control-only Worker token file followed by a
+  separately fenced live carousel pilot.
