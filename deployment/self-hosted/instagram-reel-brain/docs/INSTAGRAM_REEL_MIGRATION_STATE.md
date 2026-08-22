@@ -176,20 +176,27 @@ operational Wrangler/D1 mutation in the local runner. Supervisor review then
 found crash/restart recovery gaps, corrected in commit `121da3d` and Worker
 version `98d34e1f-912a-4209-887a-450243444b7c`. A later supervisor review found
 expiry-bound recovery gaps, corrected in commit `739b01f` and Worker version
-`1b7055bd-0a18-41c3-a3f2-17972c8d145b`. The final authority-bound correction is
-commit `5af21e1`, deployed as Worker version
-`2400dec0-ab38-4cc4-b704-2f10d467fba2`: effective execution expiry is now
+`1b7055bd-0a18-41c3-a3f2-17972c8d145b`. The overall-fence authority-bound
+correction is commit `5af21e1`, deployed as Worker version
+`2400dec0-ab38-4cc4-b704-2f10d467fba2`: effective execution expiry became
 `min(requested token expiry, overall fence expires_at - 30 seconds)`, any
 remaining window below five minutes fails closed with
 `insufficient_fence_window_abort_required`, initial start/running renewal/queued
 repair all write only that effective expiry, SQL guards prove
 `expires_at >= effective expiry`, and postconditions assert
 `jobs.upload_token_expires_at == phase5_local_pilot_fences.local_lease_expires_at == effective expiry <= overall fence expires_at`.
-`/health` is `ok=true`, `ingest_mode=live`, and `backlog_processing=false`.
-Post-deploy production state has zero queued/running jobs, zero active Phase 5
-fences, zero armed Phase 5 arms, and zero backlog queued/running jobs. The
-inert Ubuntu runner remains disabled. Ubuntu full live execution remains
-blocked until a dedicated Reel media/Codex runtime is provided; see
+The final short-running-lease restart correction is commit `08c94a3`, deployed
+as Worker version `bb85f370-31bd-4c66-ba13-ce9ff5c12b75`: `resume_running` is
+now allowed only when existing equal callback/local-lease expiries are valid,
+within the overall fence, and at least as long as the newly computed effective
+execution expiry; otherwise the route must first return and complete
+`renew_processing_lease`, and failed/insufficient renewal stops before processor
+loading. `/health` is `ok=true`, `ingest_mode=live`, and
+`backlog_processing=false`. Post-deploy production state has zero queued/running
+jobs, zero active Phase 5 fences, zero armed Phase 5 arms, and zero backlog
+queued/running jobs. The inert Ubuntu runner remains disabled. Ubuntu full live
+execution remains blocked until a dedicated Reel media/Codex runtime is
+provided; see
 `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 No carousel, retrieval case, second pilot, Phase 6 work, or authority cutover is

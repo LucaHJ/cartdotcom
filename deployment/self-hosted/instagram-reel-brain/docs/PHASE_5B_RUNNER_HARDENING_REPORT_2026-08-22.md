@@ -594,6 +594,142 @@ completion/publication is already durable, use forward finalize recovery only.
   media/Codex runtime. No second live case should run until the supervisor
   approves the next bounded stage.
 
+## Short running-lease restart correction addendum
+
+Timestamp: `2026-08-22T15:03:44+10:00`
+
+Supervisor review accepted the overall-fence bound, but found one remaining
+executable restart defect: `phase5StartRecoveryDecision()` could return
+`resume_running` when stored `upload_token_expires_at` and
+`local_lease_expires_at` were only barely greater than `now`, even though the
+new start request had a much longer safe effective execution window. The runner
+would then call `processor.process()` immediately and could lose callback
+authority mid-run.
+
+### Correction
+
+Commit `08c94a3` changes only the Phase 5 recovery predicate and executable
+tests:
+
+- `deployment/instagram-reel-brain/src/phase5-pilot.ts`
+  - `resume_running` now requires stored callback and local-lease expiries to:
+    - be valid after `now`;
+    - be equal to each other;
+    - be no later than the overall fence;
+    - cover the newly computed `effectiveTokenExpiresAt`.
+  - If either stored expiry is earlier than the effective requested window,
+    recovery returns `renew_processing_lease` instead of `resume_running`.
+  - The prior 30-second overall-fence safety margin and five-minute minimum safe
+    processing window remain unchanged.
+- `deployment/instagram-reel-brain/tests/phase5-pilot.test.mjs`
+  - Added executable reproduction coverage for stored running leases expiring
+    one second after `now` with one hour of overall/requested authority.
+  - Proves `renew_processing_lease` is required, successful renewal writes the
+    effective expiry, failed renewal produces zero processor calls, and
+    sufficiently long existing leases still resume without a renewal write.
+- `deployment/self-hosted/instagram-reel-brain/tests/phase5-pilot.test.mjs`
+  - Verifies the one-shot runner records the Worker-returned effective/renewed
+    `token_expires_at` before processor execution.
+  - Verifies failed cloud start or failed processing-lease renewal exits before
+    `processor.process(payload)`.
+
+No live arm, live local job, runtime image, carousel/retrieval/note case,
+backlog work, or Phase 6 work was started.
+
+### Verification
+
+Workstation:
+
+- Focused Cloud Phase 5 test command:
+  `npm test -- --test-reporter=spec tests/phase5-pilot.test.mjs` in
+  `deployment/instagram-reel-brain` — 96/96 loaded tests passed.
+- Focused self-hosted Phase 5 test command:
+  `npm test -- --test-reporter=spec tests/phase5-pilot.test.mjs` in
+  `deployment/self-hosted/instagram-reel-brain` — 53 passed, 1 expected Windows
+  symlink skip.
+- `npm run typecheck` in `deployment/instagram-reel-brain`: passed.
+- `npm test` in `deployment/instagram-reel-brain`: 96/96 Node tests passed.
+- `npm test` in `deployment/self-hosted/instagram-reel-brain`: 53 passed,
+  1 expected Windows symlink skip.
+- `python -m unittest container.test_app -v` in
+  `deployment/instagram-reel-brain`: 9/9 Python tests passed.
+- `python tests/test_media_processor_api.py` in
+  `deployment/self-hosted/instagram-reel-brain`: 3/3 passed.
+- `python tests/test_phase4_shadow_mirror.py` in
+  `deployment/self-hosted/instagram-reel-brain`: 9/9 passed.
+- `python tests/test_phase4_shadow_mirror_connected.py` in
+  `deployment/self-hosted/instagram-reel-brain`: 5/5 passed.
+- `python -m py_compile` passed for:
+  - `deployment/self-hosted/instagram-reel-brain/scripts/phase5_one_job_runner.py`
+  - `deployment/self-hosted/instagram-reel-brain/services/media-processor-api/app.py`
+- `docker compose -f compose.yaml config --quiet` in
+  `deployment/self-hosted/instagram-reel-brain`: passed.
+
+Deployment:
+
+- First deploy attempt failed before mutation because the stale
+  `CLOUDFLARE_API_TOKEN` environment override was present.
+- Successful Worker-only deploy command:
+  `Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue; npx wrangler deploy --containers-rollout=none`
+- Corrective Worker version:
+  `bb85f370-31bd-4c66-ba13-ce9ff5c12b75`
+- No container/runtime image rollout was performed.
+
+Pre-deploy and post-deploy production state:
+
+- Worker `/health`: `ok=true`, `ingest_mode=live`,
+  `backlog_processing=false`, `model=gpt-5.6-luna`.
+- D1 before and after deploy:
+  - queued/running jobs: `0`
+  - active Phase 5 fences: `0`
+  - active Phase 5 arms: `0`
+  - backlog queued/running jobs: `0`
+- Server after deploy:
+  - Reel services: all six healthy.
+  - News services: all healthy.
+  - Caddy and PostgreSQL: healthy.
+  - Host memory sample: `15Gi` total, `1.8Gi` used, `13Gi` available.
+
+### Enabled/disabled state after short running-lease correction
+
+Enabled:
+
+- Cloudflare remains the sole general production processing authority.
+- Admin-only exact Phase 5 start/finalize/abort routes remain deployed.
+
+Disabled / not performed:
+
+- No live Phase 5 arm.
+- No live local job.
+- No carousel, retrieval, or note case.
+- No historical backlog enumeration/replay/processing.
+- No dedicated runtime image deployment.
+- No local scheduler, selector, general claim loop, Codex execution loop,
+  publication loop, or Instagram outbound loop.
+- No credential rotation and no secret plaintext exposure.
+
+### Rollback
+
+Immediate Worker rollback:
+
+1. Roll the Worker back from version
+   `bb85f370-31bd-4c66-ba13-ce9ff5c12b75` to previous version
+   `2400dec0-ab38-4cc4-b704-2f10d467fba2`, or redeploy source before commit
+   `08c94a3`.
+2. Confirm `/health` returns `ok=true` and `backlog_processing=false`.
+3. Confirm D1 has zero queued/running jobs, zero active Phase 5 fences, and
+   zero armed Phase 5 captures.
+
+### Remaining risks after short running-lease correction
+
+- The short-running-lease restart path is covered by executable tests and idle
+  deploy checks, but it has not yet been exercised on a second real live job.
+- D1 guarded multi-row updates still rely on affected-row checks and
+  postconditions rather than PostgreSQL-style repository transactions.
+- Ubuntu durable live-runner parity is still blocked on a dedicated Reel
+  media/Codex runtime. No second live case should run until the supervisor
+  approves the next bounded stage.
+
 ## Overall-fence execution-expiry correction addendum
 
 Timestamp: `2026-08-22T14:50:10+10:00`
