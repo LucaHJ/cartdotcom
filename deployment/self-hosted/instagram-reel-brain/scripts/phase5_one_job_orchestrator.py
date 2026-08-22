@@ -4,8 +4,8 @@
 This wrapper contains no production credential values. It uses host Docker
 Compose to invoke the stopped/profile-gated `phase5-control` and
 `phase5-compute` services sequentially for one exact job. Control secrets are
-mounted only into the control container; compute receives only the shared
-checkpoint and callback authority.
+mounted only into the control container. Compute receives a read-only signed
+control state and writes a separate untrusted result handoff.
 """
 
 from __future__ import annotations
@@ -31,20 +31,6 @@ CONTAINER_RUNNER = "/opt/reel/phase5_staged_runner.py"
 CONTAINER_TOKEN_PATH = "/run/control-secrets/phase5_admin_token"
 DEFAULT_WORKER = "phase5-local-worker-1"
 CONFIRM_PREFIX = "RUN EXACT PHASE 5 LOCAL PILOT"
-ORCH_STAGE_ORDER = {
-    "new": 0,
-    "checkpoint_created": 10,
-    "callback_token_minted": 20,
-    "cloud_started": 30,
-    "local_processing": 40,
-    "ready_for_compute": 50,
-    "abort_required": 55,
-    "compute_started": 60,
-    "processor_complete": 70,
-    "cloud_finalized": 80,
-    "complete": 90,
-    "rolled_back": 100,
-}
 
 
 def json_print(payload: dict[str, Any]) -> None:
@@ -73,37 +59,30 @@ def chmod_private(path: Path, *, directory: bool = False) -> None:
         pass
 
 
-def checkpoint_paths(args: argparse.Namespace) -> tuple[Path, str]:
+def handoff_paths(args: argparse.Namespace) -> tuple[Path, str, Path, str]:
+    run_root = Path(args.runs_root)
+    job_name = safe_name(f"{args.pilot_key}_{args.job_id}")
     if args.checkpoint_host_path:
         host_path = Path(args.checkpoint_host_path)
     else:
-        run_root = Path(args.runs_root)
-        host_path = run_root / "phase5-runner" / safe_name(f"{args.pilot_key}_{args.job_id}") / "checkpoint.json"
+        host_path = run_root / "phase5-control" / job_name / "checkpoint.json"
+    if args.result_host_path:
+        result_host_path = Path(args.result_host_path)
+    else:
+        result_host_path = run_root / "phase5-compute" / job_name / "result.json"
     host_path.parent.mkdir(parents=True, exist_ok=True)
+    result_host_path.parent.mkdir(parents=True, exist_ok=True)
     chmod_private(host_path.parent, directory=True)
+    chmod_private(result_host_path.parent, directory=True)
     if args.checkpoint_container_path:
         container_path = args.checkpoint_container_path
     else:
-        try:
-            relative = host_path.relative_to(Path(args.runs_root))
-            container_path = "/runs/" + relative.as_posix()
-        except ValueError:
-            raise SystemExit("--checkpoint-container-path is required when checkpoint is outside --runs-root")
-    return host_path, container_path
-
-
-def read_checkpoint_stage(host_path: Path) -> str:
-    if not host_path.exists():
-        return "new"
-    parsed = json.loads(host_path.read_text(encoding="utf-8"))
-    stage = str(parsed.get("stage") or "new")
-    if stage not in ORCH_STAGE_ORDER:
-        raise RuntimeError(f"unknown checkpoint stage: {stage}")
-    return stage
-
-
-def stage_at_least(stage: str, target: str) -> bool:
-    return ORCH_STAGE_ORDER.get(stage, -1) >= ORCH_STAGE_ORDER[target]
+        container_path = f"/runs/control/{job_name}/checkpoint.json"
+    if args.result_container_path:
+        result_container_path = args.result_container_path
+    else:
+        result_container_path = f"/runs/compute/{job_name}/result.json"
+    return host_path, container_path, result_host_path, result_container_path
 
 
 def compose_base(args: argparse.Namespace) -> list[str]:
@@ -190,7 +169,7 @@ def parse_json_output(text: str) -> dict[str, Any] | None:
     return None
 
 
-def common_stage_args(args: argparse.Namespace, checkpoint_container_path: str, worker_url: str) -> list[str]:
+def common_stage_args(args: argparse.Namespace, checkpoint_container_path: str, result_container_path: str, worker_url: str) -> list[str]:
     return [
         "--pilot-key", args.pilot_key,
         "--job-id", args.job_id,
@@ -198,6 +177,7 @@ def common_stage_args(args: argparse.Namespace, checkpoint_container_path: str, 
         "--lease-owner", args.lease_owner,
         "--schema", args.schema,
         "--checkpoint-path", checkpoint_container_path,
+        "--result-path", result_container_path,
         "--worker-url", worker_url,
         "--confirm-live-run", f"{CONFIRM_PREFIX} {args.job_id}",
         "--token-minutes", str(args.token_minutes),
@@ -205,17 +185,17 @@ def common_stage_args(args: argparse.Namespace, checkpoint_container_path: str, 
     ]
 
 
-def control_args(args: argparse.Namespace, checkpoint_container_path: str, worker_url: str) -> list[str]:
+def control_args(args: argparse.Namespace, checkpoint_container_path: str, result_container_path: str, worker_url: str) -> list[str]:
     return [
-        *common_stage_args(args, checkpoint_container_path, worker_url),
+        *common_stage_args(args, checkpoint_container_path, result_container_path, worker_url),
         "--pg-mode", "native",
         "--admin-token-file", CONTAINER_TOKEN_PATH,
     ]
 
 
-def compute_args(args: argparse.Namespace, checkpoint_container_path: str, worker_url: str, resume_artifacts_json: str = "") -> list[str]:
+def compute_args(args: argparse.Namespace, checkpoint_container_path: str, result_container_path: str, worker_url: str, resume_artifacts_json: str = "") -> list[str]:
     command = [
-        *common_stage_args(args, checkpoint_container_path, worker_url),
+        *common_stage_args(args, checkpoint_container_path, result_container_path, worker_url),
         "--codex-auth-path", args.codex_auth_path,
         "--timeout-seconds", str(args.timeout_seconds),
     ]
@@ -376,34 +356,30 @@ def resume_artifacts(worker_url: str, job_id: str) -> str:
 
 
 def run_exact_flow(args: argparse.Namespace, *, worker_url: str, token_host_file: Path, resume_json: str = "") -> dict[str, Any]:
-    checkpoint_host_path, checkpoint_container_path = checkpoint_paths(args)
+    checkpoint_host_path, checkpoint_container_path, result_host_path, result_container_path = handoff_paths(args)
     events: list[dict[str, Any]] = []
-    control_common = control_args(args, checkpoint_container_path, worker_url)
-    compute_common = compute_args(args, checkpoint_container_path, worker_url, resume_json)
+    control_common = control_args(args, checkpoint_container_path, result_container_path, worker_url)
+    compute_common = compute_args(args, checkpoint_container_path, result_container_path, worker_url, resume_json)
 
-    stage = read_checkpoint_stage(checkpoint_host_path)
-    if stage_at_least(stage, "processor_complete"):
-        events.append({"step": "control-start", "skipped": True, "checkpoint_stage": stage})
-    else:
-        events.append({"step": "control-start", "result": run_compose(args, "phase5-control", ["control-start", *control_common], token_host_file=token_host_file)})
+    # Every invocation reconciles through the control container. The host never
+    # trusts mutable JSON to decide which authoritative transition to skip.
+    events.append({"step": "control-start", "result": run_compose(args, "phase5-control", ["control-start", *control_common], token_host_file=token_host_file)})
     if args.fault_at == "after-start":
         return {"ok": True, "stopped_at": "after-start", "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
-    stage = read_checkpoint_stage(checkpoint_host_path)
     try:
-        if stage_at_least(stage, "processor_complete"):
-            events.append({"step": "compute-run", "skipped": True, "checkpoint_stage": stage})
-        else:
-            compute_stage = ["compute-run", *compute_common]
-            compute_env = {}
-            if args.use_fake_codex:
-                compute_env["CODEX_FAKE_RESPONSE"] = "1"
-            if args.fault_at == "before-processor":
-                compute_stage.extend(["--inject-fault", "before-processor"])
-            if args.fault_at == "after-processor-before-checkpoint":
-                compute_stage.extend(["--inject-fault", "after-processor-before-checkpoint"])
-            events.append({"step": "compute-run", "result": run_compose(args, "phase5-compute", compute_stage, env=compute_env)})
+        compute_stage = ["compute-run", *compute_common]
+        compute_env = {}
+        if args.use_fake_codex:
+            compute_env["CODEX_FAKE_RESPONSE"] = "1"
+        if args.fault_at == "before-processor":
+            compute_stage.extend(["--inject-fault", "before-processor"])
+        if args.fault_at == "after-processor-before-checkpoint":
+            compute_stage.extend(["--inject-fault", "after-processor-before-checkpoint"])
+        if args.fault_at == "attempt-control-state-write":
+            compute_stage.extend(["--inject-fault", "attempt-control-state-write"])
+        events.append({"step": "compute-run", "result": run_compose(args, "phase5-compute", compute_stage, env=compute_env)})
     except Exception as error:  # noqa: BLE001
-        if args.fault_at in ("after-processor-before-checkpoint",):
+        if args.fault_at in ("after-processor-before-checkpoint", "attempt-control-state-write"):
             return {"ok": True, "stopped_at": args.fault_at, "compute_error": type(error).__name__, "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
         if args.abort_on_compute_failure:
             events.append({"step": "control-abort", "result": run_compose(args, "phase5-control", ["control-abort", *control_common], token_host_file=token_host_file)})
@@ -411,11 +387,6 @@ def run_exact_flow(args: argparse.Namespace, *, worker_url: str, token_host_file
         raise
     if args.fault_at == "after-compute":
         return {"ok": True, "stopped_at": "after-compute", "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
-    stage = read_checkpoint_stage(checkpoint_host_path)
-    if stage_at_least(stage, "complete"):
-        events.append({"step": "control-finalize", "skipped": True, "checkpoint_stage": stage})
-        events.append({"step": "status", "result": run_compose(args, "phase5-control", ["status", *control_common], token_host_file=token_host_file)})
-        return {"ok": True, "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
     finalize_stage = ["control-finalize", *control_common]
     if args.fault_at == "after-cloud-finalize-before-local-complete":
         finalize_stage.extend(["--inject-fault", "after-cloud-finalize-before-local-complete"])
@@ -426,7 +397,7 @@ def run_exact_flow(args: argparse.Namespace, *, worker_url: str, token_host_file
             return {"ok": True, "stopped_at": args.fault_at, "finalize_error": type(error).__name__, "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
         raise
     events.append({"step": "status", "result": run_compose(args, "phase5-control", ["status", *control_common], token_host_file=token_host_file)})
-    return {"ok": True, "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
+    return {"ok": True, "events": events, "checkpoint_host_path": str(checkpoint_host_path), "result_host_path": str(result_host_path)}
 
 
 def run_or_resume(args: argparse.Namespace) -> dict[str, Any]:
@@ -442,7 +413,7 @@ def run_or_resume(args: argparse.Namespace) -> dict[str, Any]:
 def synthetic_case(args: argparse.Namespace) -> dict[str, Any]:
     if args.synthetic_case == "all":
         results = []
-        for case in ("complete", "after-start", "after-compute", "after-processor-before-checkpoint", "after-cloud-finalize-before-local-complete", "duplicate", "short-authority", "compute-failure-abort", "tampered-checkpoint"):
+        for case in ("complete", "after-start", "after-compute", "after-processor-before-checkpoint", "after-cloud-finalize-before-local-complete", "duplicate", "short-authority", "compute-failure-abort", "tampered-checkpoint", "tampered-result", "compute-control-readonly"):
             suffix = f"{case.replace('-', '_')}_{secrets.token_hex(3)}"
             child = argparse.Namespace(**{
                 **vars(args),
@@ -452,6 +423,7 @@ def synthetic_case(args: argparse.Namespace) -> dict[str, Any]:
                 "job_id": f"{args.job_id}-{suffix}",
                 "source_message_id": f"{args.source_message_id}-{suffix}",
                 "checkpoint_host_path": "",
+                "result_host_path": "",
             })
             results.append({"case": case, "result": synthetic_case(child)})
         return {"ok": all(row["result"].get("ok") for row in results), "cases": results}
@@ -462,12 +434,12 @@ def synthetic_case(args: argparse.Namespace) -> dict[str, Any]:
     token_file = temp_root / "phase5-admin-token"
     token_file.write_text(token, encoding="utf-8")
     chmod_private(token_file)
-    checkpoint_host_path, checkpoint_container_path = checkpoint_paths(args)
+    checkpoint_host_path, checkpoint_container_path, result_host_path, result_container_path = handoff_paths(args)
     worker = FakeWorker(token, short_authority=args.synthetic_case == "short-authority")
     worker_host = args.synthetic_worker_host or docker_network_gateway(args)
     worker_url = worker.start(container_host=worker_host)
     try:
-        init_args = control_args(args, checkpoint_container_path, worker_url)
+        init_args = control_args(args, checkpoint_container_path, result_container_path, worker_url)
         init = run_compose(args, "phase5-control", ["synthetic-init", *init_args], token_host_file=token_file)
         resume_json = resume_artifacts(worker_url, args.job_id)
         if args.synthetic_case == "short-authority":
@@ -484,15 +456,39 @@ def synthetic_case(args: argparse.Namespace) -> dict[str, Any]:
         if args.synthetic_case == "tampered-checkpoint":
             _ = run_compose(args, "phase5-control", ["control-start", *init_args], token_host_file=token_file)
             parsed = json.loads(checkpoint_host_path.read_text(encoding="utf-8"))
-            parsed["job_id"] = "tampered"
+            parsed["stage"] = "complete"
+            parsed["stage_index"] = 90
             checkpoint_host_path.write_text(json.dumps(parsed), encoding="utf-8")
             chmod_private(checkpoint_host_path)
             failed = False
             try:
-                run_compose(args, "phase5-compute", ["compute-run", *compute_args(args, checkpoint_container_path, worker_url, resume_json)], env={"CODEX_FAKE_RESPONSE": "1"})
+                run_compose(args, "phase5-control", ["control-start", *init_args], token_host_file=token_file)
             except Exception:
                 failed = True
             return {"ok": failed, "case": args.synthetic_case, "tamper_failed_closed": failed}
+        if args.synthetic_case == "tampered-result":
+            _ = run_compose(args, "phase5-control", ["control-start", *init_args], token_host_file=token_file)
+            compute = ["compute-run", *compute_args(args, checkpoint_container_path, result_container_path, worker_url, resume_json), "--synthetic-processor"]
+            _ = run_compose(args, "phase5-compute", compute, env={"CODEX_FAKE_RESPONSE": "1"})
+            parsed = json.loads(result_host_path.read_text(encoding="utf-8"))
+            parsed["control_state_sha256"] = "0" * 64
+            result_host_path.write_text(json.dumps(parsed), encoding="utf-8")
+            chmod_private(result_host_path)
+            failed = False
+            try:
+                run_compose(args, "phase5-control", ["control-finalize", *init_args], token_host_file=token_file)
+            except Exception:
+                failed = True
+            return {"ok": failed and not worker.finalized, "case": args.synthetic_case, "tamper_failed_closed": failed}
+        if args.synthetic_case == "compute-control-readonly":
+            _ = run_compose(args, "phase5-control", ["control-start", *init_args], token_host_file=token_file)
+            failed = False
+            try:
+                run_compose(args, "phase5-compute", ["compute-run", *compute_args(args, checkpoint_container_path, result_container_path, worker_url, resume_json), "--inject-fault", "attempt-control-state-write"], env={"CODEX_FAKE_RESPONSE": "1"})
+            except Exception:
+                failed = True
+            _ = run_compose(args, "phase5-control", ["status", *init_args], token_host_file=token_file)
+            return {"ok": failed, "case": args.synthetic_case, "control_state_readonly": failed}
         args.synthetic_processor = args.synthetic_case in ("complete", "after-start", "after-compute", "duplicate")
         args.use_fake_codex = args.synthetic_case not in ("complete", "after-start", "after-compute", "duplicate")
         args.fault_at = {
@@ -513,7 +509,7 @@ def synthetic_case(args: argparse.Namespace) -> dict[str, Any]:
     finally:
         worker.stop()
         try:
-            run_compose(args, "phase5-control", ["synthetic-drop", *control_args(args, checkpoint_container_path, worker_url)], token_host_file=token_file)
+            run_compose(args, "phase5-control", ["synthetic-drop", *control_args(args, checkpoint_container_path, result_container_path, worker_url)], token_host_file=token_file)
         except Exception:
             pass
 
@@ -530,6 +526,8 @@ def main() -> int:
     parser.add_argument("--schema", default="reel_phase4_shadow_20260821_014246")
     parser.add_argument("--checkpoint-host-path", default="")
     parser.add_argument("--checkpoint-container-path", default="")
+    parser.add_argument("--result-host-path", default="")
+    parser.add_argument("--result-container-path", default="")
     parser.add_argument("--worker-url", default="https://cartdotcom-instagram-reel-brain.lucajeannin.workers.dev")
     parser.add_argument("--admin-token-host-file", default="")
     parser.add_argument("--codex-auth-path", default="/codex-auth/auth.json")
@@ -541,9 +539,9 @@ def main() -> int:
     parser.add_argument("--resume-artifacts-json", default="")
     parser.add_argument("--synthetic-processor", action="store_true")
     parser.add_argument("--use-fake-codex", action="store_true")
-    parser.add_argument("--fault-at", default="", choices=("", "after-start", "before-processor", "after-compute", "after-processor-before-checkpoint", "after-cloud-finalize-before-local-complete"))
+    parser.add_argument("--fault-at", default="", choices=("", "after-start", "before-processor", "after-compute", "after-processor-before-checkpoint", "after-cloud-finalize-before-local-complete", "attempt-control-state-write"))
     parser.add_argument("--abort-on-compute-failure", action="store_true")
-    parser.add_argument("--synthetic-case", default="", choices=("", "all", "complete", "after-start", "after-compute", "after-processor-before-checkpoint", "after-cloud-finalize-before-local-complete", "duplicate", "short-authority", "compute-failure-abort", "tampered-checkpoint"))
+    parser.add_argument("--synthetic-case", default="", choices=("", "all", "complete", "after-start", "after-compute", "after-processor-before-checkpoint", "after-cloud-finalize-before-local-complete", "duplicate", "short-authority", "compute-failure-abort", "tampered-checkpoint", "tampered-result", "compute-control-readonly"))
     args = parser.parse_args()
 
     args.pilot_key = require_exact(args.pilot_key, "--pilot-key", 120)

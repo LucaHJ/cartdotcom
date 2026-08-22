@@ -165,13 +165,15 @@ test("Phase 5 staged runner preserves exact checkpoint and split-boundary recove
   assert.match(staged, /validate_processor_result/);
   assert.match(staged, /processor result contains unsupported keys/);
   assert.match(staged, /processor result job_id mismatch/);
+  assert.match(staged, /control checkpoint signature mismatch/);
+  assert.match(staged, /compute result control-state digest mismatch/);
+  assert.match(staged, /compute role may not write control state/);
   assert.match(staged, /instagram_cookies_json": ""/);
 
   assert.match(orchestrator, /def run_exact_flow/);
-  assert.match(orchestrator, /ORCH_STAGE_ORDER/);
-  assert.match(orchestrator, /read_checkpoint_stage/);
-  assert.match(orchestrator, /stage_at_least\(stage, "processor_complete"\)/);
-  assert.match(orchestrator, /stage_at_least\(stage, "complete"\)/);
+  assert.match(orchestrator, /def handoff_paths/);
+  assert.match(orchestrator, /The host never[\s\S]*trusts mutable JSON/);
+  assert.doesNotMatch(orchestrator, /read_checkpoint_stage|stage_at_least/);
   assert.match(orchestrator, /docker_network_gateway/);
   assert.match(orchestrator, /control-start/);
   assert.match(orchestrator, /compute-run/);
@@ -183,6 +185,8 @@ test("Phase 5 staged runner preserves exact checkpoint and split-boundary recove
   assert.match(orchestrator, /after-cloud-finalize-before-local-complete/);
   assert.match(orchestrator, /compute-failure-abort/);
   assert.match(orchestrator, /tampered-checkpoint/);
+  assert.match(orchestrator, /tampered-result/);
+  assert.match(orchestrator, /compute-control-readonly/);
   assert.match(orchestrator, /short-authority/);
   assert.doesNotMatch(orchestrator, /--add-host|REEL_BRAIN_ADMIN_TOKEN|PGPASSWORD|sk-[A-Za-z0-9]|Bearer [A-Za-z0-9_\-.]{16,}/);
 });

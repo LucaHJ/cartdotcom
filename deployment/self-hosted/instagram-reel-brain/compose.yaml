@@ -152,8 +152,12 @@ services:
         target: /run/control-secrets/postgres_password
         read_only: true
       - type: bind
-        source: ${REEL_RUNS_ROOT:-/srv/cartdotcom/reel-brain-runs}
-        target: /runs
+        source: ${REEL_PHASE5_CONTROL_ROOT:-/srv/cartdotcom/reel-brain-runs/phase5-control}
+        target: /runs/control
+      - type: bind
+        source: ${REEL_PHASE5_COMPUTE_ROOT:-/srv/cartdotcom/reel-brain-runs/phase5-compute}
+        target: /runs/compute
+        read_only: true
       - type: tmpfs
         target: /work
         tmpfs:
@@ -199,8 +203,12 @@ services:
         target: /codex-auth/auth.json
         read_only: true
       - type: bind
-        source: ${REEL_RUNS_ROOT:-/srv/cartdotcom/reel-brain-runs}
-        target: /runs
+        source: ${REEL_PHASE5_CONTROL_ROOT:-/srv/cartdotcom/reel-brain-runs/phase5-control}
+        target: /runs/control
+        read_only: true
+      - type: bind
+        source: ${REEL_PHASE5_COMPUTE_ROOT:-/srv/cartdotcom/reel-brain-runs/phase5-compute}
+        target: /runs/compute
       - type: tmpfs
         target: /work
         tmpfs:

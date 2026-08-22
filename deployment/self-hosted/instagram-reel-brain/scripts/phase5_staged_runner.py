@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import importlib.util
 import json
 import os
@@ -23,10 +24,12 @@ from urllib.request import Request, urlopen
 
 SCRIPT_PATH = Path(__file__).resolve()
 LEGACY_RUNNER_PATH = SCRIPT_PATH.with_name("phase5_one_job_runner.py")
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
+COMPUTE_RESULT_VERSION = 1
 DEFAULT_WORKER = "phase5-local-worker-1"
 DEFAULT_SCHEMA = "reel_phase4_shadow_20260821_014246"
-DEFAULT_CHECKPOINT_ROOT = Path(os.environ.get("REEL_PHASE5_RUN_ROOT", "/runs/phase5-runner"))
+DEFAULT_CHECKPOINT_ROOT = Path(os.environ.get("REEL_PHASE5_CONTROL_ROOT", "/runs/control"))
+DEFAULT_RESULT_ROOT = Path(os.environ.get("REEL_PHASE5_COMPUTE_ROOT", "/runs/compute"))
 DEFAULT_PROCESSOR_PATH = Path(os.environ.get("REEL_PHASE5_PROCESSOR_PATH", "/opt/reel/processor/app.py"))
 CONTROL_CONFIRMATION = "RUN EXACT PHASE 5 LOCAL PILOT"
 
@@ -138,6 +141,13 @@ def checkpoint_path(args: argparse.Namespace) -> Path:
     return DEFAULT_CHECKPOINT_ROOT / safe_name / "checkpoint.json"
 
 
+def result_path(args: argparse.Namespace) -> Path:
+    if args.result_path:
+        return Path(args.result_path)
+    safe_name = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in f"{args.pilot_key}_{args.job_id}")
+    return DEFAULT_RESULT_ROOT / safe_name / "result.json"
+
+
 def exact_binding(args: argparse.Namespace) -> dict[str, str]:
     return {
         "pilot_key": args.pilot_key,
@@ -147,7 +157,43 @@ def exact_binding(args: argparse.Namespace) -> dict[str, str]:
     }
 
 
-def read_checkpoint(args: argparse.Namespace, *, allow_missing: bool = True) -> dict[str, Any]:
+def canonical_json(payload: dict[str, Any]) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+
+def unsigned_checkpoint(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if key not in {"signature", "signature_alg"}}
+
+
+def control_signing_key(args: argparse.Namespace) -> bytes:
+    token = legacy.admin_token(args, required=True)
+    return hmac.new(token.encode("utf-8"), b"cartdotcom-phase5-control-state-v1", hashlib.sha256).digest()
+
+
+def sign_checkpoint(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str, Any]:
+    unsigned = unsigned_checkpoint(payload)
+    signature = hmac.new(control_signing_key(args), canonical_json(unsigned), hashlib.sha256).hexdigest()
+    return {**unsigned, "signature_alg": "hmac-sha256-v1", "signature": signature}
+
+
+def verify_checkpoint_signature(args: argparse.Namespace, payload: dict[str, Any]) -> None:
+    if payload.get("signature_alg") != "hmac-sha256-v1" or not isinstance(payload.get("signature"), str):
+        raise SystemExit("control checkpoint signature is missing")
+    expected = hmac.new(control_signing_key(args), canonical_json(unsigned_checkpoint(payload)), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(str(payload["signature"]), expected):
+        raise SystemExit("control checkpoint signature mismatch")
+
+
+def checkpoint_digest(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(payload)).hexdigest()
+
+
+def read_checkpoint(
+    args: argparse.Namespace,
+    *,
+    allow_missing: bool = True,
+    verify_signature: bool | None = None,
+) -> dict[str, Any]:
     path = checkpoint_path(args)
     if not path.exists():
         if not allow_missing:
@@ -172,10 +218,15 @@ def read_checkpoint(args: argparse.Namespace, *, allow_missing: bool = True) -> 
     stage = str(parsed.get("stage") or "")
     if stage not in STAGE_ORDER or int(parsed.get("stage_index", -1)) != STAGE_ORDER[stage]:
         raise SystemExit("checkpoint stage is invalid")
+    should_verify = os.environ.get("REEL_PHASE5_ROLE") == "control" if verify_signature is None else verify_signature
+    if should_verify:
+        verify_checkpoint_signature(args, parsed)
     return parsed
 
 
 def write_checkpoint(args: argparse.Namespace, checkpoint: dict[str, Any], stage: str | None = None, **updates: Any) -> dict[str, Any]:
+    if os.environ.get("REEL_PHASE5_ROLE") == "compute":
+        raise SystemExit("compute role may not write control state")
     if stage is not None and stage not in STAGE_ORDER:
         raise SystemExit(f"unknown checkpoint stage: {stage}")
     current_stage = str(checkpoint.get("stage") or "new")
@@ -191,8 +242,44 @@ def write_checkpoint(args: argparse.Namespace, checkpoint: dict[str, Any], stage
         "updated_at": now_iso(),
         **updates,
     }
-    atomic_write_json(checkpoint_path(args), payload)
-    return payload
+    signed = sign_checkpoint(args, payload)
+    atomic_write_json(checkpoint_path(args), signed)
+    return signed
+
+
+def read_compute_result(args: argparse.Namespace, checkpoint: dict[str, Any], *, allow_missing: bool = False) -> dict[str, Any] | None:
+    path = result_path(args)
+    if not path.exists():
+        if allow_missing:
+            return None
+        raise SystemExit("compute result does not exist")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise SystemExit("compute result is not valid JSON") from error
+    if not isinstance(document, dict) or document.get("version") != COMPUTE_RESULT_VERSION:
+        raise SystemExit("compute result version mismatch")
+    for key, expected in exact_binding(args).items():
+        if document.get(key) != expected:
+            raise SystemExit(f"compute result {key} mismatch")
+    if document.get("control_state_sha256") != checkpoint_digest(checkpoint):
+        raise SystemExit("compute result control-state digest mismatch")
+    result = validate_processor_result(document.get("processor_result"), expected_job_id=args.job_id)
+    return {**document, "processor_result": result}
+
+
+def write_compute_result(args: argparse.Namespace, checkpoint: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    if os.environ.get("REEL_PHASE5_ROLE") == "control":
+        raise SystemExit("control role may not write compute result")
+    document = {
+        "version": COMPUTE_RESULT_VERSION,
+        **exact_binding(args),
+        "control_state_sha256": checkpoint_digest(checkpoint),
+        "processor_result": result,
+        "completed_at": now_iso(),
+    }
+    atomic_write_json(result_path(args), document)
+    return document
 
 
 def ensure_callback_token(args: argparse.Namespace, checkpoint: dict[str, Any]) -> dict[str, Any]:
@@ -237,6 +324,16 @@ def validate_worker_token(args: argparse.Namespace) -> str:
 def control_start(args: argparse.Namespace) -> int:
     require_confirmation(args)
     checkpoint = read_checkpoint(args)
+    current_stage = str(checkpoint.get("stage") or "new")
+    if STAGE_ORDER[current_stage] >= STAGE_ORDER["cloud_finalized"]:
+        local = legacy.verify_local(args)
+        json_print({"ok": True, "idempotent": True, "stage": current_stage, "local": safe_local_summary(local)})
+        return 0
+    if current_stage == "ready_for_compute":
+        compute = read_compute_result(args, checkpoint, allow_missing=True)
+        if compute is not None:
+            json_print({"ok": True, "idempotent": True, "stage": current_stage, "compute_result_available": True})
+            return 0
     checkpoint = write_checkpoint(args, checkpoint, "checkpoint_created") if checkpoint.get("stage") == "new" else checkpoint
     checkpoint = ensure_callback_token(args, checkpoint)
     local = legacy.verify_local(args)
@@ -386,17 +483,23 @@ def validate_processor_result(result: Any, *, expected_job_id: str) -> dict[str,
 
 def compute_run(args: argparse.Namespace) -> int:
     require_compute_boundary()
-    checkpoint = read_checkpoint(args, allow_missing=False)
+    checkpoint = read_checkpoint(args, allow_missing=False, verify_signature=False)
     stage = str(checkpoint.get("stage"))
-    if stage == "complete" or stage == "processor_complete":
+    if STAGE_ORDER[stage] >= STAGE_ORDER["processor_complete"]:
         json_print({"ok": True, "idempotent": True, "stage": stage, "checkpoint": str(checkpoint_path(args))})
         return 0
     if STAGE_ORDER[stage] < STAGE_ORDER["ready_for_compute"]:
         raise SystemExit(f"checkpoint is not ready for compute: {stage}")
     require_callback_window(checkpoint, args.min_callback_seconds)
-    checkpoint = write_checkpoint(args, checkpoint, "compute_started")
+    existing = read_compute_result(args, checkpoint, allow_missing=True)
+    if existing is not None:
+        json_print({"ok": True, "idempotent": True, "stage": "processor_complete", "result": existing["processor_result"]})
+        return 0
     if args.inject_fault == "before-processor":
         raise SystemExit("synthetic fault before processor")
+    if args.inject_fault == "attempt-control-state-write":
+        checkpoint_path(args).write_text("tampered", encoding="utf-8")
+        raise SystemExit("compute unexpectedly wrote control state")
     if args.synthetic_processor:
         result = synthetic_processor(args, checkpoint)
     else:
@@ -422,8 +525,8 @@ def compute_run(args: argparse.Namespace) -> int:
     result_summary = validate_processor_result(result, expected_job_id=args.job_id)
     if args.inject_fault == "after-processor-before-checkpoint":
         raise SystemExit("synthetic fault after processor before checkpoint")
-    checkpoint = write_checkpoint(args, checkpoint, "processor_complete", processor_result=result_summary)
-    json_print({"ok": True, "stage": checkpoint["stage"], "checkpoint": str(checkpoint_path(args)), "result": result_summary})
+    write_compute_result(args, checkpoint, result_summary)
+    json_print({"ok": True, "stage": "processor_complete", "checkpoint": str(checkpoint_path(args)), "result": result_summary})
     return 0
 
 
@@ -436,8 +539,11 @@ def control_finalize(args: argparse.Namespace) -> int:
         json_print({"ok": True, "idempotent": True, "stage": "complete", "checkpoint": str(checkpoint_path(args))})
         return 0
     if STAGE_ORDER[str(checkpoint.get("stage"))] < STAGE_ORDER["processor_complete"]:
-        raise SystemExit("processor completion checkpoint is required before finalize")
-    result = validate_processor_result(checkpoint.get("processor_result"), expected_job_id=args.job_id)
+        compute = read_compute_result(args, checkpoint)
+        result = compute["processor_result"]
+        checkpoint = write_checkpoint(args, checkpoint, "processor_complete", processor_result=result)
+    else:
+        result = validate_processor_result(checkpoint.get("processor_result"), expected_job_id=args.job_id)
     token = validate_worker_token(args)
     finalize_response = legacy.cloud_finalize(args, token, checkpoint)
     checkpoint = write_checkpoint(args, checkpoint, "cloud_finalized", cloud_finalize=redacted_response(finalize_response))
@@ -571,11 +677,12 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--lease-owner", default=DEFAULT_WORKER)
     parser.add_argument("--schema", default=DEFAULT_SCHEMA)
     parser.add_argument("--checkpoint-path", default="")
+    parser.add_argument("--result-path", default="")
     parser.add_argument("--worker-url", default=legacy.WORKER_BASE_URL)
     parser.add_argument("--confirm-live-run", default="")
     parser.add_argument("--token-minutes", type=int, default=240)
     parser.add_argument("--min-callback-seconds", type=int, default=300)
-    parser.add_argument("--inject-fault", default="", choices=("", "after-cloud-start", "before-processor", "after-processor-before-checkpoint", "after-cloud-finalize-before-local-complete"))
+    parser.add_argument("--inject-fault", default="", choices=("", "after-cloud-start", "before-processor", "after-processor-before-checkpoint", "after-cloud-finalize-before-local-complete", "attempt-control-state-write"))
     parser.add_argument("--pg-mode", default=os.environ.get("REEL_PHASE5_PG_MODE", "auto"), choices=("auto", "native", "legacy-ssh"))
     parser.add_argument("--pg-host", default=os.environ.get("REEL_PHASE5_PGHOST", "cartdotcom-platform-postgres-1"))
     parser.add_argument("--pg-port", type=int, default=int(os.environ.get("REEL_PHASE5_PGPORT", "5432")))

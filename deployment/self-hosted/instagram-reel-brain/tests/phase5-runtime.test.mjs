@@ -71,6 +71,8 @@ test("Phase 5 Compose splits control secrets from the Codex/media compute bounda
   assert.match(control, /CODEX_AUTH_SOURCE: ""/);
   assert.match(control, /CODEX_HOME: \/tmp\/no-codex-home/);
   assert.match(control, /source: \/srv\/platform\/secrets\/postgres_password\s+target: \/run\/control-secrets\/postgres_password\s+read_only: true/s);
+  assert.match(control, /target: \/runs\/control/);
+  assert.match(control, /target: \/runs\/compute\s+read_only: true/s);
   assert.match(control, /platform-data/);
   assert.doesNotMatch(control, /\/codex-auth\/auth\.json/);
 
@@ -79,6 +81,8 @@ test("Phase 5 Compose splits control secrets from the Codex/media compute bounda
   assert.match(compute, /CODEX_HOME: \/home\/node\/\.codex/);
   assert.match(compute, /CODEX_AUTH_SOURCE: \/codex-auth\/auth\.json/);
   assert.match(compute, /source: \/home\/lucaj\/\.codex\/auth\.json\s+target: \/codex-auth\/auth\.json\s+read_only: true/s);
+  assert.match(compute, /target: \/runs\/control\s+read_only: true/s);
+  assert.match(compute, /target: \/runs\/compute/);
   assert.match(compute, /reel-egress/);
   assert.doesNotMatch(compute, /REEL_PHASE5_PG|REEL_PHASE5_ADMIN_TOKEN|postgres_password|phase5_admin_token|platform-data|cartdotcom-data/);
 
@@ -127,8 +131,13 @@ test("Phase 5 split runtime has a host orchestrator and staged control/compute c
   assert.match(stagedRunner, /compute-run/);
   assert.match(stagedRunner, /control-finalize/);
   assert.match(stagedRunner, /control-abort/);
-  assert.match(stagedRunner, /CHECKPOINT_VERSION = 1/);
+  assert.match(stagedRunner, /CHECKPOINT_VERSION = 2/);
+  assert.match(stagedRunner, /COMPUTE_RESULT_VERSION = 1/);
   assert.match(stagedRunner, /STAGE_ORDER/);
+  assert.match(stagedRunner, /hmac-sha256-v1/);
+  assert.match(stagedRunner, /control checkpoint signature mismatch/);
+  assert.match(stagedRunner, /compute result control-state digest mismatch/);
+  assert.match(stagedRunner, /compute role may not write control state/);
   assert.match(stagedRunner, /stage regression refused/);
   assert.match(stagedRunner, /phase5-control role cannot load|control role may not load/);
   assert.match(stagedRunner, /compute environment contains control-plane variables/);
@@ -153,6 +162,9 @@ test("Phase 5 split runtime has a host orchestrator and staged control/compute c
   assert.match(orchestrator, /after-cloud-finalize-before-local-complete/);
   assert.match(orchestrator, /short-authority/);
   assert.match(orchestrator, /tampered-checkpoint/);
+  assert.match(orchestrator, /tampered-result/);
+  assert.match(orchestrator, /compute-control-readonly/);
+  assert.doesNotMatch(orchestrator, /read_checkpoint_stage|stage_at_least/);
   assert.match(orchestrator, /"--volume", f"\{token_host_file\}:\{CONTAINER_TOKEN_PATH\}:ro"/);
   assert.doesNotMatch(orchestrator, /--add-host|docker\.sock|privileged|PGPASSWORD|sk-[A-Za-z0-9]|Bearer [A-Za-z0-9_\-.]{16,}/);
 });
