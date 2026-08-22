@@ -3159,6 +3159,29 @@ async function phase5EnsureFinalizeAudit(
   });
 }
 
+function phase5StartRequestWithEffectiveExpiry(
+  input: ReturnType<typeof validatePhase5StartRequest>,
+  decision: { effectiveTokenExpiresAt?: string },
+): ReturnType<typeof validatePhase5StartRequest> {
+  return decision.effectiveTokenExpiresAt ? { ...input, tokenExpiresAt: decision.effectiveTokenExpiresAt } : input;
+}
+
+function phase5ExecutionExpiryPostcondition(
+  row: Phase5ControlStateRow | null,
+  tokenExpiresAt: string,
+): boolean {
+  if (!row) return false;
+  const tokenExpiresMs = Date.parse(tokenExpiresAt);
+  const fenceExpiresMs = Date.parse(row.expires_at || "");
+  return Boolean(
+    Number.isFinite(tokenExpiresMs)
+    && Number.isFinite(fenceExpiresMs)
+    && tokenExpiresMs <= fenceExpiresMs
+    && row.upload_token_expires_at === tokenExpiresAt
+    && row.local_lease_expires_at === tokenExpiresAt
+  );
+}
+
 async function phase5RenewProcessingLease(
   env: Env,
   input: ReturnType<typeof validatePhase5StartRequest>,
@@ -3170,6 +3193,7 @@ async function phase5RenewProcessingLease(
        SET local_lease_expires_at=?,updated_at=CURRENT_TIMESTAMP
        WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_processing' AND local_lease_owner=?
          AND datetime(expires_at) > datetime('now')
+         AND datetime(expires_at) >= datetime(?)
          AND EXISTS (
            SELECT 1 FROM jobs j
            WHERE j.id=phase5_local_pilot_fences.job_id
@@ -3196,6 +3220,7 @@ async function phase5RenewProcessingLease(
       input.jobId,
       input.sourceMessageId,
       input.leaseOwner,
+      input.tokenExpiresAt,
       input.sourceMessageId,
       input.callbackTokenHash,
     ),
@@ -3215,6 +3240,7 @@ async function phase5RenewProcessingLease(
              AND f.local_lease_owner=?
              AND f.local_lease_expires_at=?
              AND datetime(f.expires_at) > datetime('now')
+             AND datetime(f.expires_at) >= datetime(?)
          )
          AND NOT EXISTS (
            SELECT 1 FROM artifacts a
@@ -3235,6 +3261,7 @@ async function phase5RenewProcessingLease(
       input.sourceMessageId,
       input.leaseOwner,
       input.tokenExpiresAt,
+      input.tokenExpiresAt,
     ),
   ]);
   return results.every((result) => (result.meta.changes || 0) === 1);
@@ -3252,6 +3279,7 @@ async function phase5RepairQueuedStart(
        SET local_lease_expires_at=?,updated_at=CURRENT_TIMESTAMP
        WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_processing' AND local_lease_owner=?
          AND datetime(expires_at) > datetime('now')
+         AND datetime(expires_at) >= datetime(?)
          AND EXISTS (
            SELECT 1 FROM jobs j
            WHERE j.id=phase5_local_pilot_fences.job_id
@@ -3271,7 +3299,7 @@ async function phase5RepairQueuedStart(
            WHERE e.job_id=phase5_local_pilot_fences.job_id
              AND e.stage IN ('complete','published','phase5_local_complete')
          )`,
-    ).bind(input.tokenExpiresAt, input.pilotKey, input.jobId, input.sourceMessageId, input.leaseOwner, input.sourceMessageId),
+    ).bind(input.tokenExpiresAt, input.pilotKey, input.jobId, input.sourceMessageId, input.leaseOwner, input.tokenExpiresAt, input.sourceMessageId),
     env.REEL_DB.prepare(
       `UPDATE jobs
        SET status='running',stage='downloading',status_emoji=?,started_at=COALESCE(started_at,CURRENT_TIMESTAMP),
@@ -3286,6 +3314,7 @@ async function phase5RepairQueuedStart(
              AND f.local_lease_owner=?
              AND f.local_lease_expires_at=?
              AND datetime(f.expires_at) > datetime('now')
+             AND datetime(f.expires_at) >= datetime(?)
          )
          AND NOT EXISTS (
            SELECT 1 FROM artifacts a
@@ -3306,6 +3335,7 @@ async function phase5RepairQueuedStart(
       input.pilotKey,
       input.sourceMessageId,
       input.leaseOwner,
+      input.tokenExpiresAt,
       input.tokenExpiresAt,
     ),
   ]);
@@ -3366,7 +3396,8 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
   }
 
   if (decision.status === "renew_processing_lease") {
-    const renewed = await phase5RenewProcessingLease(env, validated);
+    const execution = phase5StartRequestWithEffectiveExpiry(validated, decision);
+    const renewed = await phase5RenewProcessingLease(env, execution);
     if (!renewed) {
       const post = await phase5ControlState(env, validated);
       return json({
@@ -3378,7 +3409,7 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
         job_status: post?.job_status || existing.job_status,
       }, { status: 409 });
     }
-    const repairedAudit = await phase5EnsureStartAudit(env, validated, validated.tokenExpiresAt, decision.recoveryStatus);
+    const repairedAudit = await phase5EnsureStartAudit(env, execution, execution.tokenExpiresAt, decision.recoveryStatus);
     if (repairedAudit && shouldReactToStage("downloading")) {
       await reactToSourceMessage(env, { id: validated.jobId, source_message_id: validated.sourceMessageId, sender_id: null }, "downloading");
     }
@@ -3387,9 +3418,8 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
       !post
       || post.status !== "local_processing"
       || post.job_status !== "running"
-      || post.upload_token_hash !== validated.callbackTokenHash
-      || post.upload_token_expires_at !== validated.tokenExpiresAt
-      || post.local_lease_expires_at !== validated.tokenExpiresAt
+      || post.upload_token_hash !== execution.callbackTokenHash
+      || !phase5ExecutionExpiryPostcondition(post, execution.tokenExpiresAt)
     ) {
       return json({ ok: false, error: "Phase 5 processing lease renewal postcondition failed", recovery_status: "processing_lease_renewal_postcondition_failed" }, { status: 409 });
     }
@@ -3402,7 +3432,7 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
       repaired_audit: repairedAudit,
       pilot_key: validated.pilotKey,
       job_id: validated.jobId,
-      token_expires_at: validated.tokenExpiresAt,
+      token_expires_at: execution.tokenExpiresAt,
     });
   }
 
@@ -3426,7 +3456,8 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
 
   const emoji = await getEmoji(env, "downloading");
   if (decision.status === "repair_queued_start") {
-    const repaired = await phase5RepairQueuedStart(env, validated, emoji);
+    const execution = phase5StartRequestWithEffectiveExpiry(validated, decision);
+    const repaired = await phase5RepairQueuedStart(env, execution, emoji);
     if (!repaired) {
       const post = await phase5ControlState(env, validated);
       return json({
@@ -3437,7 +3468,7 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
         job_status: post?.job_status || existing.job_status,
       }, { status: 409 });
     }
-    const repairedAudit = await phase5EnsureStartAudit(env, validated, validated.tokenExpiresAt, decision.recoveryStatus);
+    const repairedAudit = await phase5EnsureStartAudit(env, execution, execution.tokenExpiresAt, decision.recoveryStatus);
     if (repairedAudit && shouldReactToStage("downloading")) {
       await reactToSourceMessage(env, { id: validated.jobId, source_message_id: validated.sourceMessageId, sender_id: null }, "downloading");
     }
@@ -3446,9 +3477,8 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
       !post
       || post.status !== "local_processing"
       || post.job_status !== "running"
-      || post.upload_token_hash !== validated.callbackTokenHash
-      || post.upload_token_expires_at !== validated.tokenExpiresAt
-      || post.local_lease_expires_at !== validated.tokenExpiresAt
+      || post.upload_token_hash !== execution.callbackTokenHash
+      || !phase5ExecutionExpiryPostcondition(post, execution.tokenExpiresAt)
     ) {
       return json({ ok: false, error: "Phase 5 partial start repair postcondition failed", recovery_status: "partial_start_repair_postcondition_failed" }, { status: 409 });
     }
@@ -3460,14 +3490,16 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
       repaired_audit: repairedAudit,
       pilot_key: validated.pilotKey,
       job_id: validated.jobId,
-      token_expires_at: validated.tokenExpiresAt,
+      token_expires_at: execution.tokenExpiresAt,
     });
   }
 
+  const execution = phase5StartRequestWithEffectiveExpiry(validated, decision);
   const fenceUpdate = await env.REEL_DB.prepare(
     `UPDATE phase5_local_pilot_fences
      SET status='local_processing',local_lease_expires_at=?,updated_at=CURRENT_TIMESTAMP
      WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_claimed' AND local_lease_owner=? AND datetime(expires_at) > datetime('now')
+       AND datetime(expires_at) >= datetime(?)
        AND EXISTS (
          SELECT 1 FROM jobs j
          WHERE j.id=phase5_local_pilot_fences.job_id
@@ -3486,7 +3518,7 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
          WHERE e.job_id=phase5_local_pilot_fences.job_id
            AND e.stage IN ('complete','published','phase5_local_complete')
        )`,
-  ).bind(validated.tokenExpiresAt, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
+  ).bind(execution.tokenExpiresAt, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner, execution.tokenExpiresAt).run();
   if ((fenceUpdate.meta.changes || 0) !== 1) {
     const post = await phase5ControlState(env, validated);
     return json({
@@ -3498,7 +3530,7 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
     }, { status: 409 });
   }
 
-  const repairedStart = await phase5RepairQueuedStart(env, validated, emoji);
+  const repairedStart = await phase5RepairQueuedStart(env, execution, emoji);
   if (!repairedStart) {
     const compensation = await env.REEL_DB.prepare(
       `UPDATE phase5_local_pilot_fences
@@ -3510,7 +3542,7 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
              AND j.status='running'
              AND j.upload_token_hash=?
          )`,
-    ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner, validated.callbackTokenHash).run();
+    ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner, execution.callbackTokenHash).run();
     const post = await phase5ControlState(env, validated);
     if ((compensation.meta.changes || 0) === 1 && post?.status === "local_claimed" && post.job_status === "queued") {
       return json({
@@ -3531,7 +3563,7 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
     }, { status: 409 });
   }
 
-  const insertedAudit = await phase5EnsureStartAudit(env, validated, validated.tokenExpiresAt, decision.recoveryStatus);
+  const insertedAudit = await phase5EnsureStartAudit(env, execution, execution.tokenExpiresAt, decision.recoveryStatus);
   if (insertedAudit && shouldReactToStage("downloading")) {
     await reactToSourceMessage(env, { id: validated.jobId, source_message_id: validated.sourceMessageId, sender_id: null }, "downloading");
   }
@@ -3540,14 +3572,13 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
     !post
     || post.status !== "local_processing"
     || post.job_status !== "running"
-    || post.upload_token_hash !== validated.callbackTokenHash
-    || post.upload_token_expires_at !== validated.tokenExpiresAt
-    || post.local_lease_expires_at !== validated.tokenExpiresAt
+    || post.upload_token_hash !== execution.callbackTokenHash
+    || !phase5ExecutionExpiryPostcondition(post, execution.tokenExpiresAt)
     || Number(post.marker_events || 0) <= 0
   ) {
     return json({ ok: false, error: "Phase 5 start postcondition failed" }, { status: 409 });
   }
-  return json({ ok: true, started: true, recovery_status: decision.recoveryStatus, repaired_audit: insertedAudit, pilot_key: validated.pilotKey, job_id: validated.jobId, token_expires_at: validated.tokenExpiresAt });
+  return json({ ok: true, started: true, recovery_status: decision.recoveryStatus, repaired_audit: insertedAudit, pilot_key: validated.pilotKey, job_id: validated.jobId, token_expires_at: execution.tokenExpiresAt });
 }
 
 async function handlePhase5FinalizeLocalProcessing(request: Request, env: Env): Promise<Response> {

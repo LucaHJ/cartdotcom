@@ -12,9 +12,12 @@ import {
   PHASE5_ABORT_CONFIRMATION,
   PHASE5_RENEW_CONFIRMATION,
   PHASE5_ROLLBACK_CONFIRMATION,
+  PHASE5_EXECUTION_EXPIRY_SAFETY_MARGIN_MS,
+  PHASE5_MIN_SAFE_PROCESSING_WINDOW_MS,
   phase5ArmCanCaptureShare,
   phase5FenceActive,
   phase5FenceExpired,
+  phase5EffectiveExecutionExpiry,
   validatePhase5FenceRequest,
   validatePhase5PreintakeArmRequest,
   validatePhase5PreintakeCancelRequest,
@@ -36,6 +39,7 @@ const phase5Hash = "a".repeat(64);
 const phase5Now = Date.parse("2026-08-22T03:00:00.000Z");
 const phase5FenceExpiresAt = "2026-08-22T09:00:00.000Z";
 const phase5LeaseExpiresAt = "2026-08-22T03:30:00.000Z";
+const phase5RequestedExpiresAt = "2026-08-22T07:00:00.000Z";
 const phase5ExpiredAt = "2026-08-22T02:59:59.000Z";
 
 function phase5Snapshot(overrides = {}) {
@@ -58,31 +62,32 @@ function phase5Snapshot(overrides = {}) {
   };
 }
 
-function simulateStart(snapshot, { callbackTokenHash = phase5Hash, fault = "", now = phase5Now, tokenExpiresAt = phase5LeaseExpiresAt, renewalSucceeds = true } = {}) {
+function simulateStart(snapshot, { callbackTokenHash = phase5Hash, fault = "", now = phase5Now, requestedTokenExpiresAt = phase5RequestedExpiresAt, renewalSucceeds = true } = {}) {
   const state = { ...snapshot };
   const effects = { reactions: 0, start_audits: Number(state.marker_events || 0), processor_calls: 0 };
-  const decision = phase5StartRecoveryDecision(state, { leaseOwner: phase5Owner, callbackTokenHash, now });
+  const decision = phase5StartRecoveryDecision(state, { leaseOwner: phase5Owner, callbackTokenHash, tokenExpiresAt: requestedTokenExpiresAt, now });
+  const effectiveTokenExpiresAt = decision.effectiveTokenExpiresAt || requestedTokenExpiresAt;
   if (!decision.ok) return { state, effects, decision };
   if (decision.status === "guarded_start") {
     state.status = "local_processing";
-    state.local_lease_expires_at = tokenExpiresAt;
+    state.local_lease_expires_at = effectiveTokenExpiresAt;
     if (fault === "after_fence_update") return { state, effects, decision };
     state.job_status = "running";
     state.job_stage = "downloading";
     state.upload_token_hash = callbackTokenHash;
-    state.upload_token_expires_at = tokenExpiresAt;
+    state.upload_token_expires_at = effectiveTokenExpiresAt;
     if (fault === "after_job_update_before_audit") return { state, effects, decision };
   } else if (decision.status === "repair_queued_start") {
     if (!renewalSucceeds) return { state, effects, decision: { ...decision, ok: false, recoveryStatus: "partial_start_repair_failed" } };
-    state.local_lease_expires_at = tokenExpiresAt;
+    state.local_lease_expires_at = effectiveTokenExpiresAt;
     state.job_status = "running";
     state.job_stage = "downloading";
     state.upload_token_hash = callbackTokenHash;
-    state.upload_token_expires_at = tokenExpiresAt;
+    state.upload_token_expires_at = effectiveTokenExpiresAt;
   } else if (decision.status === "renew_processing_lease") {
     if (!renewalSucceeds) return { state, effects, decision: { ...decision, ok: false, recoveryStatus: "processing_lease_renewal_failed" } };
-    state.local_lease_expires_at = tokenExpiresAt;
-    state.upload_token_expires_at = tokenExpiresAt;
+    state.local_lease_expires_at = effectiveTokenExpiresAt;
+    state.upload_token_expires_at = effectiveTokenExpiresAt;
   }
   if ((decision.status === "guarded_start" || decision.status === "repair_queued_start" || decision.status === "resume_running" || decision.status === "renew_processing_lease") && Number(state.marker_events || 0) === 0) {
     state.marker_events = 1;
@@ -226,7 +231,7 @@ test("Phase 5 exact runner control requests require confirmation, owner, source 
 
 test("Phase 5 start recovery decision covers the exact crash/restart matrix", () => {
   assert.equal(
-    phase5StartRecoveryDecision(phase5Snapshot(), { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now }).status,
+    phase5StartRecoveryDecision(phase5Snapshot(), { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).status,
     "guarded_start",
   );
 
@@ -239,7 +244,7 @@ test("Phase 5 start recovery decision covers the exact crash/restart matrix", ()
       upload_token_expires_at: phase5LeaseExpiresAt,
       marker_events: 0,
     }),
-    { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now },
+    { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now },
   );
   assert.equal(runningRepair.status, "resume_running");
   assert.equal(runningRepair.repairAudit, true);
@@ -263,7 +268,7 @@ test("Phase 5 start recovery decision covers the exact crash/restart matrix", ()
   assert.equal(
     phase5StartRecoveryDecision(
       phase5Snapshot({ status: "local_processing", job_status: "queued" }),
-      { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now },
+      { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now },
     ).status,
     "repair_queued_start",
   );
@@ -271,7 +276,7 @@ test("Phase 5 start recovery decision covers the exact crash/restart matrix", ()
   assert.equal(
     phase5StartRecoveryDecision(
       phase5Snapshot({ status: "local_processing", job_status: "queued", publication_artifacts: 1 }),
-      { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now },
+      { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now },
     ).recoveryStatus,
     "queued_with_publication",
   );
@@ -279,13 +284,13 @@ test("Phase 5 start recovery decision covers the exact crash/restart matrix", ()
   assert.equal(
     phase5StartRecoveryDecision(
       phase5Snapshot({ local_lease_owner: "other-worker" }),
-      { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now },
+      { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now },
     ).recoveryStatus,
     "lease_owner_mismatch",
   );
 
   assert.equal(
-    phase5StartRecoveryDecision(phase5Snapshot(), { leaseOwner: phase5Owner, now: phase5Now }).recoveryStatus,
+    phase5StartRecoveryDecision(phase5Snapshot(), { leaseOwner: phase5Owner, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).recoveryStatus,
     "callback_hash_required",
   );
 });
@@ -300,36 +305,36 @@ test("Phase 5 start recovery is expiry-aware and never silently revives stale au
     marker_events: 1,
   });
   assert.equal(
-    phase5StartRecoveryDecision(validRunning, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: Date.parse("2026-08-22T03:29:59.000Z") }).status,
+    phase5StartRecoveryDecision(validRunning, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: Date.parse("2026-08-22T03:29:59.000Z") }).status,
     "resume_running",
     "running recovery resumes immediately before both execution expiries",
   );
   assert.equal(
-    phase5StartRecoveryDecision(validRunning, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: Date.parse("2026-08-22T03:30:01.000Z") }).status,
+    phase5StartRecoveryDecision(validRunning, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: Date.parse("2026-08-22T03:30:01.000Z") }).status,
     "renew_processing_lease",
     "running recovery renews the processing lease after callback/local lease expiry but before overall fence expiry",
   );
   assert.equal(
-    phase5StartRecoveryDecision({ ...validRunning, upload_token_expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now }).status,
+    phase5StartRecoveryDecision({ ...validRunning, upload_token_expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).status,
     "renew_processing_lease",
     "expired callback expiry alone requires a bounded renewal before processor work",
   );
   assert.equal(
-    phase5StartRecoveryDecision({ ...validRunning, local_lease_expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now }).status,
+    phase5StartRecoveryDecision({ ...validRunning, local_lease_expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).status,
     "renew_processing_lease",
     "expired local fence lease alone requires a bounded renewal before processor work",
   );
   assert.equal(
-    phase5StartRecoveryDecision({ ...validRunning, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now }).recoveryStatus,
+    phase5StartRecoveryDecision({ ...validRunning, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).recoveryStatus,
     "fence_expired_abort_required",
     "overall fence expiry fails closed instead of reviving the pilot",
   );
   assert.equal(
-    phase5StartRecoveryDecision({ ...validRunning, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now }).prepublicationAbortRequired,
+    phase5StartRecoveryDecision({ ...validRunning, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).prepublicationAbortRequired,
     true,
   );
   assert.equal(
-    phase5StartRecoveryDecision(validRunning, { leaseOwner: phase5Owner, callbackTokenHash: "b".repeat(64), now: phase5Now }).recoveryStatus,
+    phase5StartRecoveryDecision(validRunning, { leaseOwner: phase5Owner, callbackTokenHash: "b".repeat(64), tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).recoveryStatus,
     "callback_hash_mismatch",
   );
 
@@ -339,12 +344,12 @@ test("Phase 5 start recovery is expiry-aware and never silently revives stale au
     local_lease_expires_at: phase5ExpiredAt,
   });
   assert.equal(
-    phase5StartRecoveryDecision(queuedRepair, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now }).status,
+    phase5StartRecoveryDecision(queuedRepair, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).status,
     "repair_queued_start",
     "queued partial starts are recoverable only by refreshing both the fence lease and callback expiry",
   );
   assert.equal(
-    phase5StartRecoveryDecision({ ...queuedRepair, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, now: phase5Now }).recoveryStatus,
+    phase5StartRecoveryDecision({ ...queuedRepair, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).recoveryStatus,
     "fence_expired_abort_required",
   );
 
@@ -368,6 +373,88 @@ test("Phase 5 start recovery is expiry-aware and never silently revives stale au
     phase5StartRecoveryDecision({ ...completeWithExpiredExecutionAuthority, status: "local_complete" }, { leaseOwner: phase5Owner, now: phase5Now }).recoveryStatus,
     "cloud_already_finalized",
   );
+});
+
+test("Phase 5 execution expiry is bounded by the overall fence with safety margin", () => {
+  const exactFenceExpiry = new Date(phase5Now + PHASE5_MIN_SAFE_PROCESSING_WINDOW_MS + PHASE5_EXECUTION_EXPIRY_SAFETY_MARGIN_MS).toISOString();
+  const exactEffectiveExpiry = new Date(phase5Now + PHASE5_MIN_SAFE_PROCESSING_WINDOW_MS).toISOString();
+  const belowMinimumFenceExpiry = new Date(phase5Now + PHASE5_MIN_SAFE_PROCESSING_WINDOW_MS + PHASE5_EXECUTION_EXPIRY_SAFETY_MARGIN_MS - 1).toISOString();
+  const secondsRemainingFenceExpiry = new Date(phase5Now + 30_000).toISOString();
+
+  const exact = phase5EffectiveExecutionExpiry(
+    { expires_at: exactFenceExpiry },
+    { tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now },
+  );
+  assert.equal(exact.ok, true);
+  assert.equal(exact.ok && exact.effectiveTokenExpiresAt, exactEffectiveExpiry);
+
+  const requestedSooner = phase5EffectiveExecutionExpiry(
+    { expires_at: phase5FenceExpiresAt },
+    { tokenExpiresAt: phase5LeaseExpiresAt, now: phase5Now },
+  );
+  assert.equal(requestedSooner.ok, true);
+  assert.equal(requestedSooner.ok && requestedSooner.effectiveTokenExpiresAt, phase5LeaseExpiresAt);
+
+  const belowMinimum = phase5EffectiveExecutionExpiry(
+    { expires_at: belowMinimumFenceExpiry },
+    { tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now },
+  );
+  assert.equal(belowMinimum.ok, false);
+  assert.equal(!belowMinimum.ok && belowMinimum.decision.recoveryStatus, "insufficient_fence_window_abort_required");
+
+  const secondsRemaining = phase5StartRecoveryDecision(
+    phase5Snapshot({ expires_at: secondsRemainingFenceExpiry }),
+    { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now },
+  );
+  assert.equal(secondsRemaining.ok, false);
+  assert.equal(secondsRemaining.recoveryStatus, "insufficient_fence_window_abort_required");
+  assert.equal(secondsRemaining.prepublicationAbortRequired, true);
+
+  const initialStart = simulateStart(
+    phase5Snapshot({ expires_at: exactFenceExpiry }),
+    { requestedTokenExpiresAt: phase5RequestedExpiresAt },
+  );
+  assert.equal(initialStart.decision.status, "guarded_start");
+  assert.equal(initialStart.decision.effectiveTokenExpiresAt, exactEffectiveExpiry);
+  assert.equal(initialStart.state.local_lease_expires_at, exactEffectiveExpiry);
+  assert.equal(initialStart.state.upload_token_expires_at, exactEffectiveExpiry);
+  assert.equal(Date.parse(initialStart.state.upload_token_expires_at), Date.parse(exactFenceExpiry) - PHASE5_EXECUTION_EXPIRY_SAFETY_MARGIN_MS);
+
+  const runningOverFence = simulateStart(
+    phase5Snapshot({
+      status: "local_processing",
+      job_status: "running",
+      expires_at: exactFenceExpiry,
+      local_lease_expires_at: phase5RequestedExpiresAt,
+      upload_token_hash: phase5Hash,
+      upload_token_expires_at: phase5RequestedExpiresAt,
+      marker_events: 1,
+    }),
+    { requestedTokenExpiresAt: phase5RequestedExpiresAt },
+  );
+  assert.equal(runningOverFence.decision.status, "renew_processing_lease");
+  assert.equal(runningOverFence.state.local_lease_expires_at, exactEffectiveExpiry);
+  assert.equal(runningOverFence.state.upload_token_expires_at, exactEffectiveExpiry);
+
+  const queuedRepair = simulateStart(
+    phase5Snapshot({
+      status: "local_processing",
+      job_status: "queued",
+      expires_at: exactFenceExpiry,
+      local_lease_expires_at: phase5ExpiredAt,
+    }),
+    { requestedTokenExpiresAt: phase5RequestedExpiresAt },
+  );
+  assert.equal(queuedRepair.decision.status, "repair_queued_start");
+  assert.equal(queuedRepair.state.local_lease_expires_at, exactEffectiveExpiry);
+  assert.equal(queuedRepair.state.upload_token_expires_at, exactEffectiveExpiry);
+
+  const insufficientStart = simulateStart(
+    phase5Snapshot({ expires_at: belowMinimumFenceExpiry }),
+    { requestedTokenExpiresAt: phase5RequestedExpiresAt },
+  );
+  assert.equal(insufficientStart.decision.recoveryStatus, "insufficient_fence_window_abort_required");
+  assert.equal(insufficientStart.effects.processor_calls, 0, "insufficient overall fence window must stop before processor execution");
 });
 
 test("Phase 5 finalize recovery decision repairs missing audit before idempotent success", () => {
@@ -470,8 +557,8 @@ test("Phase 5 executable recovery simulation blocks processor work on expired or
   });
   const renewed = simulateStart(expiredRunningLease);
   assert.equal(renewed.decision.status, "renew_processing_lease");
-  assert.equal(renewed.state.local_lease_expires_at, phase5LeaseExpiresAt);
-  assert.equal(renewed.state.upload_token_expires_at, phase5LeaseExpiresAt);
+  assert.equal(renewed.state.local_lease_expires_at, phase5RequestedExpiresAt);
+  assert.equal(renewed.state.upload_token_expires_at, phase5RequestedExpiresAt);
   assert.equal(renewed.effects.processor_calls, 1, "processor work is allowed only after the renewal succeeds");
 
   const partialRenewalFailure = simulateStart(expiredRunningLease, { renewalSucceeds: false });
@@ -491,8 +578,8 @@ test("Phase 5 executable recovery simulation blocks processor work on expired or
   });
   const repairedQueued = simulateStart(queuedPartialStart);
   assert.equal(repairedQueued.decision.status, "repair_queued_start");
-  assert.equal(repairedQueued.state.local_lease_expires_at, phase5LeaseExpiresAt);
-  assert.equal(repairedQueued.state.upload_token_expires_at, phase5LeaseExpiresAt);
+  assert.equal(repairedQueued.state.local_lease_expires_at, phase5RequestedExpiresAt);
+  assert.equal(repairedQueued.state.upload_token_expires_at, phase5RequestedExpiresAt);
   assert.equal(repairedQueued.effects.processor_calls, 1);
 
   const failedQueuedRepair = simulateStart(queuedPartialStart, { renewalSucceeds: false });
@@ -749,8 +836,9 @@ test("Phase 5 exact control routes guard every cloud transition before audit or 
   assert.match(startBody, /ambiguous_partial_start/);
   assert.match(startBody, /phase5EnsureStartAudit/);
   assert.match(startBody, /const repaired = await phase5RepairQueuedStart[\s\S]+const repairedAudit = await phase5EnsureStartAudit/);
-  assert.match(startBody, /post\.local_lease_expires_at !== validated\.tokenExpiresAt/);
-  assert.match(startBody, /post\.upload_token_expires_at !== validated\.tokenExpiresAt/);
+  assert.match(startBody, /phase5StartRequestWithEffectiveExpiry/);
+  assert.match(startBody, /phase5ExecutionExpiryPostcondition/);
+  assert.match(startBody, /datetime\(expires_at\) >= datetime\(\?\)/);
   assert.match(startBody, /postcondition failed/);
   assert.doesNotMatch(startBody, /["']callback_token["']\s*:/, "start route must not accept or return callback token plaintext");
 
