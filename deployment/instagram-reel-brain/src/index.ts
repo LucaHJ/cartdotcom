@@ -25,6 +25,9 @@ import {
   PHASE5_CANCEL_ARM_CONFIRMATION,
   PHASE5_MIN_EXPLICIT_JOB_CREATED_AT,
   PHASE5_RENEW_CONFIRMATION,
+  PHASE5_START_CONFIRMATION,
+  PHASE5_FINALIZE_CONFIRMATION,
+  PHASE5_ABORT_CONFIRMATION,
   isPhase5ActiveFenceStatus,
   phase5FenceActive,
   phase5ArmCanCaptureShare,
@@ -32,6 +35,9 @@ import {
   validatePhase5PreintakeCancelRequest,
   validatePhase5FenceRequest,
   validatePhase5RenewRequest,
+  validatePhase5StartRequest,
+  validatePhase5FinalizeRequest,
+  validatePhase5AbortRequest,
   validatePhase5RollbackRequest,
   type Phase5PreintakeArmRow,
   type Phase5FenceRow,
@@ -3054,6 +3060,310 @@ async function handlePhase5RenewLease(request: Request, env: Env): Promise<Respo
   return json({ ok: true, renewed: true, pilot_key: validated.pilotKey, job_id: validated.jobId, lease_owner: validated.leaseOwner, expires_at: validated.expiresAt });
 }
 
+type Phase5ControlStateRow = Phase5FenceRow & {
+  job_status: string;
+  job_stage: string;
+  upload_token_hash: string | null;
+  upload_token_expires_at: string | null;
+  html_key: string | null;
+  library_path: string | null;
+  completed_at: string | null;
+  publication_artifacts: number;
+  completion_events: number;
+  marker_events: number;
+};
+
+async function phase5ControlState(
+  env: Env,
+  input: { pilotKey: string; jobId: string; sourceMessageId: string; marker?: string },
+): Promise<Phase5ControlStateRow | null> {
+  return env.REEL_DB.prepare(
+    `SELECT f.pilot_key,f.job_id,f.source_message_id,f.status,f.expires_at,f.local_lease_owner,f.local_lease_expires_at,
+            j.status AS job_status,j.stage AS job_stage,j.upload_token_hash,j.upload_token_expires_at,j.html_key,j.library_path,j.completed_at,
+            (SELECT COUNT(*) FROM artifacts a WHERE a.job_id=f.job_id AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')) AS publication_artifacts,
+            (SELECT COUNT(*) FROM job_events e WHERE e.job_id=f.job_id AND e.stage IN ('complete','published','phase5_local_complete')) AS completion_events,
+            (SELECT COUNT(*) FROM job_events e WHERE e.job_id=f.job_id AND instr(COALESCE(e.detail,''), ?) > 0) AS marker_events
+     FROM phase5_local_pilot_fences f
+     JOIN jobs j ON j.id=f.job_id
+     WHERE f.pilot_key=? AND f.job_id=? AND f.source_message_id=?`,
+  ).bind(input.marker || "__phase5_no_marker__", input.pilotKey, input.jobId, input.sourceMessageId).first<Phase5ControlStateRow>();
+}
+
+function phase5HasPublication(row: Phase5ControlStateRow): boolean {
+  return Boolean(row.html_key || row.library_path || row.completed_at || Number(row.publication_artifacts || 0) > 0 || Number(row.completion_events || 0) > 0);
+}
+
+async function handlePhase5StartLocalProcessing(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{
+    pilot_key?: string;
+    job_id?: string;
+    source_message_id?: string;
+    lease_owner?: string;
+    idempotency_key?: string;
+    callback_token_hash?: string;
+    confirm_start?: string;
+    token_minutes?: number;
+    reason?: string;
+  }>(request);
+  let validated: ReturnType<typeof validatePhase5StartRequest>;
+  try {
+    validated = validatePhase5StartRequest({ ...input, confirmation: input.confirm_start });
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const existing = await phase5ControlState(env, validated);
+  if (!existing) return json({ ok: false, error: "Exact Phase 5 fence/job not found" }, { status: 404 });
+  if (
+    existing.status === "local_processing"
+    && existing.job_status === "running"
+    && existing.upload_token_hash === validated.callbackTokenHash
+    && Number(existing.marker_events || 0) > 0
+  ) {
+    return json({ ok: true, started: true, idempotent: true, pilot_key: validated.pilotKey, job_id: validated.jobId, token_expires_at: existing.upload_token_expires_at });
+  }
+  if (existing.status !== "local_claimed" || existing.local_lease_owner !== validated.leaseOwner) {
+    return json({ ok: false, error: "Phase 5 start requires the exact local_claimed fence and lease owner", fence_status: existing.status, lease_owner: existing.local_lease_owner }, { status: 409 });
+  }
+  if (existing.job_status !== "queued") {
+    return json({ ok: false, error: "Phase 5 start requires the job to remain queued", job_status: existing.job_status, job_stage: existing.job_stage }, { status: 409 });
+  }
+  if (phase5HasPublication(existing)) {
+    return json({ ok: false, error: "Phase 5 start refused because completion/publication evidence exists" }, { status: 409 });
+  }
+
+  const fenceUpdate = await env.REEL_DB.prepare(
+    `UPDATE phase5_local_pilot_fences
+     SET status='local_processing',local_lease_expires_at=?,updated_at=CURRENT_TIMESTAMP
+     WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_claimed' AND local_lease_owner=? AND datetime(expires_at) > datetime('now')
+       AND EXISTS (
+         SELECT 1 FROM jobs j
+         WHERE j.id=phase5_local_pilot_fences.job_id
+           AND j.status='queued'
+           AND j.completed_at IS NULL
+           AND j.html_key IS NULL
+           AND j.library_path IS NULL
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM artifacts a
+         WHERE a.job_id=phase5_local_pilot_fences.job_id
+           AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM job_events e
+         WHERE e.job_id=phase5_local_pilot_fences.job_id
+           AND e.stage IN ('complete','published','phase5_local_complete')
+       )`,
+  ).bind(validated.tokenExpiresAt, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
+  if ((fenceUpdate.meta.changes || 0) !== 1) {
+    return json({ ok: false, error: "Phase 5 start lost the guarded fence claim" }, { status: 409 });
+  }
+
+  const emoji = await getEmoji(env, "downloading");
+  const jobUpdate = await env.REEL_DB.prepare(
+    `UPDATE jobs
+     SET status='running',stage='downloading',status_emoji=?,started_at=COALESCE(started_at,CURRENT_TIMESTAMP),
+         attempts=attempts+1,upload_token_hash=?,upload_token_expires_at=?,error_code=NULL,error_message=NULL,updated_at=CURRENT_TIMESTAMP
+     WHERE id=? AND source_message_id=? AND status='queued' AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL
+       AND EXISTS (
+         SELECT 1 FROM phase5_local_pilot_fences f
+         WHERE f.job_id=jobs.id
+           AND f.pilot_key=?
+           AND f.source_message_id=?
+           AND f.status='local_processing'
+           AND f.local_lease_owner=?
+           AND f.local_lease_expires_at=?
+       )`,
+  ).bind(
+    emoji.display,
+    validated.callbackTokenHash,
+    validated.tokenExpiresAt,
+    validated.jobId,
+    validated.sourceMessageId,
+    validated.pilotKey,
+    validated.sourceMessageId,
+    validated.leaseOwner,
+    validated.tokenExpiresAt,
+  ).run();
+  if ((jobUpdate.meta.changes || 0) !== 1) {
+    await env.REEL_DB.prepare(
+      `UPDATE phase5_local_pilot_fences
+       SET status='local_claimed',updated_at=CURRENT_TIMESTAMP
+       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_processing' AND local_lease_owner=?
+         AND NOT EXISTS (
+           SELECT 1 FROM jobs j
+           WHERE j.id=phase5_local_pilot_fences.job_id
+             AND j.status='running'
+             AND j.upload_token_hash=?
+         )`,
+    ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner, validated.callbackTokenHash).run();
+    return json({ ok: false, error: "Phase 5 start lost the guarded job transition; fence compensation attempted" }, { status: 409 });
+  }
+
+  await env.REEL_DB.prepare(
+    `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+     SELECT ?,'phase5_local_processing','running','🧪',?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''), ?) > 0
+     )`,
+  ).bind(validated.jobId, JSON.stringify({
+    marker: validated.marker,
+    pilot_key: validated.pilotKey,
+    source_message_id: validated.sourceMessageId,
+    lease_owner: validated.leaseOwner,
+    token_expires_at: validated.tokenExpiresAt,
+    reason: validated.reason,
+    confirmation: PHASE5_START_CONFIRMATION,
+  }), validated.jobId, validated.marker).run();
+  if (shouldReactToStage("downloading")) {
+    await reactToSourceMessage(env, { id: validated.jobId, source_message_id: validated.sourceMessageId, sender_id: null }, "downloading");
+  }
+  const post = await phase5ControlState(env, validated);
+  if (!post || post.status !== "local_processing" || post.job_status !== "running" || post.upload_token_hash !== validated.callbackTokenHash) {
+    return json({ ok: false, error: "Phase 5 start postcondition failed" }, { status: 409 });
+  }
+  return json({ ok: true, started: true, pilot_key: validated.pilotKey, job_id: validated.jobId, token_expires_at: validated.tokenExpiresAt });
+}
+
+async function handlePhase5FinalizeLocalProcessing(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{
+    pilot_key?: string;
+    job_id?: string;
+    source_message_id?: string;
+    lease_owner?: string;
+    idempotency_key?: string;
+    confirm_finalize?: string;
+    reason?: string;
+  }>(request);
+  let validated: ReturnType<typeof validatePhase5FinalizeRequest>;
+  try {
+    validated = validatePhase5FinalizeRequest({ ...input, confirmation: input.confirm_finalize });
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const existing = await phase5ControlState(env, validated);
+  if (!existing) return json({ ok: false, error: "Exact Phase 5 fence/job not found" }, { status: 404 });
+  if (existing.status === "local_complete" && existing.job_status === "complete") {
+    return json({ ok: true, finalized: true, idempotent: true, pilot_key: validated.pilotKey, job_id: validated.jobId });
+  }
+  if (existing.status !== "local_processing" || existing.local_lease_owner !== validated.leaseOwner || existing.job_status !== "complete") {
+    return json({ ok: false, error: "Phase 5 finalize requires local_processing fence owned by the runner and a complete job", fence_status: existing.status, job_status: existing.job_status }, { status: 409 });
+  }
+  const updated = await env.REEL_DB.prepare(
+    `UPDATE phase5_local_pilot_fences
+     SET status='local_complete',completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+     WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_processing' AND local_lease_owner=?
+       AND EXISTS (SELECT 1 FROM jobs j WHERE j.id=phase5_local_pilot_fences.job_id AND j.status='complete')`,
+  ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
+  if ((updated.meta.changes || 0) !== 1) {
+    return json({ ok: false, error: "Phase 5 finalize lost the guarded fence transition" }, { status: 409 });
+  }
+  await env.REEL_DB.prepare(
+    `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+     SELECT ?,'phase5_local_complete','complete','✅',?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''), ?) > 0
+     )`,
+  ).bind(validated.jobId, JSON.stringify({
+    marker: validated.marker,
+    pilot_key: validated.pilotKey,
+    source_message_id: validated.sourceMessageId,
+    lease_owner: validated.leaseOwner,
+    reason: validated.reason,
+    confirmation: PHASE5_FINALIZE_CONFIRMATION,
+  }), validated.jobId, validated.marker).run();
+  const post = await phase5ControlState(env, validated);
+  if (!post || post.status !== "local_complete" || post.job_status !== "complete") {
+    return json({ ok: false, error: "Phase 5 finalize postcondition failed" }, { status: 409 });
+  }
+  return json({ ok: true, finalized: true, pilot_key: validated.pilotKey, job_id: validated.jobId });
+}
+
+async function handlePhase5AbortLocalProcessing(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{
+    pilot_key?: string;
+    job_id?: string;
+    source_message_id?: string;
+    lease_owner?: string;
+    idempotency_key?: string;
+    confirm_abort?: string;
+    reason?: string;
+  }>(request);
+  let validated: ReturnType<typeof validatePhase5AbortRequest>;
+  try {
+    validated = validatePhase5AbortRequest({ ...input, confirmation: input.confirm_abort });
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const existing = await phase5ControlState(env, validated);
+  if (!existing) return json({ ok: false, error: "Exact Phase 5 fence/job not found" }, { status: 404 });
+  if (phase5HasPublication(existing) || existing.job_status === "complete") {
+    return json({ ok: false, error: "Phase 5 abort refused because completion/publication evidence exists", job_status: existing.job_status }, { status: 409 });
+  }
+  if (existing.status === "rolled_back" && existing.job_status === "queued" && Number(existing.marker_events || 0) > 0) {
+    return json({ ok: true, aborted: true, idempotent: true, queued: false, pilot_key: validated.pilotKey, job_id: validated.jobId });
+  }
+
+  if (existing.status !== "rolled_back") {
+    if (!isPhase5ActiveFenceStatus(existing.status) || existing.local_lease_owner !== validated.leaseOwner) {
+      return json({ ok: false, error: "Phase 5 abort requires the exact active fence and lease owner", fence_status: existing.status, lease_owner: existing.local_lease_owner }, { status: 409 });
+    }
+    const jobUpdate = await env.REEL_DB.prepare(
+      `UPDATE jobs
+       SET status='queued',stage='queued',status_emoji='⬇️',upload_token_hash=NULL,upload_token_expires_at=NULL,error_code=NULL,error_message=NULL,updated_at=CURRENT_TIMESTAMP
+       WHERE id=? AND source_message_id=? AND status IN ('queued','running','failed')
+         AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL
+         AND EXISTS (
+           SELECT 1 FROM phase5_local_pilot_fences f
+           WHERE f.job_id=jobs.id
+             AND f.pilot_key=?
+             AND f.source_message_id=?
+             AND f.status IN (${PHASE5_ACTIVE_FENCE_SQL})
+             AND f.local_lease_owner=?
+         )`,
+    ).bind(validated.jobId, validated.sourceMessageId, validated.pilotKey, validated.sourceMessageId, validated.leaseOwner).run();
+    if ((jobUpdate.meta.changes || 0) !== 1) {
+      return json({ ok: false, error: "Phase 5 abort lost the guarded job rollback" }, { status: 409 });
+    }
+    const fenceUpdate = await env.REEL_DB.prepare(
+      `UPDATE phase5_local_pilot_fences
+       SET status='rolled_back',rollback_at=CURRENT_TIMESTAMP,rollback_reason=?,updated_at=CURRENT_TIMESTAMP
+       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status IN (${PHASE5_ACTIVE_FENCE_SQL}) AND local_lease_owner=?
+         AND EXISTS (SELECT 1 FROM jobs j WHERE j.id=phase5_local_pilot_fences.job_id AND j.status='queued')
+         AND NOT EXISTS (
+           SELECT 1 FROM artifacts a
+           WHERE a.job_id=phase5_local_pilot_fences.job_id
+             AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM job_events e
+           WHERE e.job_id=phase5_local_pilot_fences.job_id
+             AND e.stage IN ('complete','published','phase5_local_complete')
+         )`,
+    ).bind(validated.reason, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
+    if ((fenceUpdate.meta.changes || 0) !== 1) {
+      return json({ ok: false, error: "Phase 5 abort lost the guarded fence rollback after job rollback; retry exact abort before doing anything else" }, { status: 409 });
+    }
+  }
+
+  await env.REEL_QUEUE.send({ jobId: validated.jobId });
+  await env.REEL_DB.prepare(
+    `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+     SELECT ?,'phase5_local_abort','queued','↩️',?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''), ?) > 0
+     )`,
+  ).bind(validated.jobId, JSON.stringify({
+    marker: validated.marker,
+    pilot_key: validated.pilotKey,
+    source_message_id: validated.sourceMessageId,
+    lease_owner: validated.leaseOwner,
+    reason: validated.reason,
+    requeued_to_cloud: true,
+    confirmation: PHASE5_ABORT_CONFIRMATION,
+  }), validated.jobId, validated.marker).run();
+  return json({ ok: true, aborted: true, queued: true, pilot_key: validated.pilotKey, job_id: validated.jobId });
+}
+
 async function handlePhase5PreintakeArm(request: Request, env: Env): Promise<Response> {
   const input = await readJson<{ arm_key?: string; sender_id?: string; confirm_arm?: string; expires_minutes?: number }>(request);
   let validated: ReturnType<typeof validatePhase5PreintakeArmRequest>;
@@ -4767,6 +5077,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/api/admin/phase5/local-pilot/fence" && request.method === "POST") return handlePhase5Fence(request, env);
   if (url.pathname === "/api/admin/phase5/local-pilot/renew" && request.method === "POST") return handlePhase5RenewLease(request, env);
   if (url.pathname === "/api/admin/phase5/local-pilot/rollback" && request.method === "POST") return handlePhase5Rollback(request, env);
+  if (url.pathname === "/api/admin/phase5/local-pilot/start" && request.method === "POST") return handlePhase5StartLocalProcessing(request, env);
+  if (url.pathname === "/api/admin/phase5/local-pilot/finalize" && request.method === "POST") return handlePhase5FinalizeLocalProcessing(request, env);
+  if (url.pathname === "/api/admin/phase5/local-pilot/abort" && request.method === "POST") return handlePhase5AbortLocalProcessing(request, env);
   if (url.pathname === "/api/admin/instagram-confirm-live" && request.method === "POST") return handleConfirmLiveMode(env);
   if (url.pathname === "/api/admin/instagram-pilot-summary" && request.method === "POST") return handlePilotSummaryDm(request, env);
   if (url.pathname === "/api/admin/instagram-recover-message" && request.method === "POST") return handleRecoverInstagramMessage(request, env);

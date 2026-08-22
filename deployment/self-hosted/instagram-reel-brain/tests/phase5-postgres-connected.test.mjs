@@ -168,3 +168,49 @@ test("connected PostgreSQL enforces a single active Phase 5 lease and exact-job 
   assert.equal(summary.rolled_back, 1);
   assert.equal(summary.rollback_events, 1);
 });
+
+test("connected PostgreSQL Phase 5 lease transitions write events only after a guarded row update", async () => {
+  await withRepo(async (repo) => {
+    await repo.createJob({ id: "phase5-job-guard", sourceUrl: "https://www.instagram.com/reel/PHASE5GUARD/", sourceMessageId: "mid-guard" });
+    await repo.createPhase5PilotLease({
+      pilotKey: "phase5-guard",
+      jobId: "phase5-job-guard",
+      sourceMessageId: "mid-guard",
+      cloudFenceKey: "phase5-guard",
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    assert.equal(
+      await repo.markPhase5PilotProcessing({ pilotKey: "phase5-guard", jobId: "phase5-job-guard", leaseOwner: "wrong-worker" }),
+      null,
+    );
+    const claimed = await repo.claimPhase5PilotLease({ pilotKey: "phase5-guard", jobId: "phase5-job-guard", leaseOwner: "worker-guard" });
+    assert.equal(claimed.status, "leased");
+    const processing = await repo.markPhase5PilotProcessing({ pilotKey: "phase5-guard", jobId: "phase5-job-guard", leaseOwner: "worker-guard" });
+    assert.equal(processing.status, "processing");
+    assert.equal(
+      await repo.completePhase5PilotLease({ pilotKey: "phase5-guard", jobId: "phase5-job-guard", leaseOwner: "wrong-worker", detail: { should_not_write: true } }),
+      null,
+    );
+    const completed = await repo.completePhase5PilotLease({ pilotKey: "phase5-guard", jobId: "phase5-job-guard", leaseOwner: "worker-guard", detail: { ok: true } });
+    assert.equal(completed.status, "completed");
+    assert.equal(
+      await repo.completePhase5PilotLease({ pilotKey: "phase5-guard", jobId: "phase5-job-guard", leaseOwner: "worker-guard", detail: { duplicate: true } }),
+      null,
+    );
+  });
+
+  const summary = JSON.parse(runPsql(
+    `SELECT json_agg(t) FROM (
+       SELECT
+         (SELECT COUNT(*)::int FROM ${schema}.phase5_pilot_events WHERE job_id='phase5-job-guard' AND stage='processing') AS processing_events,
+         (SELECT COUNT(*)::int FROM ${schema}.phase5_pilot_events WHERE job_id='phase5-job-guard' AND stage='completed') AS completed_events,
+         (SELECT COUNT(*)::int FROM ${schema}.phase5_pilot_events WHERE job_id='phase5-job-guard' AND detail::text LIKE '%should_not_write%') AS lost_guard_events,
+         (SELECT COUNT(*)::int FROM ${schema}.phase5_pilot_events WHERE job_id='phase5-job-guard' AND detail::text LIKE '%duplicate%') AS duplicate_events
+     ) t;`,
+    { json: true },
+  ))[0];
+  assert.equal(summary.processing_events, 1);
+  assert.equal(summary.completed_events, 1);
+  assert.equal(summary.lost_guard_events, 0);
+  assert.equal(summary.duplicate_events, 0);
+});

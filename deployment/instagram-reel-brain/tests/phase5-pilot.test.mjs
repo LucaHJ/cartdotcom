@@ -6,7 +6,10 @@ import {
   PHASE5_ARM_CONFIRMATION,
   PHASE5_CANCEL_ARM_CONFIRMATION,
   PHASE5_FENCE_CONFIRMATION,
+  PHASE5_START_CONFIRMATION,
+  PHASE5_FINALIZE_CONFIRMATION,
   PHASE5_MIN_EXPLICIT_JOB_CREATED_AT,
+  PHASE5_ABORT_CONFIRMATION,
   PHASE5_RENEW_CONFIRMATION,
   PHASE5_ROLLBACK_CONFIRMATION,
   phase5ArmCanCaptureShare,
@@ -17,6 +20,9 @@ import {
   validatePhase5PreintakeCancelRequest,
   validatePhase5RenewRequest,
   validatePhase5RollbackRequest,
+  validatePhase5StartRequest,
+  validatePhase5FinalizeRequest,
+  validatePhase5AbortRequest,
 } from "../src/phase5-pilot.ts";
 
 const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
@@ -89,6 +95,49 @@ test("Phase 5 renewal request requires exact identity, owner and caps renewal to
   assert.equal(validated.reason, "implementation window");
 });
 
+test("Phase 5 exact runner control requests require confirmation, owner, source id and idempotency", () => {
+  const now = Date.parse("2026-08-22T03:00:00.000Z");
+  const identity = {
+    pilot_key: "phase5-reel-1",
+    job_id: "job-new-1",
+    source_message_id: "mid.1",
+    lease_owner: "phase5-local-worker-1",
+    idempotency_key: "runner-attempt-1",
+  };
+  assert.throws(
+    () => validatePhase5StartRequest({
+      ...identity,
+      callback_token_hash: "a".repeat(64),
+      confirmation: "wrong",
+    }, now),
+    /confirmation must equal/,
+  );
+  const started = validatePhase5StartRequest({
+    ...identity,
+    callback_token_hash: "a".repeat(64),
+    confirmation: PHASE5_START_CONFIRMATION,
+    token_minutes: 999,
+  }, now);
+  assert.equal(started.leaseOwner, "phase5-local-worker-1");
+  assert.equal(started.callbackTokenHash, "a".repeat(64));
+  assert.equal(started.tokenExpiresAt, "2026-08-22T09:00:00.000Z", "callback tokens are capped at six hours");
+  assert.equal(started.marker, "phase5-control:phase5-reel-1:start:runner-attempt-1");
+
+  const finalized = validatePhase5FinalizeRequest({
+    ...identity,
+    confirmation: PHASE5_FINALIZE_CONFIRMATION,
+  });
+  assert.equal(finalized.marker, "phase5-control:phase5-reel-1:finalize:runner-attempt-1");
+
+  const aborted = validatePhase5AbortRequest({
+    ...identity,
+    confirmation: PHASE5_ABORT_CONFIRMATION,
+    reason: "pre-publication rollback",
+  });
+  assert.equal(aborted.marker, "phase5-control:phase5-reel-1:abort:runner-attempt-1");
+  assert.equal(aborted.reason, "pre-publication rollback");
+});
+
 test("Phase 5 active fences expire fail-closed", () => {
   assert.equal(phase5FenceExpired({ expires_at: "2026-08-21T00:00:00.000Z" }, Date.parse("2026-08-21T00:00:01.000Z")), true);
   assert.equal(
@@ -118,11 +167,17 @@ test("Phase 5 cloud routes remain admin-only and do not add unauthenticated muta
   const adminGateIndex = source.indexOf("const unauthorized = requireAdmin(request, env);", handleApiIndex);
   const fenceRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/fence"', handleApiIndex);
   const rollbackRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/rollback"', handleApiIndex);
+  const startRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/start"', handleApiIndex);
+  const finalizeRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/finalize"', handleApiIndex);
+  const abortRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/abort"', handleApiIndex);
   const phase4RouteIndex = source.indexOf('"/api/phase4/mirror/"', handleApiIndex);
 
   assert.ok(phase4RouteIndex > handleApiIndex && phase4RouteIndex < adminGateIndex, "Phase 4 read-only mirror remains before admin gate");
   assert.ok(fenceRouteIndex > adminGateIndex, "Phase 5 fence must be behind admin gate");
   assert.ok(rollbackRouteIndex > adminGateIndex, "Phase 5 rollback must be behind admin gate");
+  assert.ok(startRouteIndex > adminGateIndex, "Phase 5 start must be behind admin gate");
+  assert.ok(finalizeRouteIndex > adminGateIndex, "Phase 5 finalize must be behind admin gate");
+  assert.ok(abortRouteIndex > adminGateIndex, "Phase 5 abort must be behind admin gate");
   assert.doesNotMatch(source.slice(handleApiIndex, adminGateIndex), /phase5\/local-pilot/);
 });
 
@@ -282,6 +337,42 @@ test("Phase 5 renewal route fails closed on queued exact-job claim without compl
   assert.ok(source.indexOf("updated.meta.changes", renewIndex) > renewIndex);
   assert.ok(source.indexOf("job is no longer renewable", renewIndex) > renewIndex);
   assert.ok(source.indexOf("phase5_local_lease_renewed", renewIndex) > renewIndex);
+});
+
+test("Phase 5 exact control routes guard every cloud transition before audit or queue effects", () => {
+  const startIndex = source.indexOf("async function handlePhase5StartLocalProcessing");
+  const finalizeIndex = source.indexOf("async function handlePhase5FinalizeLocalProcessing");
+  const abortIndex = source.indexOf("async function handlePhase5AbortLocalProcessing");
+  assert.ok(startIndex > 0);
+  assert.ok(finalizeIndex > startIndex);
+  assert.ok(abortIndex > finalizeIndex);
+
+  const startBody = source.slice(startIndex, finalizeIndex);
+  assert.match(startBody, /validatePhase5StartRequest/);
+  assert.match(startBody, /existing\.status === "local_processing"[\s\S]+idempotent: true/);
+  assert.match(startBody, /fenceUpdate\.meta\.changes/);
+  assert.match(startBody, /jobUpdate\.meta\.changes/);
+  assert.match(startBody, /fence compensation attempted/);
+  assert.match(startBody, /phase5_local_processing/);
+  assert.ok(startBody.indexOf("jobUpdate.meta.changes") < startBody.indexOf("phase5_local_processing"), "start audit must occur after guarded job update succeeds");
+  assert.match(startBody, /postcondition failed/);
+  assert.doesNotMatch(startBody, /callback_token(?!_hash)/, "start route must not accept or return callback token plaintext");
+
+  const finalizeBody = source.slice(finalizeIndex, abortIndex);
+  assert.match(finalizeBody, /validatePhase5FinalizeRequest/);
+  assert.match(finalizeBody, /existing\.status === "local_complete"[\s\S]+idempotent: true/);
+  assert.match(finalizeBody, /updated\.meta\.changes/);
+  assert.ok(finalizeBody.indexOf("updated.meta.changes") < finalizeBody.indexOf("phase5_local_complete"), "finalize audit must occur after guarded fence update succeeds");
+  assert.match(finalizeBody, /AND EXISTS \(SELECT 1 FROM jobs j WHERE j\.id=phase5_local_pilot_fences\.job_id AND j\.status='complete'\)/);
+  assert.match(finalizeBody, /finalize postcondition failed/);
+
+  const abortBody = source.slice(abortIndex, source.indexOf("async function handlePhase5PreintakeArm", abortIndex));
+  assert.match(abortBody, /validatePhase5AbortRequest/);
+  assert.match(abortBody, /phase5HasPublication/);
+  assert.match(abortBody, /jobUpdate\.meta\.changes/);
+  assert.match(abortBody, /fenceUpdate\.meta\.changes/);
+  assert.ok(abortBody.indexOf("fenceUpdate.meta.changes") < abortBody.indexOf("env.REEL_QUEUE.send"), "cloud requeue must happen only after the guarded rollback is recorded");
+  assert.match(abortBody, /existing\.status === "rolled_back"[\s\S]+marker_events/);
 });
 
 test("Phase 5 callback validation refuses fenced jobs after rollback, expiry or owner mismatch", () => {

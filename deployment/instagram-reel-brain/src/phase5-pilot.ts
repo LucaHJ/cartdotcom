@@ -3,6 +3,9 @@ export const PHASE5_ROLLBACK_CONFIRMATION = "ROLL BACK PHASE 5 LOCAL PILOT JOB";
 export const PHASE5_ARM_CONFIRMATION = "ARM NEXT PHASE 5 REEL PILOT SHARE";
 export const PHASE5_CANCEL_ARM_CONFIRMATION = "CANCEL PHASE 5 REEL PILOT ARM";
 export const PHASE5_RENEW_CONFIRMATION = "RENEW EXACT PHASE 5 LOCAL PILOT LEASE";
+export const PHASE5_START_CONFIRMATION = "START EXACT PHASE 5 LOCAL PILOT JOB";
+export const PHASE5_FINALIZE_CONFIRMATION = "FINALIZE EXACT PHASE 5 LOCAL PILOT JOB";
+export const PHASE5_ABORT_CONFIRMATION = "ABORT EXACT PHASE 5 LOCAL PILOT JOB";
 export const PHASE5_MIN_EXPLICIT_JOB_CREATED_AT = "2026-08-21T15:01:28.000Z";
 
 export const PHASE5_ACTIVE_FENCE_STATUSES = Object.freeze(["armed", "local_claimed", "local_processing"] as const);
@@ -44,6 +47,18 @@ export type Phase5RenewRequest = {
   lease_owner?: string;
   confirmation?: string;
   expires_minutes?: number;
+  reason?: string;
+};
+
+export type Phase5ControlRequest = {
+  pilot_key?: string;
+  job_id?: string;
+  source_message_id?: string;
+  lease_owner?: string;
+  idempotency_key?: string;
+  callback_token_hash?: string;
+  confirmation?: string;
+  token_minutes?: number;
   reason?: string;
 };
 
@@ -129,6 +144,45 @@ export function phase5RenewalExpiry(input: Phase5RenewRequest, now = Date.now())
   return new Date(now + minutes * 60_000).toISOString();
 }
 
+export function phase5CallbackExpiry(input: Phase5ControlRequest, now = Date.now()): string {
+  const minutes = Math.max(5, Math.min(Number(input.token_minutes || 240) || 240, 360));
+  return new Date(now + minutes * 60_000).toISOString();
+}
+
+export function normalisePhase5LeaseOwner(value: unknown): string {
+  const leaseOwner = String(value || "").trim();
+  if (!/^[a-z0-9][a-z0-9_.:-]{2,120}$/i.test(leaseOwner)) throw new Error("An exact lease_owner is required");
+  return leaseOwner;
+}
+
+export function normalisePhase5IdempotencyKey(value: unknown): string {
+  const key = String(value || "").trim();
+  if (!/^[a-z0-9][a-z0-9_.:-]{6,160}$/i.test(key)) throw new Error("A stable idempotency_key is required");
+  return key;
+}
+
+export function normalisePhase5CallbackTokenHash(value: unknown): string {
+  const hash = String(value || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("A SHA-256 callback_token_hash is required");
+  return hash;
+}
+
+function validatePhase5ControlIdentity(input: Phase5ControlRequest): {
+  pilotKey: string;
+  jobId: string;
+  sourceMessageId: string;
+  leaseOwner: string;
+  idempotencyKey: string;
+} {
+  return {
+    pilotKey: normalisePhase5PilotKey(input.pilot_key),
+    jobId: normalisePhase5JobId(input.job_id),
+    sourceMessageId: normalisePhase5SourceMessageId(input.source_message_id),
+    leaseOwner: normalisePhase5LeaseOwner(input.lease_owner),
+    idempotencyKey: normalisePhase5IdempotencyKey(input.idempotency_key),
+  };
+}
+
 export function validatePhase5FenceRequest(input: Phase5FenceRequest): {
   pilotKey: string;
   jobId: string;
@@ -172,15 +226,77 @@ export function validatePhase5RenewRequest(input: Phase5RenewRequest, now = Date
   if (input.confirmation !== PHASE5_RENEW_CONFIRMATION) {
     throw new Error(`confirmation must equal ${PHASE5_RENEW_CONFIRMATION}`);
   }
-  const leaseOwner = String(input.lease_owner || "").trim();
-  if (!/^[a-z0-9][a-z0-9_.:-]{2,120}$/i.test(leaseOwner)) throw new Error("An exact lease_owner is required");
   return {
     pilotKey: normalisePhase5PilotKey(input.pilot_key),
     jobId: normalisePhase5JobId(input.job_id),
     sourceMessageId: normalisePhase5SourceMessageId(input.source_message_id),
-    leaseOwner,
+    leaseOwner: normalisePhase5LeaseOwner(input.lease_owner),
     expiresAt: phase5RenewalExpiry(input, now),
     reason: String(input.reason || "phase5_exact_job_lease_renewal").trim().slice(0, 500),
+  };
+}
+
+export function validatePhase5StartRequest(input: Phase5ControlRequest, now = Date.now()): {
+  pilotKey: string;
+  jobId: string;
+  sourceMessageId: string;
+  leaseOwner: string;
+  idempotencyKey: string;
+  callbackTokenHash: string;
+  tokenExpiresAt: string;
+  marker: string;
+  reason: string;
+} {
+  if (input.confirmation !== PHASE5_START_CONFIRMATION) {
+    throw new Error(`confirmation must equal ${PHASE5_START_CONFIRMATION}`);
+  }
+  const identity = validatePhase5ControlIdentity(input);
+  return {
+    ...identity,
+    callbackTokenHash: normalisePhase5CallbackTokenHash(input.callback_token_hash),
+    tokenExpiresAt: phase5CallbackExpiry(input, now),
+    marker: `phase5-control:${identity.pilotKey}:start:${identity.idempotencyKey}`,
+    reason: String(input.reason || "phase5_exact_job_local_start").trim().slice(0, 500),
+  };
+}
+
+export function validatePhase5FinalizeRequest(input: Phase5ControlRequest): {
+  pilotKey: string;
+  jobId: string;
+  sourceMessageId: string;
+  leaseOwner: string;
+  idempotencyKey: string;
+  marker: string;
+  reason: string;
+} {
+  if (input.confirmation !== PHASE5_FINALIZE_CONFIRMATION) {
+    throw new Error(`confirmation must equal ${PHASE5_FINALIZE_CONFIRMATION}`);
+  }
+  const identity = validatePhase5ControlIdentity(input);
+  return {
+    ...identity,
+    marker: `phase5-control:${identity.pilotKey}:finalize:${identity.idempotencyKey}`,
+    reason: String(input.reason || "phase5_exact_job_local_finalize").trim().slice(0, 500),
+  };
+}
+
+export function validatePhase5AbortRequest(input: Phase5ControlRequest): {
+  pilotKey: string;
+  jobId: string;
+  sourceMessageId: string;
+  leaseOwner: string;
+  idempotencyKey: string;
+  marker: string;
+  reason: string;
+} {
+  if (input.confirmation !== PHASE5_ABORT_CONFIRMATION) {
+    throw new Error(`confirmation must equal ${PHASE5_ABORT_CONFIRMATION}`);
+  }
+  const identity = validatePhase5ControlIdentity(input);
+  return {
+    ...identity,
+    marker: `phase5-control:${identity.pilotKey}:abort:${identity.idempotencyKey}`,
+    reason: String(input.reason || "phase5_exact_job_local_abort").trim().slice(0, 500),
   };
 }
 

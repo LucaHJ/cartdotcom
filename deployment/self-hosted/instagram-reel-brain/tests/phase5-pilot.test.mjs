@@ -90,18 +90,26 @@ test("Phase 5 guard script is exact-job scoped and secret-free", async () => {
   assert.doesNotMatch(script, /Bearer [A-Za-z0-9_\-.]{16,}/);
 });
 
-test("Phase 5 one-shot runner requires exact live confirmation and reuses the production processor", async () => {
+test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and production processor", async () => {
   const runner = await readFile(new URL("../scripts/phase5_one_job_runner.py", import.meta.url), "utf8");
   assert.match(runner, /RUN EXACT PHASE 5 LOCAL PILOT/);
-  assert.match(runner, /verify_cloud/);
   assert.match(runner, /verify_local/);
-  assert.match(runner, /status='local_claimed'/);
-  assert.match(runner, /status='local_processing'/);
-  assert.match(runner, /status='running'/);
-  assert.match(runner, /stage='downloading'/);
+  assert.match(runner, /\/api\/admin\/phase5\/local-pilot\/start/);
+  assert.match(runner, /\/api\/admin\/phase5\/local-pilot\/finalize/);
+  assert.match(runner, /\/api\/admin\/phase5\/local-pilot\/abort/);
+  assert.match(runner, /Authorization/);
+  assert.match(runner, /callback_token_hash/);
+  assert.match(runner, /atomic_write_json/);
+  assert.match(runner, /os\.chmod\(path, 0o600\)/);
+  assert.match(runner, /checkpoint/);
+  assert.match(runner, /WITH updated AS/);
+  assert.match(runner, /INSERT INTO \{schema\}\.phase5_pilot_events/);
+  assert.match(runner, /rows\[0\]\.get\("updated"\) != 1/);
   assert.match(runner, /processor\.process\(payload\)/);
-  assert.match(runner, /result\.pop\("auth_json", None\)/);
+  assert.match(runner, /sanitize_result/);
   assert.match(runner, /INSTAGRAM_COOKIES_JSON/);
+  assert.doesNotMatch(runner, /wrangler_d1/);
+  assert.doesNotMatch(runner, /wrangler", "d1"/);
   assert.doesNotMatch(runner, /sk-[A-Za-z0-9]/);
   assert.doesNotMatch(runner, /Bearer [A-Za-z0-9_\-.]{16,}/);
 });
