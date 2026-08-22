@@ -246,6 +246,125 @@ export class PostgresReelRepository {
     );
   }
 
+  async createPhase5PilotLease(input) {
+    return this.withTransaction(async () => {
+      const result = await this.query(
+        `INSERT INTO ${this.table("phase5_pilot_leases")} (
+          pilot_key, exact_job_id, source_message_id, cloud_fence_key, status, expires_at, audit_json
+        ) VALUES ($1,$2,$3,$4,'armed',$5,$6)
+        ON CONFLICT (pilot_key)
+        DO UPDATE SET updated_at=now()
+        WHERE phase5_pilot_leases.exact_job_id=excluded.exact_job_id
+          AND phase5_pilot_leases.source_message_id=excluded.source_message_id
+          AND phase5_pilot_leases.status IN ('armed','leased','processing')
+        RETURNING *`,
+        [
+          input.pilotKey,
+          input.jobId,
+          input.sourceMessageId,
+          input.cloudFenceKey || input.pilotKey,
+          input.expiresAt,
+          JSON.stringify(input.audit || {}),
+        ],
+      );
+      if (!result.rows?.[0]) return null;
+      await this.insertPhase5PilotEvent(input.pilotKey, input.jobId, "armed", "armed", {
+        cloud_fence_key: input.cloudFenceKey || input.pilotKey,
+      });
+      return result.rows[0];
+    });
+  }
+
+  async claimPhase5PilotLease({ pilotKey, jobId, leaseOwner, leaseSeconds = 900 }) {
+    return this.withTransaction(async () => {
+      const result = await this.query(
+        `UPDATE ${this.table("phase5_pilot_leases")}
+         SET status='leased',
+             lease_owner=$3,
+             lease_acquired_at=COALESCE(lease_acquired_at, now()),
+             lease_heartbeat_at=now(),
+             lease_expires_at=now() + ($4 || ' seconds')::interval,
+             attempt=attempt+1,
+             updated_at=now()
+         WHERE pilot_key=$1
+           AND exact_job_id=$2
+           AND status='armed'
+           AND expires_at > now()
+         RETURNING *`,
+        [pilotKey, jobId, leaseOwner, String(Math.max(30, Math.min(Number(leaseSeconds || 900), 3600)))],
+      );
+      if (!result.rows?.[0]) return null;
+      await this.insertPhase5PilotEvent(pilotKey, jobId, "leased", "leased", { lease_owner: leaseOwner });
+      return result.rows[0];
+    });
+  }
+
+  async heartbeatPhase5PilotLease({ pilotKey, jobId, leaseOwner, leaseSeconds = 900 }) {
+    const result = await this.query(
+      `UPDATE ${this.table("phase5_pilot_leases")}
+       SET lease_heartbeat_at=now(),
+           lease_expires_at=now() + ($4 || ' seconds')::interval,
+           updated_at=now()
+       WHERE pilot_key=$1 AND exact_job_id=$2 AND lease_owner=$3 AND status IN ('leased','processing')
+       RETURNING *`,
+      [pilotKey, jobId, leaseOwner, String(Math.max(30, Math.min(Number(leaseSeconds || 900), 3600)))],
+    );
+    return result.rows?.[0] || null;
+  }
+
+  async markPhase5PilotProcessing({ pilotKey, jobId, leaseOwner }) {
+    return this.withTransaction(async () => {
+      const result = await this.query(
+        `UPDATE ${this.table("phase5_pilot_leases")}
+         SET status='processing',lease_heartbeat_at=now(),updated_at=now()
+         WHERE pilot_key=$1 AND exact_job_id=$2 AND lease_owner=$3 AND status='leased'
+         RETURNING *`,
+        [pilotKey, jobId, leaseOwner],
+      );
+      if (!result.rows?.[0]) return null;
+      await this.insertPhase5PilotEvent(pilotKey, jobId, "processing", "processing", { lease_owner: leaseOwner });
+      return result.rows[0];
+    });
+  }
+
+  async completePhase5PilotLease({ pilotKey, jobId, leaseOwner, detail = {} }) {
+    return this.withTransaction(async () => {
+      const result = await this.query(
+        `UPDATE ${this.table("phase5_pilot_leases")}
+         SET status='completed',completed_at=now(),updated_at=now()
+         WHERE pilot_key=$1 AND exact_job_id=$2 AND lease_owner=$3 AND status IN ('leased','processing')
+         RETURNING *`,
+        [pilotKey, jobId, leaseOwner],
+      );
+      if (!result.rows?.[0]) return null;
+      await this.insertPhase5PilotEvent(pilotKey, jobId, "completed", "completed", detail);
+      return result.rows[0];
+    });
+  }
+
+  async rollbackPhase5PilotLease({ pilotKey, jobId, reason }) {
+    return this.withTransaction(async () => {
+      const result = await this.query(
+        `UPDATE ${this.table("phase5_pilot_leases")}
+         SET status='rolled_back',rollback_at=now(),rollback_reason=$3,updated_at=now()
+         WHERE pilot_key=$1 AND exact_job_id=$2 AND status IN ('armed','leased','processing')
+         RETURNING *`,
+        [pilotKey, jobId, reason || "operator_requested_phase5_local_rollback"],
+      );
+      if (!result.rows?.[0]) return null;
+      await this.insertPhase5PilotEvent(pilotKey, jobId, "rolled_back", "rolled_back", { reason });
+      return result.rows[0];
+    });
+  }
+
+  async insertPhase5PilotEvent(pilotKey, jobId, stage, status, detail = {}) {
+    await this.query(
+      `INSERT INTO ${this.table("phase5_pilot_events")} (pilot_key, job_id, stage, status, detail)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [pilotKey, jobId, stage, status, JSON.stringify(detail || {})],
+    );
+  }
+
   async getStatusSummary() {
     const result = await this.query(
       `SELECT status, COUNT(*)::int AS count,

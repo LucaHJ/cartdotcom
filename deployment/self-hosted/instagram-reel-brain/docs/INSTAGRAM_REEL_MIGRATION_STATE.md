@@ -1,19 +1,22 @@
 # Instagram Reel Migration State
 
-Status: Phase 4 shadow live intake observation restarted after timestamp
-correction; bounded historical replay validation completed and waiting for
-independent review. Phase 5 remains blocked.
+Status: Phase 4 shadow live intake observation passed independent review.
+Bounded Phase 5 preparation is implemented and deployed. The first live
+controlled-compute pilot is waiting for one brand-new Reel share to be
+explicitly identified and fenced.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
-Pages/KV/R2 data, or process backlog.
+Pages/KV/R2 data, or process backlog except for a future exactly fenced
+one-job Phase 5 pilot after explicit approval.
 
 Phase 3 is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`. Phase 4 start is
 recorded in `PHASE_4_START_REPORT_2026-08-21.md`; the current timestamp
 correction and historical validation blocker are recorded in
 `PHASE_4_TIMESTAMP_CORRECTION_REPORT_2026-08-21.md`; the completed corrected
 historical replay validation is recorded in
-`PHASE_4_HISTORICAL_REPLAY_VALIDATION_REPORT_2026-08-21.md`.
+`PHASE_4_HISTORICAL_REPLAY_VALIDATION_REPORT_2026-08-21.md`. Phase 5
+preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
 
 ## Enabled
 
@@ -54,6 +57,16 @@ historical replay validation is recorded in
   evidence. The mirror watchdog now verifies process command identity before
   trusting `mirror-supervised.pid`; corrected mirror PID `3168918` is running
   after a stale/reused-PID replacement test.
+- Empty production D1 Phase 5 fence table `phase5_local_pilot_fences`, created
+  by migration `0021_phase5_local_pilot_fence.sql`.
+- Admin-only Cloudflare Phase 5 fence/rollback endpoints on Worker version
+  `4e80693d-cb8f-4728-9528-1f2e6d700d32`.
+- Non-authoritative local Phase 5 lease/event tables from
+  `0005_phase5_controlled_pilot.sql`, with one-active-lease enforcement through
+  `phase5_pilot_leases_one_active_idx`.
+- Synthetic-only local Phase 5 harness for media, transcription, Codex schema,
+  token accounting, reaction audit, publication artifact, private playback, and
+  R2-mirror receipt checks.
 
 ## Disabled
 
@@ -78,6 +91,11 @@ historical replay validation is recorded in
 - Temporary historical replay credential `PHASE4_REPLAY_TOKEN`; the corrected
   replay credential was created only for validation, then revoked and removed
   from the Ubuntu server after validation completed.
+- Unrestricted Phase 5 local claims; only one future exact admin-fenced job may
+  be processed locally.
+- Live Phase 5 pilot execution until a brand-new Reel share is explicitly
+  identified.
+- Phase 6 or general production authority cutover.
 
 ## Limits
 
@@ -90,13 +108,17 @@ historical replay validation is recorded in
 
 ## Current gate
 
-Phase 4 observation restarted at `2026-08-21T03:01:28Z` but is not approved for
-Phase 5. Cloudflare is still the sole production authority. The mirror is
-allowed to pull only post-watermark rows and referenced artifacts through
-authenticated GET-only endpoints. Corrected historical validation of the
-approved 50-job slice completed with 50 jobs, 200 job events, 722 artifacts,
-258 resources, 1,075 object receipts, 0 divergences, and 0 mirror errors. The
-accelerated gate still requires at least 12 hours of corrected live
-post-watermark observation with at least one genuine new input, zero unexplained
-divergence/error, stable restart/cursors, and no News regression, plus
-independent review.
+Phase 4 passed independent review with corrected observation from
+`2026-08-21T03:01:28Z` through after `2026-08-21T15:01:28Z`: 144 mirror polls,
+0 failures, 409 live row versions, 279 current object receipts, 0 divergences,
+0 mirror errors, 12 nonempty polls, and 144 health samples with no
+Cloudflare/backlog or Docker health failure. The historical replay remains
+exactly 50 jobs, 200 events, 722 artifacts, 258 resources, 1,075 object
+receipts, 0 divergences, and 0 errors.
+
+Phase 5 preparation is complete through the readiness gate. The system is
+waiting for one brand-new Reel share to be explicitly identified. After that,
+an admin must fence the exact durable `job_id` and `source_message_id` before
+local compute is allowed. No carousel, retrieval case, second pilot, Phase 6
+work, or authority cutover is approved before the first fenced Reel completes
+and receives independent review.

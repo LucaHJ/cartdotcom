@@ -21,6 +21,14 @@ import {
   type Phase4MirrorScope,
 } from "./phase4-mirror";
 import {
+  PHASE5_MIN_EXPLICIT_JOB_CREATED_AT,
+  isPhase5ActiveFenceStatus,
+  phase5FenceActive,
+  validatePhase5FenceRequest,
+  validatePhase5RollbackRequest,
+  type Phase5FenceRow,
+} from "./phase5-pilot";
+import {
   DEFAULT_STAGE_REACTIONS,
   applyMediaLinkFallbacks,
   canonicalArtifactKey,
@@ -2807,6 +2815,148 @@ async function handleCorrectiveResynthesis(request: Request, env: Env, jobId: st
   return json(result.body, { status: result.status });
 }
 
+const PHASE5_ACTIVE_FENCE_SQL = "'armed','local_claimed','local_processing'";
+
+async function activePhase5FenceForJob(env: Env, jobId: string): Promise<Phase5FenceRow | null> {
+  try {
+    const row = await env.REEL_DB.prepare(
+      `SELECT pilot_key,job_id,source_message_id,status,expires_at,local_lease_owner,local_lease_expires_at
+       FROM phase5_local_pilot_fences
+       WHERE job_id=? AND status IN (${PHASE5_ACTIVE_FENCE_SQL})
+       ORDER BY created_at DESC LIMIT 1`,
+    ).bind(jobId).first<Phase5FenceRow>();
+    return phase5FenceActive(row) ? row : null;
+  } catch (error) {
+    if (String((error as Error)?.message || error).includes("phase5_local_pilot_fences")) return null;
+    throw error;
+  }
+}
+
+async function auditPhase5CloudFenceSkip(env: Env, job: JobRow, fence: Phase5FenceRow): Promise<void> {
+  const marker = `phase5-local-pilot:${fence.pilot_key}:cloud-skip`;
+  await env.REEL_DB.prepare(
+    `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+     SELECT ?,'phase5_local_fenced','queued','🧪',?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM job_events WHERE job_id=? AND stage='phase5_local_fenced' AND instr(COALESCE(detail,''), ?) > 0
+     )`,
+  ).bind(
+    job.id,
+    JSON.stringify({
+      marker,
+      pilot_key: fence.pilot_key,
+      source_message_id: fence.source_message_id,
+      cloud_processing_skipped: true,
+    }),
+    job.id,
+    marker,
+  ).run();
+}
+
+async function handlePhase5Fence(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{
+    pilot_key?: string;
+    job_id?: string;
+    source_message_id?: string;
+    confirm_fence?: string;
+    expires_minutes?: number;
+  }>(request);
+  let validated: ReturnType<typeof validatePhase5FenceRequest>;
+  try {
+    validated = validatePhase5FenceRequest({ ...input, confirmation: input.confirm_fence });
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const { pilotKey, jobId, sourceMessageId, expiresAt } = validated;
+  const active = await env.REEL_DB.prepare(
+    `SELECT pilot_key,job_id,source_message_id,status,expires_at
+     FROM phase5_local_pilot_fences
+     WHERE status IN (${PHASE5_ACTIVE_FENCE_SQL}) AND datetime(expires_at) > datetime('now')
+     ORDER BY created_at DESC LIMIT 1`,
+  ).first<Phase5FenceRow>();
+  if (active && (active.pilot_key !== pilotKey || active.job_id !== jobId)) {
+    return json({ ok: false, error: "A different Phase 5 local pilot fence is already active", active }, { status: 409 });
+  }
+  const job = await env.REEL_DB.prepare(
+    `SELECT id,status,stage,source_message_id,dedupe_key,created_at,pilot_run_id
+     FROM jobs WHERE id=?`,
+  ).bind(jobId).first<Pick<JobRow, "id" | "status" | "stage" | "source_message_id" | "dedupe_key" | "created_at" | "pilot_run_id">>();
+  if (!job) return json({ ok: false, error: "Exact job not found" }, { status: 404 });
+  if (job.pilot_run_id) return json({ ok: false, error: "Pilot/backlog jobs cannot be fenced for Phase 5 local compute" }, { status: 409 });
+  if (job.status !== "queued") return json({ ok: false, error: "Only a queued new share can be fenced", job_status: job.status, job_stage: job.stage }, { status: 409 });
+  if (job.source_message_id !== sourceMessageId) return json({ ok: false, error: "source_message_id does not match the job" }, { status: 409 });
+  if (Date.parse(job.created_at) < Date.parse(PHASE5_MIN_EXPLICIT_JOB_CREATED_AT)) {
+    return json({ ok: false, error: "Phase 5 pilot fences require a new explicitly identified post-gate share" }, { status: 409 });
+  }
+  const audit = {
+    pilot_key: pilotKey,
+    job_id: jobId,
+    source_message_id: sourceMessageId,
+    min_created_at: PHASE5_MIN_EXPLICIT_JOB_CREATED_AT,
+    created_by: "admin_explicit_phase5_pilot",
+  };
+  await env.REEL_DB.batch([
+    env.REEL_DB.prepare(
+      `INSERT INTO phase5_local_pilot_fences(pilot_key,job_id,source_message_id,dedupe_key,status,expires_at,audit_json)
+       VALUES (?, ?, ?, ?, 'armed', ?, ?)
+       ON CONFLICT(pilot_key) DO UPDATE SET
+         job_id=excluded.job_id,
+         source_message_id=excluded.source_message_id,
+         dedupe_key=excluded.dedupe_key,
+         status=CASE WHEN phase5_local_pilot_fences.status IN ('armed','local_claimed','local_processing') THEN phase5_local_pilot_fences.status ELSE 'armed' END,
+         expires_at=excluded.expires_at,
+         audit_json=excluded.audit_json,
+         updated_at=CURRENT_TIMESTAMP
+       WHERE phase5_local_pilot_fences.job_id=excluded.job_id`,
+    ).bind(pilotKey, jobId, sourceMessageId, job.dedupe_key || null, expiresAt, JSON.stringify(audit)),
+    env.REEL_DB.prepare(
+      `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+       SELECT ?,'phase5_local_fenced','queued','🧪',?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM job_events WHERE job_id=? AND stage='phase5_local_fenced' AND instr(COALESCE(detail,''), ?) > 0
+       )`,
+    ).bind(jobId, JSON.stringify({ ...audit, marker: `phase5-local-pilot:${pilotKey}:fenced`, expires_at: expiresAt }), jobId, `phase5-local-pilot:${pilotKey}:fenced`),
+  ]);
+  return json({ ok: true, fenced: true, pilot_key: pilotKey, job_id: jobId, source_message_id: sourceMessageId, expires_at: expiresAt });
+}
+
+async function handlePhase5Rollback(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{ pilot_key?: string; job_id?: string; confirm_rollback?: string; reason?: string }>(request);
+  let validated: ReturnType<typeof validatePhase5RollbackRequest>;
+  try {
+    validated = validatePhase5RollbackRequest({ ...input, confirmation: input.confirm_rollback });
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const fence = await env.REEL_DB.prepare(
+    `SELECT pilot_key,job_id,source_message_id,status,expires_at
+     FROM phase5_local_pilot_fences WHERE pilot_key=? AND job_id=?`,
+  ).bind(validated.pilotKey, validated.jobId).first<Phase5FenceRow>();
+  if (!fence) return json({ ok: false, error: "Phase 5 pilot fence not found" }, { status: 404 });
+  if (fence.status === "rolled_back") return json({ ok: true, rolled_back: true, idempotent: true, queued: false, pilot_key: validated.pilotKey, job_id: validated.jobId });
+  if (!isPhase5ActiveFenceStatus(fence.status)) {
+    return json({ ok: false, error: "Only an active Phase 5 fence can be rolled back to cloud queue", fence_status: fence.status }, { status: 409 });
+  }
+  const job = await env.REEL_DB.prepare("SELECT id,status,stage FROM jobs WHERE id=?").bind(validated.jobId).first<Pick<JobRow, "id" | "status" | "stage">>();
+  if (!job) return json({ ok: false, error: "Job not found" }, { status: 404 });
+  if (job.status === "complete") return json({ ok: false, error: "Completed jobs cannot be requeued by Phase 5 rollback" }, { status: 409 });
+  await env.REEL_DB.batch([
+    env.REEL_DB.prepare(
+      `UPDATE phase5_local_pilot_fences
+       SET status='rolled_back',rollback_at=CURRENT_TIMESTAMP,rollback_reason=?,updated_at=CURRENT_TIMESTAMP
+       WHERE pilot_key=? AND job_id=? AND status IN (${PHASE5_ACTIVE_FENCE_SQL})`,
+    ).bind(validated.reason, validated.pilotKey, validated.jobId),
+    env.REEL_DB.prepare(
+      "UPDATE jobs SET status='queued',stage='queued',error_code=NULL,error_message=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status <> 'complete'",
+    ).bind(validated.jobId),
+    env.REEL_DB.prepare(
+      "INSERT INTO job_events(job_id,stage,status,emoji,detail) VALUES (?,'phase5_local_rollback','queued','↩️',?)",
+    ).bind(validated.jobId, JSON.stringify({ pilot_key: validated.pilotKey, reason: validated.reason, requeued_to_cloud: true })),
+  ]);
+  await env.REEL_QUEUE.send({ jobId: validated.jobId });
+  return json({ ok: true, rolled_back: true, queued: true, pilot_key: validated.pilotKey, job_id: validated.jobId });
+}
+
 async function handlePilotSummaryDm(request: Request, env: Env): Promise<Response> {
   const input = await readJson<{ pilot_key?: string; confirm_send?: string }>(request);
   const pilotKey = String(input.pilot_key || "").trim();
@@ -4275,6 +4425,11 @@ async function runCodexAuthProbe(env: Env, authJson: string): Promise<{ ok: bool
 async function processJob(env: Env, jobId: string): Promise<void> {
   const job = await env.REEL_DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(jobId).first<JobRow>();
   if (!job || job.status === "complete") return;
+  const phase5Fence = await activePhase5FenceForJob(env, job.id);
+  if (phase5Fence) {
+    await auditPhase5CloudFenceSkip(env, job, phase5Fence);
+    return;
+  }
   // Queue delivery, including its configured delayed retries, is the authority for
   // attempt limits. Returning here would silently acknowledge the final retry of
   // an older administratively recovered job before it had another processing run.
@@ -4368,6 +4523,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/api/backlog/pilot/reprocess" && request.method === "POST") return handlePilotReprocess(request, env);
   if (url.pathname === "/api/backlog/pilot/rearchive" && request.method === "POST") return handlePilotRearchive(request, env);
   if (url.pathname === "/api/admin/media-enrich" && request.method === "POST") return handleMediaEnrich(request, env);
+  if (url.pathname === "/api/admin/phase5/local-pilot/fence" && request.method === "POST") return handlePhase5Fence(request, env);
+  if (url.pathname === "/api/admin/phase5/local-pilot/rollback" && request.method === "POST") return handlePhase5Rollback(request, env);
   if (url.pathname === "/api/admin/instagram-confirm-live" && request.method === "POST") return handleConfirmLiveMode(env);
   if (url.pathname === "/api/admin/instagram-pilot-summary" && request.method === "POST") return handlePilotSummaryDm(request, env);
   if (url.pathname === "/api/admin/instagram-recover-message" && request.method === "POST") return handleRecoverInstagramMessage(request, env);
