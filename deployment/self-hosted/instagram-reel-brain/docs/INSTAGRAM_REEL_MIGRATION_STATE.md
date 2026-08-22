@@ -228,7 +228,7 @@ Phase 5C then added the dedicated inert Ubuntu Reel runtime in commit
 `2f9f8e4a843ac994f53aa6836a4f406e4380a835`, corrected native PostgreSQL control
 in commit `e42cb63100b55302416e616e53d369b0d31477e9`, corrected the
 control/compute secret boundary in commit `aff756d`, and corrected the missing
-staged orchestration path in commit `b7e1d0e`.
+staged orchestration path in commit `db79057`.
 The final server runtime is split into stopped/profile-gated services:
 `phase5-control` handles exact PostgreSQL and future Worker control only, with
 no Codex auth mount; and `phase5-compute` handles media/Codex only, with no

@@ -4,7 +4,7 @@ Status: ready for independent supervisor review; Phase 6 not started.
 
 Timestamp: 2026-08-22T17:08:20.6600469+10:00
 
-Commit: `b7e1d0e`
+Commit: `db79057`
 
 ## Scope
 
@@ -254,7 +254,7 @@ docker image rm cartdotcom-instagram-reel-brain-phase5-compute:latest
 Source rollback after the final commit:
 
 ```bash
-git revert b7e1d0e
+git revert db79057
 ```
 
 Then copy the reverted scoped files back to `/srv/cartdotcom/instagram-reel-brain`. This does not touch Cloudflare, D1/R2/KV, Instagram, News runtime, production data, or credentials.

@@ -3,7 +3,7 @@
 ## 2026-08-22
 
 - Corrected the remaining Phase 5C operational blocker in commit
-  `b7e1d0e`: added a host-side exact one-shot
+  `db79057`: added a host-side exact one-shot
   `phase5_one_job_orchestrator.py` plus staged `phase5_staged_runner.py`
   commands for control start, compute execution, control finalize, and
   pre-publication abort across the split `phase5-control` / `phase5-compute`
