@@ -29,7 +29,8 @@ test("compose keeps every operational flag disabled", () => {
     "REEL_BACKLOG_ENABLED",
     "REEL_PUBLISHER_ENABLED",
     "REEL_ARCHIVER_ENABLED",
-    "REEL_AUTH_ROTATOR_ENABLED"
+    "REEL_AUTH_ROTATOR_ENABLED",
+    "REEL_PHASE5_RUNNER_ENABLED"
   ]) {
     assert.match(compose, new RegExp(`${key}: "\\$\\{${key}:-false\\}"`));
     assert.match(envExample, new RegExp(`${key}=false`));
@@ -51,8 +52,10 @@ test("compose resource ceilings remain under phase one limits", () => {
 
 test("all services have pid and no-new-privileges constraints", () => {
   const serviceCount = (compose.match(/REEL_SERVICE_NAME:/g) || []).length;
-  assert.equal(serviceCount, 6);
+  assert.equal(serviceCount, 7);
+  assert.match(compose, /profiles: \["phase5-runner"\]/);
   assert.equal((compose.match(/pids_limit: 128/g) || []).length, 1);
+  assert.match(compose, /pids_limit: 256/);
   assert.match(compose, /no-new-privileges:true/);
 });
 

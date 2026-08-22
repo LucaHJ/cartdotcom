@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["metadata", "transcript", "summary", "visual_summary", "audio", "claims", "resources"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_url", "shortcode", "title", "author_username", "description"],
+      "properties": {
+        "canonical_url": { "type": "string" },
+        "shortcode": { "type": "string" },
+        "title": { "type": "string" },
+        "author_username": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "transcript": { "type": "string" },
+    "summary": { "type": "string" },
+    "visual_summary": { "type": "string" },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "artist", "source_url", "identification_method", "confidence"],
+      "properties": {
+        "title": { "type": ["string", "null"] },
+        "artist": { "type": ["string", "null"] },
+        "source_url": { "type": ["string", "null"] },
+        "identification_method": {
+          "type": "string",
+          "enum": ["instagram_metadata", "transcript_research", "unidentified"]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["high", "medium", "low", "unverified"]
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "confidence", "evidence"],
+        "properties": {
+          "claim": { "type": "string" },
+          "confidence": { "type": "string", "enum": ["high", "medium", "low", "unverified"] },
+          "evidence": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "kind", "artifact_type", "canonical_url", "summary", "why_useful", "guide", "sources", "hero_image_url", "hero_image_alt", "spotify_url", "youtube_candidates", "article_links"],
+        "properties": {
+          "name": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["recipe", "software", "product", "service", "organization", "person", "place", "technique", "learning", "media", "reference", "other"]
+          },
+          "artifact_type": {
+            "type": ["string", "null"],
+            "enum": ["font", "quote", "film", "tv_show", "recipe", "book", "music", "podcast", null]
+          },
+          "canonical_url": { "type": ["string", "null"] },
+          "summary": { "type": "string" },
+          "why_useful": { "type": "string" },
+          "guide": { "type": "string" },
+          "sources": { "type": "array", "items": { "type": "string" } },
+          "hero_image_url": { "type": ["string", "null"] },
+          "hero_image_alt": { "type": ["string", "null"] },
+          "spotify_url": { "type": ["string", "null"] },
+          "youtube_candidates": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["title", "channel", "url", "confidence", "match_reason"],
+              "properties": {
+                "title": { "type": "string" },
+                "channel": { "type": "string" },
+                "url": { "type": "string" },
+                "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+                "match_reason": { "type": "string" }
+              }
+            }
+          },
+          "article_links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["title", "publisher", "url"],
+              "properties": {
+                "title": { "type": "string" },
+                "publisher": { "type": "string" },
+                "url": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
