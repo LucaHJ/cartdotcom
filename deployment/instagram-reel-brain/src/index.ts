@@ -21,11 +21,17 @@ import {
   type Phase4MirrorScope,
 } from "./phase4-mirror";
 import {
+  PHASE5_ARM_CONFIRMATION,
+  PHASE5_CANCEL_ARM_CONFIRMATION,
   PHASE5_MIN_EXPLICIT_JOB_CREATED_AT,
   isPhase5ActiveFenceStatus,
   phase5FenceActive,
+  phase5ArmCanCaptureShare,
+  validatePhase5PreintakeArmRequest,
+  validatePhase5PreintakeCancelRequest,
   validatePhase5FenceRequest,
   validatePhase5RollbackRequest,
+  type Phase5PreintakeArmRow,
   type Phase5FenceRow,
 } from "./phase5-pilot";
 import {
@@ -2950,11 +2956,126 @@ async function handlePhase5Rollback(request: Request, env: Env): Promise<Respons
       "UPDATE jobs SET status='queued',stage='queued',error_code=NULL,error_message=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status <> 'complete'",
     ).bind(validated.jobId),
     env.REEL_DB.prepare(
+      `UPDATE phase5_preintake_arms
+       SET status='rolled_back',rollback_at=CURRENT_TIMESTAMP,rollback_reason=?,updated_at=CURRENT_TIMESTAMP
+       WHERE arm_key=? AND job_id=? AND status='captured'`,
+    ).bind(validated.reason, validated.pilotKey, validated.jobId),
+    env.REEL_DB.prepare(
       "INSERT INTO job_events(job_id,stage,status,emoji,detail) VALUES (?,'phase5_local_rollback','queued','↩️',?)",
     ).bind(validated.jobId, JSON.stringify({ pilot_key: validated.pilotKey, reason: validated.reason, requeued_to_cloud: true })),
   ]);
   await env.REEL_QUEUE.send({ jobId: validated.jobId });
   return json({ ok: true, rolled_back: true, queued: true, pilot_key: validated.pilotKey, job_id: validated.jobId });
+}
+
+async function handlePhase5PreintakeArm(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{ arm_key?: string; sender_id?: string; confirm_arm?: string; expires_minutes?: number }>(request);
+  let validated: ReturnType<typeof validatePhase5PreintakeArmRequest>;
+  try {
+    validated = validatePhase5PreintakeArmRequest({ ...input, confirmation: input.confirm_arm });
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const allowed = allowedInstagramSenders(env);
+  if (allowed.length && !allowed.includes(validated.senderId)) {
+    return json({ ok: false, error: "Phase 5 pre-intake arm sender must be allowlisted" }, { status: 403 });
+  }
+  const activeFence = await env.REEL_DB.prepare(
+    `SELECT pilot_key,job_id,source_message_id,status,expires_at
+     FROM phase5_local_pilot_fences
+     WHERE status IN (${PHASE5_ACTIVE_FENCE_SQL}) AND datetime(expires_at) > datetime('now')
+     LIMIT 1`,
+  ).first<Phase5FenceRow>();
+  if (activeFence) return json({ ok: false, error: "A Phase 5 job fence is already active", active_fence: activeFence }, { status: 409 });
+  const audit = {
+    arm_key: validated.armKey,
+    sender_id: validated.senderId,
+    media_type: "reel",
+    confirmation: PHASE5_ARM_CONFIRMATION,
+    operator_scope: "capture_next_new_reel_only",
+  };
+  try {
+    await env.REEL_DB.prepare(
+      `INSERT INTO phase5_preintake_arms(arm_key,sender_id,media_type,status,armed_at,expires_at,audit_json)
+       VALUES (?, ?, 'reel', 'armed', ?, ?, ?)`,
+    ).bind(validated.armKey, validated.senderId, validated.armedAt, validated.expiresAt, JSON.stringify(audit)).run();
+  } catch (error) {
+    const existing = await env.REEL_DB.prepare(
+      "SELECT arm_key,sender_id,media_type,status,armed_at,expires_at,source_message_id,job_id FROM phase5_preintake_arms WHERE status='armed' LIMIT 1",
+    ).first<Phase5PreintakeArmRow>();
+    return json({ ok: false, error: "A Phase 5 pre-intake arm is already active", active_arm: existing, detail: String((error as Error).message || error).slice(0, 300) }, { status: 409 });
+  }
+  return json({
+    ok: true,
+    armed: true,
+    arm_key: validated.armKey,
+    sender_id: validated.senderId,
+    media_type: "reel",
+    armed_at: validated.armedAt,
+    expires_at: validated.expiresAt,
+    instruction: "Send exactly one brand-new Reel from the allowlisted sender before expiry.",
+  });
+}
+
+async function handlePhase5PreintakeCancel(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{ arm_key?: string; confirm_cancel?: string; reason?: string }>(request);
+  let validated: ReturnType<typeof validatePhase5PreintakeCancelRequest>;
+  try {
+    validated = validatePhase5PreintakeCancelRequest({ ...input, confirmation: input.confirm_cancel });
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const result = await env.REEL_DB.prepare(
+    `UPDATE phase5_preintake_arms
+     SET status='cancelled',rollback_at=CURRENT_TIMESTAMP,rollback_reason=?,updated_at=CURRENT_TIMESTAMP
+     WHERE arm_key=? AND status='armed'`,
+  ).bind(validated.reason, validated.armKey).run();
+  return json({ ok: true, cancelled: (result.meta.changes || 0) === 1, arm_key: validated.armKey });
+}
+
+async function capturePhase5PreintakeArmForJob(
+  env: Env,
+  input: {
+    jobId: string;
+    senderId?: string | null;
+    sourceMessageId?: string | null;
+    canonicalUrl: string;
+    dedupeKey: string;
+  },
+): Promise<{ captured: boolean; armKey?: string; expiresAt?: string }> {
+  if (!input.senderId || !input.sourceMessageId || !input.canonicalUrl.includes("/reel/")) return { captured: false };
+  const arm = await env.REEL_DB.prepare(
+    `SELECT arm_key,sender_id,media_type,status,armed_at,expires_at,source_message_id,job_id
+     FROM phase5_preintake_arms
+     WHERE status='armed' AND sender_id=? AND media_type='reel'
+     ORDER BY datetime(armed_at) DESC LIMIT 1`,
+  ).bind(input.senderId).first<Phase5PreintakeArmRow>();
+  if (!phase5ArmCanCaptureShare(arm, { senderId: input.senderId, mediaType: "reel" })) return { captured: false };
+  const claim = await env.REEL_DB.prepare(
+    `UPDATE phase5_preintake_arms
+     SET status='captured',consumed_at=CURRENT_TIMESTAMP,source_message_id=?,job_id=?,event_id=?,updated_at=CURRENT_TIMESTAMP
+     WHERE arm_key=? AND status='armed' AND sender_id=? AND media_type='reel'
+       AND datetime(armed_at) <= datetime('now') AND datetime(expires_at) > datetime('now')`,
+  ).bind(input.sourceMessageId, input.jobId, input.sourceMessageId, arm!.arm_key, input.senderId).run();
+  if ((claim.meta.changes || 0) !== 1) return { captured: false };
+  const audit = {
+    pilot_key: arm!.arm_key,
+    job_id: input.jobId,
+    source_message_id: input.sourceMessageId,
+    preintake_arm: true,
+    media_type: "reel",
+    sender_id: input.senderId,
+  };
+  await env.REEL_DB.batch([
+    env.REEL_DB.prepare(
+      `INSERT INTO phase5_local_pilot_fences(pilot_key,job_id,source_message_id,dedupe_key,status,expires_at,audit_json)
+       VALUES (?, ?, ?, ?, 'armed', ?, ?)`,
+    ).bind(arm!.arm_key, input.jobId, input.sourceMessageId, input.dedupeKey, arm!.expires_at, JSON.stringify(audit)),
+    env.REEL_DB.prepare(
+      "INSERT INTO job_events(job_id,stage,status,emoji,detail) VALUES (?,'phase5_preintake_captured','queued','🧪',?)",
+    ).bind(input.jobId, JSON.stringify({ ...audit, expires_at: arm!.expires_at })),
+  ]);
+  return { captured: true, armKey: arm!.arm_key, expiresAt: arm!.expires_at };
 }
 
 async function handlePilotSummaryDm(request: Request, env: Env): Promise<Response> {
@@ -3080,7 +3201,7 @@ async function createJob(
     sourceMediaJson?: string | null;
     queueDelayMode?: string;
   },
-): Promise<{ id: string; canonicalUrl: string; shortcode: string; duplicate: boolean }> {
+): Promise<{ id: string; canonicalUrl: string; shortcode: string; duplicate: boolean; phase5_preintake_captured?: boolean; phase5_arm_key?: string }> {
   const canonical = canonicalizeInstagramUrl(input.sourceUrl);
   if (!canonical) throw new Error("A supported Instagram Reel or post URL is required");
   const dedupeKey = instagramDedupeKey(canonical.url);
@@ -3128,6 +3249,13 @@ async function createJob(
   await env.REEL_DB.prepare(
     "INSERT INTO job_events(job_id, stage, status, emoji, detail) VALUES (?, 'queued', 'queued', ?, 'Accepted after pre-Codex canonical Reel deduplication')",
   ).bind(id, emoji.display).run();
+  const phase5Capture = await capturePhase5PreintakeArmForJob(env, {
+    jobId: id,
+    senderId: input.senderId || null,
+    sourceMessageId: input.sourceMessageId || null,
+    canonicalUrl: canonical.url,
+    dedupeKey,
+  });
   if (shouldReactToStage("queued")) {
     await reactToSourceMessage(env, { id, source_message_id: input.sourceMessageId || null, sender_id: input.senderId || null }, "queued");
   }
@@ -3138,7 +3266,14 @@ async function createJob(
     await setStage(env, { id, source_message_id: input.sourceMessageId || null, sender_id: input.senderId || null }, "error_queue", "failed", detail);
     throw error;
   }
-  return { id, canonicalUrl: canonical.url, shortcode: canonical.shortcode, duplicate: false };
+  return {
+    id,
+    canonicalUrl: canonical.url,
+    shortcode: canonical.shortcode,
+    duplicate: false,
+    phase5_preintake_captured: phase5Capture.captured || undefined,
+    phase5_arm_key: phase5Capture.armKey,
+  };
 }
 
 async function handleTestCreate(request: Request, env: Env): Promise<Response> {
@@ -4523,6 +4658,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/api/backlog/pilot/reprocess" && request.method === "POST") return handlePilotReprocess(request, env);
   if (url.pathname === "/api/backlog/pilot/rearchive" && request.method === "POST") return handlePilotRearchive(request, env);
   if (url.pathname === "/api/admin/media-enrich" && request.method === "POST") return handleMediaEnrich(request, env);
+  if (url.pathname === "/api/admin/phase5/local-pilot/arm-next-reel" && request.method === "POST") return handlePhase5PreintakeArm(request, env);
+  if (url.pathname === "/api/admin/phase5/local-pilot/cancel-arm" && request.method === "POST") return handlePhase5PreintakeCancel(request, env);
   if (url.pathname === "/api/admin/phase5/local-pilot/fence" && request.method === "POST") return handlePhase5Fence(request, env);
   if (url.pathname === "/api/admin/phase5/local-pilot/rollback" && request.method === "POST") return handlePhase5Rollback(request, env);
   if (url.pathname === "/api/admin/instagram-confirm-live" && request.method === "POST") return handleConfirmLiveMode(env);

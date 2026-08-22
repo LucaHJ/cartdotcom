@@ -2,8 +2,8 @@
 
 Status: Phase 4 shadow live intake observation passed independent review.
 Bounded Phase 5 preparation is implemented and deployed. The first live
-controlled-compute pilot is waiting for one brand-new Reel share to be
-explicitly identified and fenced.
+controlled-compute pilot is waiting for an admin-authenticated pre-intake arm
+followed by one brand-new Reel share within the arm window.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
@@ -59,8 +59,10 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
   after a stale/reused-PID replacement test.
 - Empty production D1 Phase 5 fence table `phase5_local_pilot_fences`, created
   by migration `0021_phase5_local_pilot_fence.sql`.
-- Admin-only Cloudflare Phase 5 fence/rollback endpoints on Worker version
-  `4e80693d-cb8f-4728-9528-1f2e6d700d32`.
+- Empty production D1 Phase 5 pre-intake arm table `phase5_preintake_arms`,
+  created by migration `0022_phase5_preintake_arm.sql`.
+- Admin-only Cloudflare Phase 5 arm/fence/rollback endpoints on Worker version
+  `fa6edd0c-f0a6-4f30-852c-94b1d5c94c9f`.
 - Non-authoritative local Phase 5 lease/event tables from
   `0005_phase5_controlled_pilot.sql`, with one-active-lease enforcement through
   `phase5_pilot_leases_one_active_idx`.
@@ -94,7 +96,10 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
 - Unrestricted Phase 5 local claims; only one future exact admin-fenced job may
   be processed locally.
 - Live Phase 5 pilot execution until a brand-new Reel share is explicitly
-  identified.
+  preceded by an explicit pre-intake arm and then identified.
+- Reuse of missed manual-race job `35004cbd-a428-419f-93bf-96c3bcb54598`;
+  it completed under cloud authority and is permanently excluded as the first
+  local pilot.
 - Phase 6 or general production authority cutover.
 
 ## Limits
@@ -116,9 +121,13 @@ Cloudflare/backlog or Docker health failure. The historical replay remains
 exactly 50 jobs, 200 events, 722 artifacts, 258 resources, 1,075 object
 receipts, 0 divergences, and 0 errors.
 
-Phase 5 preparation is complete through the readiness gate. The system is
-waiting for one brand-new Reel share to be explicitly identified. After that,
-an admin must fence the exact durable `job_id` and `source_message_id` before
-local compute is allowed. No carousel, retrieval case, second pilot, Phase 6
-work, or authority cutover is approved before the first fenced Reel completes
-and receives independent review.
+Phase 5 preparation is complete through the corrected readiness gate. The first
+manual live attempt exposed an invalid operator race: job
+`35004cbd-a428-419f-93bf-96c3bcb54598` was claimed by the cloud queue before it
+could be fenced and completed under cloud authority. The replacement mechanism
+is pre-intake arming: an admin must arm capture of the next new Reel for the
+exact allowlisted sender, with a maximum 15-minute expiry, before the user sends
+the Reel. Intake consumes the arm and creates the exact active fence before any
+cloud queue message is published. No carousel, retrieval case, second pilot,
+Phase 6 work, or authority cutover is approved before the first pre-armed Reel
+completes and receives independent review.

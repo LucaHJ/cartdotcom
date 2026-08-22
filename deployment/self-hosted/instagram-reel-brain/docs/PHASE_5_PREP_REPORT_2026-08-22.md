@@ -4,6 +4,12 @@
 
 Phase 4 was independently accepted and Phase 5 preparation is implemented for a single controlled-compute pilot. No live pilot job has been selected or processed. Cloudflare remains the sole production authority except for a future explicitly fenced one-job local pilot.
 
+Update after first live readiness attempt:
+
+- The initial manual post-intake fence approach was rejected after a real test exposed a race: job `35004cbd-a428-419f-93bf-96c3bcb54598` was claimed by the cloud queue before an operator could fence it.
+- That job remained cloud-owned, completed under Cloudflare authority, and must never be reused as a Phase 5 pilot.
+- The readiness mechanism was corrected to use a disabled-by-default, admin-authenticated pre-intake arm. The operator now arms "capture the next new Reel" before the user sends the Reel; intake consumes the arm and creates the active fence before any cloud queue message is published.
+
 ## Phase 4 evidence recorded before Phase 5
 
 The independently accepted Phase 4 gate evidence was recorded as:
@@ -58,6 +64,44 @@ Cloud D1 migration:
 
 The cloud queue processor now checks `phase5_local_pilot_fences` before it marks a job `running` or starts the container. If the exact job is actively fenced, it writes a deduplicated `phase5_local_fenced` audit event and returns without cloud processing. Rollback marks the fence `rolled_back`, resets the job to `queued` unless already complete, records `phase5_local_rollback`, and queues exactly that job back to Cloudflare.
 
+### Pre-intake arm correction
+
+Added admin-only pre-intake controls:
+
+- `POST /api/admin/phase5/local-pilot/arm-next-reel`
+- `POST /api/admin/phase5/local-pilot/cancel-arm`
+
+Cloud D1 migration:
+
+- `deployment/instagram-reel-brain/migrations/0022_phase5_preintake_arm.sql`
+- Table: `phase5_preintake_arms`
+- Active arm status: `armed`
+- Terminal/evidence statuses: `captured`, `cancelled`, `expired`, `rolled_back`
+- Partial unique index: `phase5_preintake_arms_one_active_idx`
+
+Arm constraints:
+
+- Admin-authenticated only.
+- Requires exact confirmation phrase `ARM NEXT PHASE 5 REEL PILOT SHARE`.
+- Requires exact allowlisted `sender_id`.
+- Reel media type only.
+- Maximum expiry `15` minutes.
+- Strict max one active arm.
+- Does not inspect, select, replay, or mutate existing backlog/historical jobs.
+
+Capture path:
+
+- `createJob()` checks for a matching active arm only after a new non-duplicate job row is inserted and before the queued reaction or queue send.
+- The match requires:
+  - same sender;
+  - canonical URL is a Reel URL;
+  - arm is `armed`;
+  - current time is after `armed_at` and before `expires_at`;
+  - exact source message id is bound during capture.
+- Intake atomically claims the arm with a guarded `UPDATE`, writes the active `phase5_local_pilot_fences` row, then emits the normal cloud queue message.
+- The cloud queue processor sees that fence and acknowledges/refuses the job without transitioning it to `running`.
+- Local processing remains disabled until a later exact-job local claim verifies the consumed arm/fence and local prerequisites.
+
 New-share fence:
 
 - The fence route refuses jobs older than `2026-08-21T15:01:28.000Z`.
@@ -69,7 +113,10 @@ New-share fence:
 Deployment:
 
 - D1 migration applied remotely: `0021_phase5_local_pilot_fence.sql`.
-- Worker version deployed: `4e80693d-cb8f-4728-9528-1f2e6d700d32`.
+- D1 migration applied remotely: `0022_phase5_preintake_arm.sql`.
+- Worker versions deployed:
+  - `4e80693d-cb8f-4728-9528-1f2e6d700d32` for the initial post-intake fence.
+  - `fa6edd0c-f0a6-4f30-852c-94b1d5c94c9f` for the corrected pre-intake arm mechanism.
 - First deploy attempt failed because local Docker was unavailable for container image rebuild.
 - Successful deploy used `wrangler deploy --containers-rollout=none`; no container rollout occurred.
 
@@ -116,7 +163,9 @@ It uses local fixtures only and does not call Instagram, Codex, Cloudflare R2/KV
 - Cloudflare D1/R2/KV remain available.
 - Cloudflare queue remains the default processing authority.
 - Empty Phase 5 fence table exists in D1.
+- Empty Phase 5 pre-intake arm table exists in D1.
 - Worker can fence exactly one explicitly identified new queued job after admin approval.
+- Worker can arm capture of the next new Reel from an exact allowlisted sender for up to 15 minutes.
 - Local repository can record one synthetic/pilot lease in isolated PostgreSQL schemas.
 - Synthetic-only local processing harness exists for tests.
 
@@ -132,6 +181,8 @@ It uses local fixtures only and does not call Instagram, Codex, Cloudflare R2/KV
 - No historical backlog enumeration/replay/selection.
 - No Phase 6 authority cutover.
 - No live Phase 5 pilot job selected yet.
+- No active pre-intake arm.
+- No captured pre-intake arm.
 
 ## Verification
 
@@ -145,7 +196,8 @@ npm test
 from `deployment/instagram-reel-brain`:
 
 - TypeScript: passed.
-- Cloud Node tests: `79/79` passed.
+- Cloud Node tests after initial fence: `79/79` passed.
+- Cloud Node tests after pre-intake correction: `83/83` passed.
 
 ```powershell
 npm test
@@ -154,6 +206,7 @@ npm test
 from `deployment/self-hosted/instagram-reel-brain`:
 
 - Self-hosted Node tests: `49` passed, `1` expected Windows symlink skip, `0` failed.
+- Self-hosted Node tests after pre-intake correction: `49` passed, `1` expected Windows symlink skip, `0` failed.
 - Connected isolated PostgreSQL Phase 5 test passed and proved:
   - one active lease enforced by `phase5_pilot_leases_one_active_idx`;
   - exact-job claim;
@@ -167,6 +220,7 @@ python -m unittest tests.test_media_processor_api tests.test_phase4_shadow_mirro
 from `deployment/self-hosted/instagram-reel-brain`:
 
 - Python/media tests: `17/17` passed.
+- Python/media tests after pre-intake correction: `17/17` passed.
 
 Production/server verification:
 
@@ -187,6 +241,8 @@ Results:
 - Active backlog pilots: `0`.
 - Phase 5 fences: `0`.
 - Active Phase 5 fences: `0`.
+- Pre-intake arms: `0 armed`, `0 captured`.
+- Missed first live attempt job `35004cbd-a428-419f-93bf-96c3bcb54598`: `complete`, cloud-owned, not reusable as pilot.
 - Reel, News, Caddy, PostgreSQL containers: healthy.
 
 ## Rollback
@@ -225,19 +281,26 @@ The D1 table is empty and inert unless an admin explicitly creates a fence. If n
 
 ## Readiness gate for first live pilot
 
-Stop point reached. A live Phase 5 pilot must not start until a brand-new Reel share is explicitly identified.
+Stop point reached. A live Phase 5 pilot must not start until the pre-intake arm is explicitly created and the user sends one brand-new Reel within the arm window.
 
-Minimal user action:
+Exact arm-then-share sequence:
 
-1. Send one brand-new test Reel to the Instagram system account.
-2. Tell the operator this exact share is the Phase 5 pilot candidate.
-3. The operator must identify the durable `job_id` and `source_message_id`, then create the cloud fence for that exact queued job.
+1. Operator calls `POST /api/admin/phase5/local-pilot/arm-next-reel` with:
+   - exact allowlisted `sender_id`;
+   - `arm_key`;
+   - `confirm_arm = "ARM NEXT PHASE 5 REEL PILOT SHARE"`;
+   - `expires_minutes <= 15`.
+2. User sends exactly one brand-new Reel before `expires_at`.
+3. Intake consumes the arm, writes the exact active fence, and queues the job.
+4. Cloud queue acknowledges/refuses the fenced job without running it.
+5. Operator verifies the exact consumed `arm_key`, `job_id`, and `source_message_id`.
+6. Only then may the local exact-job pilot claim be run.
 
 After the fence exists, only that one job may be processed locally. A separate gate report is required before any carousel, retrieval case, second pilot, Phase 6 work, or general authority cutover.
 
 ## Remaining risks
 
-- The cloud fence/admin endpoints are deployed but have not yet been exercised against a real new share because no new pilot share has been explicitly identified.
+- The corrected pre-intake arm endpoints are deployed but not yet live-exercised with a real new share.
 - The local synthetic path proves stage plumbing and storage contracts only; real Codex/media execution remains gated to the first fenced job.
 - If a fenced job expires before local processing starts, cloud processing will not automatically run until rollback/requeue is issued.
 - Container deploy still requires local Docker unless using `--containers-rollout=none`; this was acceptable for this Worker-only change.
