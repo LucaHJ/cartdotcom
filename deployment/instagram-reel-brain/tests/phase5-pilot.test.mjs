@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import {
   PHASE5_ARM_CONFIRMATION,
+  PHASE5_CAROUSEL_ARM_CONFIRMATION,
   PHASE5_CANCEL_ARM_CONFIRMATION,
   PHASE5_FENCE_CONFIRMATION,
   PHASE5_START_CONFIRMATION,
@@ -34,6 +35,7 @@ import {
 const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../migrations/0021_phase5_local_pilot_fence.sql", import.meta.url), "utf8");
 const armMigration = readFileSync(new URL("../migrations/0022_phase5_preintake_arm.sql", import.meta.url), "utf8");
+const carouselArmMigration = readFileSync(new URL("../migrations/0023_phase5_carousel_arm.sql", import.meta.url), "utf8");
 const phase5Owner = "phase5-local-worker-1";
 const phase5Hash = "a".repeat(64);
 const phase5Now = Date.parse("2026-08-22T03:00:00.000Z");
@@ -759,6 +761,23 @@ test("Phase 5 pre-intake arm requires exact sender, confirmation and short expir
   assert.equal(armed.armedAt, "2026-08-22T02:00:00.000Z");
   assert.equal(armed.expiresAt, "2026-08-22T02:15:00.000Z", "pre-intake arms are capped at 15 minutes");
 
+  const carousel = validatePhase5PreintakeArmRequest({
+    arm_key: "phase5-next-carousel",
+    sender_id: "4313779425530608",
+    media_type: "carousel",
+    confirmation: PHASE5_CAROUSEL_ARM_CONFIRMATION,
+  }, now);
+  assert.equal(carousel.mediaType, "carousel");
+  assert.throws(
+    () => validatePhase5PreintakeArmRequest({
+      arm_key: "phase5-next-carousel",
+      sender_id: "4313779425530608",
+      media_type: "carousel",
+      confirmation: PHASE5_ARM_CONFIRMATION,
+    }),
+    /CAROUSEL PILOT SHARE/,
+  );
+
   assert.throws(
     () => validatePhase5PreintakeCancelRequest({ arm_key: "phase5-next-reel", confirmation: "wrong" }),
     /confirmation must equal/,
@@ -802,11 +821,22 @@ test("Phase 5 arm captures only an unexpired matching Reel from the armed sender
     mediaType: "reel",
     now: Date.parse("2026-08-22T02:16:00.000Z"),
   }), false);
+  assert.equal(phase5ArmCanCaptureShare({ ...arm, media_type: "carousel" }, {
+    senderId: "4313779425530608",
+    mediaType: "carousel",
+    now: Date.parse("2026-08-22T02:05:00.000Z"),
+  }), true);
 });
 
 test("Phase 5 pre-intake D1 migration enforces max-one active arm and preserves captured evidence", () => {
   const db = new DatabaseSync(":memory:");
   db.exec(armMigration);
+  db.prepare(
+    `INSERT INTO phase5_preintake_arms(arm_key,sender_id,media_type,status,armed_at,expires_at)
+     VALUES ('historical-arm','4313779425530608','reel','captured','2026-08-21T02:00:00.000Z','2026-08-21T02:15:00.000Z')`,
+  ).run();
+  db.exec(carouselArmMigration);
+  assert.equal(db.prepare("SELECT media_type FROM phase5_preintake_arms WHERE arm_key='historical-arm'").get().media_type, "reel");
   db.prepare(
     `INSERT INTO phase5_preintake_arms(arm_key,sender_id,media_type,status,armed_at,expires_at)
      VALUES ('arm-a','4313779425530608','reel','armed','2026-08-22T02:00:00.000Z','2026-08-22T02:15:00.000Z')`,
@@ -825,7 +855,7 @@ test("Phase 5 pre-intake D1 migration enforces max-one active arm and preserves 
   ).run();
   db.prepare(
     `INSERT INTO phase5_preintake_arms(arm_key,sender_id,media_type,status,armed_at,expires_at)
-     VALUES ('arm-c','4313779425530608','reel','armed','2026-08-22T02:03:00.000Z','2026-08-22T02:15:00.000Z')`,
+     VALUES ('arm-c','4313779425530608','carousel','armed','2026-08-22T02:03:00.000Z','2026-08-22T02:15:00.000Z')`,
   ).run();
   const captured = { ...db.prepare("SELECT source_message_id,job_id,status FROM phase5_preintake_arms WHERE arm_key='arm-a'").get() };
   assert.deepEqual(captured, { source_message_id: "mid-1", job_id: "job-1", status: "captured" });
@@ -836,9 +866,11 @@ test("Phase 5 pre-intake routes are admin-only and capture happens before queue 
   const phase5GateIndex = source.indexOf("const phase5Unauthorized = requirePhase5Control(request, env);", handleApiIndex);
   const adminGateIndex = source.indexOf("const unauthorized = requireAdmin(request, env);", handleApiIndex);
   const armRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/arm-next-reel"', handleApiIndex);
+  const carouselArmRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/arm-next-carousel"', handleApiIndex);
   const cancelRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/cancel-arm"', handleApiIndex);
   const renewRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/renew"', handleApiIndex);
   assert.ok(armRouteIndex > phase5GateIndex && armRouteIndex < adminGateIndex, "pre-intake arm route must be behind Phase 5 control gate");
+  assert.ok(carouselArmRouteIndex > phase5GateIndex && carouselArmRouteIndex < adminGateIndex, "carousel arm route must be behind Phase 5 control gate");
   assert.ok(cancelRouteIndex > phase5GateIndex && cancelRouteIndex < adminGateIndex, "pre-intake cancel route must be behind Phase 5 control gate");
   assert.ok(renewRouteIndex > phase5GateIndex && renewRouteIndex < adminGateIndex, "lease renewal route must be behind Phase 5 control gate");
 
@@ -852,6 +884,7 @@ test("Phase 5 pre-intake routes are admin-only and capture happens before queue 
 
   const captureHandlerIndex = source.indexOf("async function capturePhase5PreintakeArmForJob");
   assert.ok(source.indexOf('canonicalUrl.includes("/reel/")', captureHandlerIndex) > captureHandlerIndex);
+  assert.ok(source.indexOf('canonicalUrl.includes("/p/")', captureHandlerIndex) > captureHandlerIndex);
   assert.ok(source.indexOf("INSERT INTO phase5_local_pilot_fences", captureHandlerIndex) > captureHandlerIndex);
   assert.ok(source.indexOf("UPDATE phase5_preintake_arms", captureHandlerIndex) > captureHandlerIndex);
 

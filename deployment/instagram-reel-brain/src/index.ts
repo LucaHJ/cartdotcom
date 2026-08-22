@@ -21,7 +21,6 @@ import {
   type Phase4MirrorScope,
 } from "./phase4-mirror";
 import {
-  PHASE5_ARM_CONFIRMATION,
   PHASE5_CANCEL_ARM_CONFIRMATION,
   PHASE5_MIN_EXPLICIT_JOB_CREATED_AT,
   PHASE5_RENEW_CONFIRMATION,
@@ -3754,11 +3753,11 @@ async function handlePhase5AbortLocalProcessing(request: Request, env: Env): Pro
   return json({ ok: true, aborted: true, queued: true, recovery_status: decision.recoveryStatus, pilot_key: validated.pilotKey, job_id: validated.jobId });
 }
 
-async function handlePhase5PreintakeArm(request: Request, env: Env): Promise<Response> {
+async function handlePhase5PreintakeArm(request: Request, env: Env, mediaType: "reel" | "carousel"): Promise<Response> {
   const input = await readJson<{ arm_key?: string; sender_id?: string; confirm_arm?: string; expires_minutes?: number }>(request);
   let validated: ReturnType<typeof validatePhase5PreintakeArmRequest>;
   try {
-    validated = validatePhase5PreintakeArmRequest({ ...input, confirmation: input.confirm_arm });
+    validated = validatePhase5PreintakeArmRequest({ ...input, media_type: mediaType, confirmation: input.confirm_arm });
   } catch (error) {
     return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
   }
@@ -3776,15 +3775,15 @@ async function handlePhase5PreintakeArm(request: Request, env: Env): Promise<Res
   const audit = {
     arm_key: validated.armKey,
     sender_id: validated.senderId,
-    media_type: "reel",
-    confirmation: PHASE5_ARM_CONFIRMATION,
-    operator_scope: "capture_next_new_reel_only",
+    media_type: validated.mediaType,
+    confirmation: input.confirm_arm,
+    operator_scope: `capture_next_new_${validated.mediaType}_only`,
   };
   try {
     await env.REEL_DB.prepare(
       `INSERT INTO phase5_preintake_arms(arm_key,sender_id,media_type,status,armed_at,expires_at,audit_json)
-       VALUES (?, ?, 'reel', 'armed', ?, ?, ?)`,
-    ).bind(validated.armKey, validated.senderId, validated.armedAt, validated.expiresAt, JSON.stringify(audit)).run();
+       VALUES (?, ?, ?, 'armed', ?, ?, ?)`,
+    ).bind(validated.armKey, validated.senderId, validated.mediaType, validated.armedAt, validated.expiresAt, JSON.stringify(audit)).run();
   } catch (error) {
     const existing = await env.REEL_DB.prepare(
       "SELECT arm_key,sender_id,media_type,status,armed_at,expires_at,source_message_id,job_id FROM phase5_preintake_arms WHERE status='armed' LIMIT 1",
@@ -3796,10 +3795,10 @@ async function handlePhase5PreintakeArm(request: Request, env: Env): Promise<Res
     armed: true,
     arm_key: validated.armKey,
     sender_id: validated.senderId,
-    media_type: "reel",
+    media_type: validated.mediaType,
     armed_at: validated.armedAt,
     expires_at: validated.expiresAt,
-    instruction: "Send exactly one brand-new Reel from the allowlisted sender before expiry.",
+    instruction: `Send exactly one brand-new ${validated.mediaType === "carousel" ? "carousel" : "Reel"} from the allowlisted sender before expiry.`,
   });
 }
 
@@ -3829,27 +3828,28 @@ async function capturePhase5PreintakeArmForJob(
     dedupeKey: string;
   },
 ): Promise<{ captured: boolean; armKey?: string; expiresAt?: string }> {
-  if (!input.senderId || !input.sourceMessageId || !input.canonicalUrl.includes("/reel/")) return { captured: false };
+  const mediaType = input.canonicalUrl.includes("/reel/") ? "reel" : input.canonicalUrl.includes("/p/") ? "carousel" : null;
+  if (!input.senderId || !input.sourceMessageId || !mediaType) return { captured: false };
   const arm = await env.REEL_DB.prepare(
     `SELECT arm_key,sender_id,media_type,status,armed_at,expires_at,source_message_id,job_id
      FROM phase5_preintake_arms
-     WHERE status='armed' AND sender_id=? AND media_type='reel'
+     WHERE status='armed' AND sender_id=? AND media_type=?
      ORDER BY datetime(armed_at) DESC LIMIT 1`,
-  ).bind(input.senderId).first<Phase5PreintakeArmRow>();
-  if (!phase5ArmCanCaptureShare(arm, { senderId: input.senderId, mediaType: "reel" })) return { captured: false };
+  ).bind(input.senderId, mediaType).first<Phase5PreintakeArmRow>();
+  if (!phase5ArmCanCaptureShare(arm, { senderId: input.senderId, mediaType })) return { captured: false };
   const claim = await env.REEL_DB.prepare(
     `UPDATE phase5_preintake_arms
      SET status='captured',consumed_at=CURRENT_TIMESTAMP,source_message_id=?,job_id=?,event_id=?,updated_at=CURRENT_TIMESTAMP
-     WHERE arm_key=? AND status='armed' AND sender_id=? AND media_type='reel'
+     WHERE arm_key=? AND status='armed' AND sender_id=? AND media_type=?
        AND datetime(armed_at) <= datetime('now') AND datetime(expires_at) > datetime('now')`,
-  ).bind(input.sourceMessageId, input.jobId, input.sourceMessageId, arm!.arm_key, input.senderId).run();
+  ).bind(input.sourceMessageId, input.jobId, input.sourceMessageId, arm!.arm_key, input.senderId, mediaType).run();
   if ((claim.meta.changes || 0) !== 1) return { captured: false };
   const audit = {
     pilot_key: arm!.arm_key,
     job_id: input.jobId,
     source_message_id: input.sourceMessageId,
     preintake_arm: true,
-    media_type: "reel",
+    media_type: mediaType,
     sender_id: input.senderId,
   };
   await env.REEL_DB.batch([
@@ -5444,7 +5444,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname.startsWith("/api/admin/phase5/local-pilot/")) {
     const phase5Unauthorized = requirePhase5Control(request, env);
     if (phase5Unauthorized) return phase5Unauthorized;
-    if (url.pathname === "/api/admin/phase5/local-pilot/arm-next-reel" && request.method === "POST") return handlePhase5PreintakeArm(request, env);
+    if (url.pathname === "/api/admin/phase5/local-pilot/arm-next-reel" && request.method === "POST") return handlePhase5PreintakeArm(request, env, "reel");
+    if (url.pathname === "/api/admin/phase5/local-pilot/arm-next-carousel" && request.method === "POST") return handlePhase5PreintakeArm(request, env, "carousel");
     if (url.pathname === "/api/admin/phase5/local-pilot/cancel-arm" && request.method === "POST") return handlePhase5PreintakeCancel(request, env);
     if (url.pathname === "/api/admin/phase5/local-pilot/fence" && request.method === "POST") return handlePhase5Fence(request, env);
     if (url.pathname === "/api/admin/phase5/local-pilot/renew" && request.method === "POST") return handlePhase5RenewLease(request, env);

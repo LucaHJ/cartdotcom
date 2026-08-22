@@ -1,6 +1,7 @@
 export const PHASE5_FENCE_CONFIRMATION = "FENCE EXACT PHASE 5 LOCAL PILOT JOB";
 export const PHASE5_ROLLBACK_CONFIRMATION = "ROLL BACK PHASE 5 LOCAL PILOT JOB";
 export const PHASE5_ARM_CONFIRMATION = "ARM NEXT PHASE 5 REEL PILOT SHARE";
+export const PHASE5_CAROUSEL_ARM_CONFIRMATION = "ARM NEXT PHASE 5 CAROUSEL PILOT SHARE";
 export const PHASE5_CANCEL_ARM_CONFIRMATION = "CANCEL PHASE 5 REEL PILOT ARM";
 export const PHASE5_RENEW_CONFIRMATION = "RENEW EXACT PHASE 5 LOCAL PILOT LEASE";
 export const PHASE5_START_CONFIRMATION = "START EXACT PHASE 5 LOCAL PILOT JOB";
@@ -69,7 +70,7 @@ export type Phase5PreintakeArmStatus = typeof PHASE5_PREINTAKE_ARM_STATUSES[numb
 export type Phase5PreintakeArmRow = {
   arm_key: string;
   sender_id: string;
-  media_type: "reel";
+  media_type: "reel" | "carousel";
   status: Phase5PreintakeArmStatus;
   armed_at: string;
   expires_at: string;
@@ -80,6 +81,7 @@ export type Phase5PreintakeArmRow = {
 export type Phase5PreintakeArmRequest = {
   arm_key?: string;
   sender_id?: string;
+  media_type?: "reel" | "carousel";
   confirmation?: string;
   expires_minutes?: number;
 };
@@ -770,15 +772,20 @@ export function validatePhase5AbortRequest(input: Phase5ControlRequest): {
 export function validatePhase5PreintakeArmRequest(input: Phase5PreintakeArmRequest, now = Date.now()): {
   armKey: string;
   senderId: string;
+  mediaType: "reel" | "carousel";
   armedAt: string;
   expiresAt: string;
 } {
-  if (input.confirmation !== PHASE5_ARM_CONFIRMATION) {
-    throw new Error(`confirmation must equal ${PHASE5_ARM_CONFIRMATION}`);
+  const mediaType = input.media_type || "reel";
+  if (mediaType !== "reel" && mediaType !== "carousel") throw new Error("media_type must equal reel or carousel");
+  const expectedConfirmation = mediaType === "carousel" ? PHASE5_CAROUSEL_ARM_CONFIRMATION : PHASE5_ARM_CONFIRMATION;
+  if (input.confirmation !== expectedConfirmation) {
+    throw new Error(`confirmation must equal ${expectedConfirmation}`);
   }
   return {
     armKey: normalisePhase5PilotKey(input.arm_key),
     senderId: normalisePhase5SenderId(input.sender_id),
+    mediaType,
     armedAt: new Date(now).toISOString(),
     expiresAt: phase5ArmExpiry(input, now),
   };
@@ -801,9 +808,9 @@ export function phase5ArmCanCaptureShare(
   arm: Pick<Phase5PreintakeArmRow, "sender_id" | "media_type" | "status" | "armed_at" | "expires_at"> | null | undefined,
   share: { senderId?: string | null; mediaType?: string | null; now?: number } = {},
 ): boolean {
-  if (!arm || arm.status !== "armed" || arm.media_type !== "reel") return false;
+  if (!arm || arm.status !== "armed" || !["reel", "carousel"].includes(arm.media_type)) return false;
   if (String(share.senderId || "") !== arm.sender_id) return false;
-  if (share.mediaType !== "reel") return false;
+  if (share.mediaType !== arm.media_type) return false;
   const now = share.now ?? Date.now();
   const armedAt = Date.parse(arm.armed_at);
   const expiresAt = Date.parse(arm.expires_at);
