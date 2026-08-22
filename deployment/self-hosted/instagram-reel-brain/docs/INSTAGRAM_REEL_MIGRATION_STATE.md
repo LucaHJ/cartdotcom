@@ -92,6 +92,10 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   `/srv/cartdotcom/instagram-reel-brain/scripts/phase5_one_job_runner.py`.
 - Phase 5B runner hardening report:
   `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
+- Dedicated inert Phase 5C Reel media/Codex runtime image:
+  `cartdotcom-instagram-reel-brain-phase5-runner:latest`.
+- Phase 5C inert runtime report:
+  `PHASE_5C_INERT_RUNTIME_REPORT_2026-08-22.md`.
 
 ## Disabled
 
@@ -120,12 +124,11 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   from the Ubuntu server after validation completed.
 - Unrestricted Phase 5 local claims; only the reviewed exact pre-intake pilot
   job has been processed locally.
-- Additional live Phase 5 pilot execution before independent review of Phase
-  5B runner hardening and Ubuntu runtime readiness.
-- Ubuntu live local execution. The host currently lacks Codex CLI and the
-  media processor dependencies (`yt_dlp` was missing during import); the News
-  Codex runner has Codex/auth but not Python/media dependencies, so a dedicated
-  Reel runner runtime is still required before another local live case.
+- Additional live Phase 5 pilot execution before independent review of the
+  dedicated inert Ubuntu Reel runtime.
+- Ubuntu live local execution. A dedicated inert Reel media/Codex runtime now
+  exists, but it has no selector, scheduler, claim loop, enabled execution path,
+  or approval for live use before independent review.
 - Reuse of missed manual-race job `35004cbd-a428-419f-93bf-96c3bcb54598`;
   it completed under cloud authority and is permanently excluded as the first
   local pilot.
@@ -133,10 +136,13 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 ## Limits
 
-- Total Reel project memory ceiling: 1.75 GiB.
-- Total Reel project CPU ceiling: 1.85 cores.
+- Active inert Reel service memory ceiling: 1.75 GiB.
+- Active inert Reel service CPU ceiling: 1.85 cores.
+- Reel service ceiling with the stopped `phase5-runner` profile included:
+  2528 MiB memory and 2.0 CPU cores.
 - Worker concurrency: 1.
-- PID limit: 128 per service.
+- PID limit: 128 per existing inert service; 256 for the profile-gated
+  `phase5-runner` image.
 - No host ports.
 - No shared `cartdotcom-edge` or `cartdotcom-data` membership in Phase 1.
 
@@ -199,5 +205,28 @@ execution remains blocked until a dedicated Reel media/Codex runtime is
 provided; see
 `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
+Phase 5B was accepted by independent supervisor review after commits `08c94a3`
+and `35df777`, Worker version `bb85f370-31bd-4c66-ba13-ce9ff5c12b75`, 96/96
+cloud Node tests, the self-hosted suite, clean D1 idle checks, healthy
+Reel/News/Caddy/PostgreSQL services, and confirmation that Cloudflare remains
+the sole general production authority.
+
+Phase 5C then added the dedicated inert Ubuntu Reel media/Codex runtime in
+commit `2f9f8e4a843ac994f53aa6836a4f406e4380a835`. The server image
+`cartdotcom-instagram-reel-brain-phase5-runner:latest` was built under the
+`phase5-runner` profile with image ID
+`sha256:00248789d8d059e2c05ca2f36e98bb82d16076c1f710f1051aa6248e91cbaf5e`
+and size `438344540` bytes. The runtime is stopped/inert, has `restart: "no"`,
+no selector/scheduler/claim loop, no host ports, isolated Reel runtime/egress
+networks only, read-only root filesystem, writable tmpfs scratch directories,
+and read-only Codex `auth.json` mounted into a writable tmpfs `CODEX_HOME` by
+symlink. Ubuntu probes passed for inert health, tool versions, fail-closed
+runner invocation, no-network synthetic media extraction/fake Codex synthesis,
+and one redacted Codex CLI smoke using the existing server auth mount.
+Post-build Cloudflare `/health` remained ok with `backlog_processing=false`;
+D1 had zero active jobs, active Phase 5 fences, armed captures, and backlog
+queued/running jobs; Reel/News/Caddy/PostgreSQL were healthy. See
+`PHASE_5C_INERT_RUNTIME_REPORT_2026-08-22.md`.
+
 No carousel, retrieval case, second pilot, Phase 6 work, or authority cutover is
-approved before Phase 5B receives independent review.
+approved before Phase 5C receives independent review.

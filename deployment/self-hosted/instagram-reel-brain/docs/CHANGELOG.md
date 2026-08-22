@@ -2,6 +2,18 @@
 
 ## 2026-08-22
 
+- Added the dedicated inert Phase 5C Reel media/Codex runtime in commit
+  `2f9f8e4`: `phase5-runner` is profile-gated, `restart: "no"`, read-only
+  root filesystem, no selector/scheduler/claim loop, isolated Reel
+  runtime/egress networks only, and all execution/mutation flags disabled.
+- Built Ubuntu image
+  `cartdotcom-instagram-reel-brain-phase5-runner:latest`
+  (`sha256:00248789d8d059e2c05ca2f36e98bb82d16076c1f710f1051aa6248e91cbaf5e`,
+  `438344540` bytes) and proved inert health, dependency versions,
+  fail-closed runner invocation, no-network synthetic media extraction/fake
+  Codex, and one redacted Codex CLI auth smoke. The runtime remains stopped and
+  no live job, arm, backlog, publication, reaction, or authority change
+  occurred.
 - Accepted the first exact Reel local pilot
   `b14b79a0-9264-4613-9421-9920cba053c3` as Phase 5 case 1 of 3 after
   independent review; Phase 5 and Phase 6 remain blocked.
