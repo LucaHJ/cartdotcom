@@ -345,7 +345,7 @@ Workstation:
 
 Deployment:
 
-- Corrective source commit: `36c7ef0`
+- Corrective source commit: `121da3d`
 - Initial `npx wrangler deploy` correctly stopped before deploy because Docker
   Desktop was not running and Wrangler attempted a container build.
 - Worker-only deploy used:

@@ -6,7 +6,7 @@ controlled-compute pilot was pre-intake captured, locally claimed, renewed,
 and completed for one exact Reel job and accepted as Phase 5 case 1 of 3.
 Phase 5B runner hardening is complete and stopped for independent supervisor
 review before any second pilot, carousel/retrieval case, or Phase 6 work. The
-Phase 5B crash/restart recovery correction is committed as `36c7ef0`,
+Phase 5B crash/restart recovery correction is committed as `121da3d`,
 deployed as Worker version `98d34e1f-912a-4209-887a-450243444b7c`, and awaiting
 independent review.
 
@@ -174,7 +174,7 @@ Phase 5B then hardened the reusable runner. Commit `918a496` added an
 admin-only exact start/finalize/abort Worker control surface and replaced
 operational Wrangler/D1 mutation in the local runner. Supervisor review then
 found crash/restart recovery gaps, now corrected and deployed on Worker version
-`98d34e1f-912a-4209-887a-450243444b7c` from corrective commit `36c7ef0`. The
+`98d34e1f-912a-4209-887a-450243444b7c` from corrective commit `121da3d`. The
 correction adds an explicit
 exact-job start/finalize/abort recovery state machine, audit-marker repair,
 partial-start repair/compensation postconditions, and runner logic that skips
