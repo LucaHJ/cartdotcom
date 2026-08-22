@@ -2,6 +2,20 @@
 
 ## 2026-08-22
 
+- Corrected the Phase 5C security blocker in commit `aff756d`: the runtime is
+  now split into stopped/profile-gated `phase5-control` and `phase5-compute`
+  services. PostgreSQL and future Worker control secrets are available only to
+  `phase5-control`; Codex auth and media processing are available only to
+  `phase5-compute`. Canary probes proved control can read synthetic control
+  secrets while shell/Codex execution inside compute cannot stat/read/hash them,
+  and the processor now launches Codex with a minimal sanitised environment.
+  Final images are
+  `cartdotcom-instagram-reel-brain-phase5-control:latest`
+  (`sha256:a69e4104f873fa11ac84bf165d0c1881f6821c19896e3b16c79ef7b31a449305`) and
+  `cartdotcom-instagram-reel-brain-phase5-compute:latest`
+  (`sha256:27781d361c78ea5bb53180073b397bb1a615246a7faeafdef8a71af8caa7c475`).
+  No real Worker control token was created, no live arm/job/backlog/authority
+  work occurred, and both services remain stopped.
 - Added the dedicated inert Phase 5C Reel media/Codex runtime in commit
   `2f9f8e4`: `phase5-runner` is profile-gated, `restart: "no"`, read-only
   root filesystem, no selector/scheduler/claim loop, isolated Reel

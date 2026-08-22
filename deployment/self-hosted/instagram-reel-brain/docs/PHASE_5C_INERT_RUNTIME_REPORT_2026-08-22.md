@@ -2,20 +2,11 @@
 
 Status: ready for independent review; Phase 6 not started.
 
-Timestamp: 2026-08-22T15:32:23+10:00
-
-Correction timestamp: 2026-08-22T15:50:00+10:00
+Timestamp: 2026-08-22T16:21:00+10:00
 
 ## Scope
 
-This gate built and proved a dedicated, inert Ubuntu/server-side Reel media/Codex runtime for future exact one-job Phase 5 pilots.
-
-Supervisor review of the first submission found one runtime blocker: the
-packaged one-shot runner still used a workstation-oriented
-`ssh ... docker exec ... psql` local PostgreSQL path, while the dedicated image
-did not contain SSH, Docker, or psql and had no local control-plane secret
-references. This corrective pass replaced that dependency with a
-container-native PostgreSQL path and added no-live control-plane probes.
+This gate built and proved an inert Ubuntu/server-side runtime for future exact one-job Phase 5 pilots. It remains no-live.
 
 Explicitly not performed:
 
@@ -24,43 +15,63 @@ Explicitly not performed:
 - no local production claim or execution;
 - no publication, reaction, Instagram outbound, D1 mutation, R2 write, or KV write;
 - no Cloudflare authority change;
-- no credential rotation, copying, plaintext inspection, or exposure;
+- no credential creation, rotation, copying, plaintext inspection, or exposure;
 - no paid resource creation;
 - no Phase 6 work.
 
 Cloudflare remains the sole general production authority.
 
+## Supervisor blockers corrected
+
+1. `e42cb63100b55302416e616e53d369b0d31477e9` replaced the workstation-only local PostgreSQL path with a container-native psycopg path and exact control probes.
+2. `aff756d` corrected the remaining security defect: control-plane secrets are no longer mounted into the same service boundary that runs Codex/media.
+
+The runtime is now split into two profile-gated service roles:
+
+- `phase5-control`: exact-job control/reconciliation only. It has native PostgreSQL access, the control secret mount, and the internal data network. It has no Codex auth mount and blanks the inherited Codex/processor defaults.
+- `phase5-compute`: media/Codex only. It has the read-only Codex auth mount and egress. It has no PostgreSQL password, no Worker admin token reference, no `REEL_PHASE5_PG*` env, and no `cartdotcom-data` network.
+
+The old monolithic `phase5_one_job_runner.py` also now fails closed if invoked in the `phase5-control` role and attempts to load the media/Codex processor.
+
 ## Commits and deployment state
 
-- Initial runtime/source commit: `2f9f8e4a843ac994f53aa6836a4f406e4380a835`
-  (`Add inert Phase 5 Reel runner runtime`).
-- Corrective runtime/source commit: `e42cb63100b55302416e616e53d369b0d31477e9`
-  (`Add native control path to Phase 5 runner runtime`).
+- Initial runtime/source commit: `2f9f8e4a843ac994f53aa6836a4f406e4380a835`.
+- Native-control correction commit: `e42cb63100b55302416e616e53d369b0d31477e9`.
+- Split-boundary security correction commit: `aff756d`.
 - Worker deployment: unchanged from Phase 5B; no Worker deploy was required for this gate.
 - Server project path: `/srv/cartdotcom/instagram-reel-brain`.
-- Server image: `cartdotcom-instagram-reel-brain-phase5-runner:latest`.
-- Corrected image ID: `sha256:a3bbdc7a1ee58214c895c85a64103c49dc0e13a46fd4d168a6622baec2a74d64`.
-- Corrected image size: `443614754` bytes.
-- Corrected image created: `2026-08-22T05:47:28.2922611Z`.
-- Runtime service state after tests: no `phase5-runner` container is running.
+- Final control image: `cartdotcom-instagram-reel-brain-phase5-control:latest`
+  - ID: `sha256:a69e4104f873fa11ac84bf165d0c1881f6821c19896e3b16c79ef7b31a449305`
+  - size: `443618722` bytes
+  - created: `2026-08-22T06:20:17.131858597Z`
+- Final compute image: `cartdotcom-instagram-reel-brain-phase5-compute:latest`
+  - ID: `sha256:27781d361c78ea5bb53180073b397bb1a615246a7faeafdef8a71af8caa7c475`
+  - size: `443618722` bytes
+  - created: `2026-08-22T06:20:17.131858597Z`
+- Runtime service state after tests: no Phase 5 control/compute container is running.
 
-The runtime was built on Ubuntu with `docker compose --profile phase5-runner build --quiet phase5-runner`.
+Build command:
+
+```bash
+cd /srv/cartdotcom/instagram-reel-brain
+docker compose --profile phase5-runner build --quiet phase5-control phase5-compute
+```
 
 ## Files changed
 
 Runtime and configuration:
 
-- `deployment/self-hosted/instagram-reel-brain/compose.yaml`
+- `deployment/instagram-reel-brain/container/app.py`
 - `deployment/self-hosted/instagram-reel-brain/.env.example`
-- `deployment/self-hosted/instagram-reel-brain/phase5-runner/Dockerfile`
+- `deployment/self-hosted/instagram-reel-brain/compose.yaml`
 - `deployment/self-hosted/instagram-reel-brain/phase5-runner/README.md`
-- `deployment/self-hosted/instagram-reel-brain/phase5-runner/phase5_runner_probe.py`
 - `deployment/self-hosted/instagram-reel-brain/phase5-runner/container/app.py`
-- `deployment/self-hosted/instagram-reel-brain/phase5-runner/container/requirements.txt`
-- `deployment/self-hosted/instagram-reel-brain/phase5-runner/container/synthesis-output.schema.json`
+- `deployment/self-hosted/instagram-reel-brain/phase5-runner/phase5_runner_probe.py`
+- `deployment/self-hosted/instagram-reel-brain/scripts/phase5_one_job_runner.py`
 
 Tests:
 
+- `deployment/self-hosted/instagram-reel-brain/tests/phase5-pilot.test.mjs`
 - `deployment/self-hosted/instagram-reel-brain/tests/phase5-runtime.test.mjs`
 - `deployment/self-hosted/instagram-reel-brain/tests/scaffold-config.test.mjs`
 
@@ -68,184 +79,121 @@ No unrelated News or price-watch working-tree changes were staged or committed.
 
 ## Runtime design
 
-The new `phase5-runner` Compose service is profile-gated:
+Both Phase 5 services are under the `phase5-runner` profile and remain stopped/inert:
 
-- profile: `phase5-runner`;
 - `restart: "no"`;
 - no selector, scheduler, claim loop, or enabled execution path;
 - no host ports;
-- networks: `reel-runtime` and `reel-egress` only;
 - no `cartdotcom-edge` membership;
-- required internal PostgreSQL network only: `platform-data` external network
-  `cartdotcom-data`, attached only to the stopped `phase5-runner` profile
-  service;
-- `read_only: true`;
+- read-only root filesystem;
 - writable tmpfs only for `/work`, `/tmp`, and `/home/node`;
-- `mem_limit: 768m`;
-- `cpus: 0.15`;
-- `pids_limit: 256`;
+- no Docker socket;
+- no privileged mode;
 - `no-new-privileges:true`;
 - all normal Reel execution/mutation flags remain false.
 
-The image packages:
+Resource ceilings with both stopped profile services included:
 
-- `node:22-bookworm-slim`;
-- Python 3.11;
-- ffmpeg/ffprobe;
-- `yt-dlp`;
-- `gallery-dl`;
-- `psycopg[binary]`;
-- Codex CLI `0.147.0`;
-- the exact packaged processor code and schema from `deployment/instagram-reel-brain/container`;
-- the disabled-by-default exact one-job runner `scripts/phase5_one_job_runner.py`.
+- existing six Reel services: `1.85` CPU / `1760 MiB`;
+- `phase5-control`: `0.05` CPU / `128 MiB`;
+- `phase5-compute`: `0.10` CPU / `640 MiB`;
+- total: `2.00` CPU / `2528 MiB`, still under the approved `2 CPU` / `2.5 GiB` ceiling.
 
-The default entrypoint is a redacted readiness probe, not the live runner.
+## Credential and boundary handling
 
-## Credential handling
+Control:
 
-The runtime does not copy or print Codex credential plaintext.
+- native PostgreSQL path uses a read-only password file mounted only into `phase5-control`;
+- the observed mounted file metadata was mode `0600`, uid `1000`, gid `987`, size `65` bytes;
+- the password is read by psycopg setup only and is not placed in argv, environment for Codex, logs, checkpoints, Git, or image layers;
+- Worker exact-control auth remains token-file-only for real use, but no real Phase 5/admin Worker token file exists on the server and none was created or mounted in this gate;
+- synthetic Worker-token files were generated per run inside probes only.
 
-Server Codex auth is referenced as:
+Compute:
 
-- host source: `/home/lucaj/.codex/auth.json`;
-- container mount: `/codex-auth/auth.json`;
-- mount mode: read-only;
-- container `CODEX_HOME`: `/home/node/.codex`, backed by tmpfs;
-- readiness probe creates a symlink from `CODEX_HOME/auth.json` to `/codex-auth/auth.json`.
+- Codex auth is mounted read-only only into `phase5-compute`;
+- final auth probe showed `auth.json` mode `0600`, uid/gid `1000/1000`, size `3832`, symlinked into tmpfs `CODEX_HOME`;
+- `phase5-compute` had no control secret env and no control secret paths present;
+- no Instagram credentials/cookies are present; the runner now passes an empty cookie payload and does not read `INSTAGRAM_COOKIES_JSON`.
 
-Redacted auth status from the final probe:
+Processor defence-in-depth:
 
-- auth file present: true;
-- auth file mode: `0600`;
-- auth file uid/gid: `1000/1000`;
-- auth file size: `3832` bytes;
-- auth file readable by runtime user: true;
-- `auth_file_is_symlink`: true;
-- `auth_link_matches_source`: true.
+- `run_codex()` and `probe_codex_auth()` now call `codex_subprocess_env()`;
+- Codex subprocesses receive only a minimal allowlist (`CODEX_HOME`, `HOME`, `PATH` in the server canary);
+- runtime `REEL_PHASE5_*`, token-file, database, cookie, and other secret-adjacent env values are not inherited by Codex.
 
-No Instagram credentials or cookies are present during inert startup.
+## Server probes
 
-PostgreSQL control-plane credential handling:
+All probes were run from `/srv/cartdotcom/instagram-reel-brain`.
 
-- host source: `/srv/platform/secrets/postgres_password`;
-- container mount: `/run/secrets/postgres_password`;
-- mount mode: read-only;
-- observed container metadata: mode `0600`, uid `1000`, gid `987`, size `65`
-  bytes, readable by runtime UID;
-- the password is read only by `psycopg` connection setup and is not placed in
-  argv, image layers, Compose-rendered output, logs, checkpoints, or Git.
+Control boundary:
 
-Worker exact-control credential handling:
+- `docker compose --profile phase5-runner run --rm --no-deps phase5-control inert-health`: passed. Control role has control env/path metadata and no Codex auth.
+- `phase5-control native-control`: passed. It created only isolated schema `reel_phase5c_runtime_probe_*`, exercised native PG dry-run, processing restart visibility, rollback, and dropped the schema. Secret path was redacted from output.
+- `phase5-control fake-worker-control`: passed. Local fake Worker accepted start/finalize/abort only with a per-run synthetic 0600 token file; missing token failed closed.
+- `phase5-control control-fail-closed`: passed. Missing PG file and incorrect Worker token failed closed before processor import; checkpoint stopped at `idempotency_key_minted`; `processor_loaded=false`.
+- `phase5-control control-secret-canary`: passed. Parent control step could read per-run fake PG/admin secret files; output contained hashes only, with `secret_values_redacted=true` and `secret_paths_redacted=true`.
 
-- runner now requires `--admin-token-file` by default;
-- legacy environment-token fallback exists only with explicit
-  `--allow-admin-token-env` for workstation legacy mode;
-- Compose references `/run/secrets/phase5_admin_token` through
-  `REEL_PHASE5_ADMIN_TOKEN_FILE`;
-- no existing server Phase 5/admin token file was found under the approved
-  server secret locations, so no real Worker token was mounted or used in this
-  no-live corrective gate;
-- a synthetic 0600 token file was used only against a local fake Worker server
-  inside the probe.
+Compute boundary:
 
-## Dependency versions proven in container
-
-Final `tool-versions` probe:
-
-- Codex CLI: `codex-cli 0.147.0`
-- Python: `Python 3.11.2`
-- Node: `v22.23.2`
-- npm: `10.9.8`
-- ffmpeg: `5.1.9-0+deb12u1`
-- ffprobe: `5.1.9-0+deb12u1`
-- `yt-dlp`: `2026.07.04`
-- `gallery-dl`: `1.32.9`
-- `psycopg`: `3.2.9`
-
-## Runtime probes
-
-All probes were run on Ubuntu under:
-
-```bash
-cd /srv/cartdotcom/instagram-reel-brain
-docker compose --profile phase5-runner run --rm --no-deps phase5-runner <probe>
-```
-
-Results:
-
-- `inert-health`: passed. All execution/mutation flags false, processor and runner present, no Instagram secret env.
-- `runner-fail-closed`: passed. Running without exact live confirmation returned non-zero before cloud control or processor execution.
-- `fixture-media`: passed. A local synthetic MP4 was generated and inspected; ffprobe found 2 streams; audio bytes `49300`; frame count `1`; video bytes `42827`; fake Codex synthesis returned `Fixture synthesis completed without a live model call.` No network, callbacks, publication, or production credentials were used.
-- `native-control`: passed. The runner created and queried only isolated
-  schema `reel_phase5c_runtime_probe_1_1787377654`, then dropped it. Exact
-  `--dry-run --skip-cloud-control` reached the synthetic `leased/queued` row
-  through native PostgreSQL; guarded local transition moved it to
-  `processing`; restart dry-run saw `processing/queued`; a separate synthetic
-  lease rolled back to `rolled_back`.
-- `fake-worker-control`: passed. A local HTTP fake Worker accepted exact
-  start/finalize/abort calls only with a synthetic 0600 token file; missing
-  token file failed closed.
-- `control-fail-closed`: passed. Missing PostgreSQL password file and incorrect
-  Worker token file both failed closed; the checkpoint stopped at
-  `idempotency_key_minted`, and `processor_loaded=false`.
-- `codex-smoke`: passed. Codex CLI auth was usable through the read-only auth-file mount and writable tmpfs `CODEX_HOME`. Raw model output was not printed. Bounded usage evidence:
-  - input tokens: `12181`;
-  - cached input tokens: `8960`;
-  - cache write input tokens: `0`;
-  - output tokens: `5`;
-  - reasoning output tokens: `0`;
-  - stdout lines: `4`.
-
-The earlier failed `codex-smoke` with a read-only `CODEX_HOME` was corrected by narrowing the auth mount to `auth.json` and moving transient CLI state into tmpfs.
+- `docker compose --profile phase5-runner run --rm --no-deps phase5-compute inert-health`: passed. Compute role had Codex auth and no control env/paths.
+- `phase5-compute compute-secret-canary --codex-boundary --timeout 180`: passed. Control-secret env and paths were absent; a spawned shell could not stat/read/hash control secret paths; Codex executed successfully with no secret markers in prompt, argv, environment, or output.
+- `phase5-compute fixture-media`: passed. Local synthetic MP4 generated and inspected; ffprobe streams `2`; audio bytes `49300`; frame count `1`; video bytes `42827`; fake Codex synthesis returned the fixture summary; no network/callback/publication/production credentials used.
+- `phase5-compute codex-smoke --timeout 180`: passed. Codex CLI auth usable through compute-only auth mount. Usage: input `12183`, cached input `8960`, output `5`, reasoning output `0`, stdout lines `4`.
 
 ## Test evidence
 
 Local/self-hosted:
 
+- `python -m py_compile scripts\phase5_one_job_runner.py phase5-runner\phase5_runner_probe.py`: passed.
 - `docker compose -f compose.yaml config --quiet`: passed.
-- `npm test` in `deployment/self-hosted/instagram-reel-brain`: 59 passed, 1 expected Windows symlink skip.
+- `npm test` in `deployment/self-hosted/instagram-reel-brain`: 60 passed, 1 expected Windows symlink skip.
 - `python tests\test_media_processor_api.py`: 3 passed.
 - `python tests\test_phase4_shadow_mirror.py`: 9 passed.
 - `python tests\test_phase4_shadow_mirror_connected.py`: 5 passed.
 
+Cloud Reel regression:
+
+- `npm run typecheck`: passed.
+- `npm test`: 96/96 passed.
+- `python -m unittest container.test_app -v`: 9/9 passed.
+
 Ubuntu/server:
 
 - `docker compose -f compose.yaml config --quiet`: passed.
-- Server host has no `npm`; static runtime tests were run inside the built image with `--network none`.
-- `node --test tests/phase5-runtime.test.mjs tests/scaffold-config.test.mjs`: 13 passed, 1 skipped. The skipped test is the local-only equality check against the sibling cloud processor source path, which is absent from the isolated server copy; the same equality check passed locally.
-- Attempting to include `tests/phase5-pilot.test.mjs` in the isolated server
-  copy fails because that copy intentionally lacks the full self-hosted `src/`
-  tree. The same test passed locally as part of `npm test`.
+- Static runtime/config tests inside the built image with `--network none`: 14 passed, 1 expected skip for the sibling cloud processor path absent in the isolated server copy.
+- Full no-live server probes listed above: passed.
 
-Cloud Reel regression:
+## Secret and image scans
 
-- `npm run typecheck` in `deployment/instagram-reel-brain`: passed.
-- `npm test` in `deployment/instagram-reel-brain`: 96 passed.
-- `python -m unittest container.test_app -v`: 9 passed.
+Final server scans covered both final images:
 
-Existing Phase 5 interruption/restart and rollback evidence remains covered by:
+- image config: no matches;
+- image history: no matches;
+- packaged `/opt/reel`: no matches.
 
-- cloud Node Phase 5 executable recovery simulations;
-- self-hosted synthetic Phase 5 pipeline test;
-- connected PostgreSQL Phase 5 lease/rollback tests;
-- exact one-job runner control/recovery tests.
+Patterns scanned included fixed canary values, credential-shaped literals, Instagram token/cookie variable names, and exact control-secret path strings:
 
-## Secret and artifact hygiene
+- `synthetic-postgres-control-secret`
+- `synthetic-worker-control-secret`
+- `synthetic-secret-value`
+- `incorrect-synthetic-token`
+- `synthetic-phase5-admin-token`
+- `sk-*` style OpenAI key patterns
+- `Bearer ...` token patterns
+- `INSTAGRAM_ACCESS_TOKEN`
+- `INSTAGRAM_COOKIES`
+- `INSTAGRAM_COOKIES_JSON`
+- exact control-secret path strings
 
-Targeted secret scan over the new/changed Reel runtime files found no credential material. The only match was a test assertion containing forbidden environment-variable names.
+The final scan output was only:
 
-The image does not contain the Codex auth file or PostgreSQL password file; both are received only as read-only runtime bind mounts. Probe logs include only mode, uid/gid, size, symlink status, and token counts.
+```text
+IMAGE:control
+IMAGE:compute
+```
 
-No generated fixture media, Codex output, synthetic Worker token, PostgreSQL
-password, Worker admin token, or credential material was committed.
-
-Secret scans:
-
-- local changed runtime files: no credential-shaped literal; the only match was
-  a test assertion containing a forbidden environment-variable name;
-- server image inspect: no match;
-- server image history: no match;
-- server image `/opt/reel` filesystem scan: no match.
+No generated fixture media, Codex output, synthetic Worker token, PostgreSQL password, Worker admin token, or credential material was committed.
 
 ## Production and health checks
 
@@ -267,64 +215,44 @@ D1 idle check:
 - `active_phase5_fences`: 0
 - `active_arms`: 0
 - `backlog_jobs`: 0
-- D1 command metadata: `changed_db=false`, `rows_written=0`.
+- D1 metadata: `changed_db=false`, `rows_written=0`.
 
-Docker health:
+Server health:
 
-- Reel services: all six existing services healthy.
-- News services: all healthy.
-- Caddy: healthy.
-- PostgreSQL: healthy.
-
-Settled resource snapshot after tests:
-
+- Reel services: all six existing services healthy;
+- News services: all healthy;
+- Caddy: healthy;
+- PostgreSQL: healthy;
+- no active Phase 5 control/compute containers after probes;
 - memory: 15 GiB total, 13 GiB available;
-- swap: 4.0 GiB total, 15 MiB used;
-- disk `/`: 349 GiB total, 306 GiB available, 8% used;
-- Reel services: near-zero CPU, each within configured memory limits;
-- News services: healthy and within limits;
-- PostgreSQL settled to `0.90%` CPU and `473.2MiB / 3GiB` after test activity.
+- swap: 4.0 GiB total, 14 MiB used;
+- disk `/`: 349 GiB total, 306 GiB available, 8% used.
 
 ## Rollback / removal
 
-Non-destructive rollback for this stage:
+Non-destructive rollback:
 
-1. Ensure no runner container is active:
+```bash
+cd /srv/cartdotcom/instagram-reel-brain
+docker compose --profile phase5-runner ps -a
+docker compose --profile phase5-runner rm -f phase5-control phase5-compute
+docker image rm cartdotcom-instagram-reel-brain-phase5-control:latest
+docker image rm cartdotcom-instagram-reel-brain-phase5-compute:latest
+```
 
-   ```bash
-   cd /srv/cartdotcom/instagram-reel-brain
-   docker compose --profile phase5-runner ps -a
-   ```
+Source rollback if independent review rejects the correction:
 
-2. Remove any stopped profile containers:
+```bash
+git revert aff756d
+```
 
-   ```bash
-   docker compose --profile phase5-runner rm -f phase5-runner
-   ```
+Then copy the reverted `deployment/self-hosted/instagram-reel-brain` files back to `/srv/cartdotcom/instagram-reel-brain`.
 
-3. Remove the inert image:
-
-   ```bash
-   docker image rm cartdotcom-instagram-reel-brain-phase5-runner:latest
-   ```
-
-4. Revert source commit `2f9f8e4a843ac994f53aa6836a4f406e4380a835` if independent review rejects the runtime:
-
-   ```bash
-   git revert 2f9f8e4a843ac994f53aa6836a4f406e4380a835
-   ```
-
-5. Copy the reverted `compose.yaml` back to `/srv/cartdotcom/instagram-reel-brain/compose.yaml`.
-
-No production data, D1 rows, R2 objects, KV keys, credentials, live routes, or enabled services need deletion for rollback because this gate added only inert runtime files and a stopped image.
+This rollback does not touch Cloudflare authority, D1/R2/KV, Instagram, News runtime, production data, or credentials.
 
 ## Remaining risks / next gate
 
-- The Codex CLI smoke proves server-side auth usability and one minimal model call, but not a full live job in the dedicated image.
-- The runtime now proves native local PostgreSQL control and fake Worker exact
-  control, but no real Worker admin token file currently exists on the server
-  for this runtime. Live use remains blocked until an approved existing or new
-  token-file mount is provided without exposing/copying plaintext.
-- The runtime still has no selector, scheduler, claim loop, or live authority; using it for a live job must remain an explicit exact one-job action after independent approval.
-- The next stage should not arm or process another live item until this report is independently reviewed.
+- Real exact Worker control from Ubuntu remains blocked because no approved Phase 5/admin Worker token file exists on the server. Do not create/install it until supervisor asks for explicit user approval.
+- A full live job has not been run in the split runtime. This gate proves inert split-boundary readiness only.
+- The services still have no selector, scheduler, claim loop, live arm, backlog access, or general local authority.
 - Phase 6 remains blocked.
