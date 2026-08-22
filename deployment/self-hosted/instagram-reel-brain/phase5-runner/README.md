@@ -42,6 +42,32 @@ docker compose --profile phase5-runner run --rm --no-deps phase5-compute compute
 docker compose --profile phase5-runner run --rm --no-deps phase5-compute fixture-media
 ```
 
-Live local processing still requires a host-side exact, confirmed one-shot
-wrapper that invokes control, then compute, then control-finalize for one fenced
-job. These services must not be used for backlog or general worker execution.
+The runnable split path is `scripts/phase5_one_job_orchestrator.py`. It runs on
+the host, contains no production credential values, and sequentially invokes:
+
+1. `phase5-control` with `phase5_staged_runner.py control-start`;
+2. `phase5-compute` with `phase5_staged_runner.py compute-run`;
+3. `phase5-control` with `phase5_staged_runner.py control-finalize` or
+   `control-abort` before publication.
+
+The shared per-job checkpoint is stored under the configured runs root with
+private permissions. The orchestrator passes only exact
+`pilot_key`/`job_id`/`source_message_id`/`lease_owner` identifiers and checkpoint
+paths between services. It does not mount the Docker socket into either
+container, does not give either container privileged mode, and must not be used
+for backlog or general worker execution.
+
+No-live staged recovery proof:
+
+```bash
+python3 scripts/phase5_one_job_orchestrator.py \
+  --synthetic-case all \
+  --project-dir /srv/cartdotcom/instagram-reel-brain \
+  --pilot-key fixture-pilot \
+  --job-id fixture-job \
+  --source-message-id fixture-message
+```
+
+Live local processing remains blocked until a separately approved
+Phase 5/admin Worker token file exists and is mounted only into
+`phase5-control`.

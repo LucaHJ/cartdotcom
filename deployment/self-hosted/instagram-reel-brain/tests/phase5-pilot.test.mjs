@@ -143,6 +143,50 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
   assert.doesNotMatch(runner, /Bearer [A-Za-z0-9_\-.]{16,}/);
 });
 
+test("Phase 5 staged runner preserves exact checkpoint and split-boundary recovery semantics", async () => {
+  const staged = await readFile(new URL("../scripts/phase5_staged_runner.py", import.meta.url), "utf8");
+  const orchestrator = await readFile(new URL("../scripts/phase5_one_job_orchestrator.py", import.meta.url), "utf8");
+
+  assert.match(staged, /def control_start/);
+  assert.match(staged, /def compute_run/);
+  assert.match(staged, /def control_finalize/);
+  assert.match(staged, /def control_abort/);
+  assert.match(staged, /read_checkpoint/);
+  assert.match(staged, /checkpoint version mismatch/);
+  assert.match(staged, /checkpoint .* mismatch/);
+  assert.match(staged, /stage regression refused/);
+  assert.match(staged, /callback authority is expired or below the minimum safe processing window/);
+  assert.match(staged, /processor_already_complete/);
+  assert.match(staged, /recovered_after_cloud_completion/);
+  assert.match(staged, /cloud_stage = "cloud_started"/);
+  assert.match(staged, /ready_stage = "ready_for_compute"/);
+  assert.match(staged, /pre-publication abort refused after processor completion/);
+  assert.match(staged, /compute boundary can see a control secret path/);
+  assert.match(staged, /validate_processor_result/);
+  assert.match(staged, /processor result contains unsupported keys/);
+  assert.match(staged, /processor result job_id mismatch/);
+  assert.match(staged, /instagram_cookies_json": ""/);
+
+  assert.match(orchestrator, /def run_exact_flow/);
+  assert.match(orchestrator, /ORCH_STAGE_ORDER/);
+  assert.match(orchestrator, /read_checkpoint_stage/);
+  assert.match(orchestrator, /stage_at_least\(stage, "processor_complete"\)/);
+  assert.match(orchestrator, /stage_at_least\(stage, "complete"\)/);
+  assert.match(orchestrator, /docker_network_gateway/);
+  assert.match(orchestrator, /control-start/);
+  assert.match(orchestrator, /compute-run/);
+  assert.match(orchestrator, /control-finalize/);
+  assert.match(orchestrator, /control-abort/);
+  assert.match(orchestrator, /after-start/);
+  assert.match(orchestrator, /after-compute/);
+  assert.match(orchestrator, /after-processor-before-checkpoint/);
+  assert.match(orchestrator, /after-cloud-finalize-before-local-complete/);
+  assert.match(orchestrator, /compute-failure-abort/);
+  assert.match(orchestrator, /tampered-checkpoint/);
+  assert.match(orchestrator, /short-authority/);
+  assert.doesNotMatch(orchestrator, /--add-host|REEL_BRAIN_ADMIN_TOKEN|PGPASSWORD|sk-[A-Za-z0-9]|Bearer [A-Za-z0-9_\-.]{16,}/);
+});
+
 test("Phase 5 repository methods use exact one-job lease SQL and auditable events", async () => {
   const client = new FixtureQueryClient();
   const repo = new PostgresReelRepository(client);

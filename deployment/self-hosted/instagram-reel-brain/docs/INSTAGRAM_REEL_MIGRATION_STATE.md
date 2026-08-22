@@ -5,10 +5,11 @@ Bounded Phase 5 preparation is implemented and deployed. The first live
 controlled-compute pilot was pre-intake captured, locally claimed, renewed,
 and completed for one exact Reel job and accepted as Phase 5 case 1 of 3.
 Phase 5B runner hardening is accepted. Phase 5C has built the inert Ubuntu
-runtime and corrected the native-control and control/compute secret-isolation
-blockers. It is stopped for independent supervisor review before any real
-Worker control token, second pilot, carousel/retrieval case, Phase 6 work, or
-general authority change.
+runtime, corrected the native-control and control/compute secret-isolation
+blockers, and added the missing staged host orchestrator for control -> compute
+-> control-finalize recovery. It is stopped for independent supervisor review
+before any real Worker control token, second pilot, carousel/retrieval case,
+Phase 6 work, or general authority change.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
@@ -92,13 +93,16 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   `/srv/cartdotcom/instagram-reel-brain/scripts/phase5_one_job_runner.py`.
 - Phase 5B runner hardening report:
   `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
-- Dedicated inert Phase 5C split runtime images:
+- Dedicated inert Phase 5C split runtime images after the staged-orchestration
+  correction:
   `cartdotcom-instagram-reel-brain-phase5-control:latest`
-  (`sha256:a69e4104f873fa11ac84bf165d0c1881f6821c19896e3b16c79ef7b31a449305`)
+  (`sha256:cdeaa4c2c92e9ece8e16d6532cabd447d99fc9f715a6cb641968ece4ec8b51b7`)
   and `cartdotcom-instagram-reel-brain-phase5-compute:latest`
-  (`sha256:27781d361c78ea5bb53180073b397bb1a615246a7faeafdef8a71af8caa7c475`).
+  (`sha256:ec0e8a1585051f75eef8afe5bb884afbde6e4ef73d3af23803fbbbd524e2070b`).
 - Phase 5C inert runtime report:
   `PHASE_5C_INERT_RUNTIME_REPORT_2026-08-22.md`.
+- Phase 5C staged-orchestration correction report:
+  `PHASE_5C_STAGED_ORCHESTRATION_CORRECTION_REPORT_2026-08-22.md`.
 
 ## Disabled
 
@@ -131,9 +135,10 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   dedicated inert Ubuntu Reel runtime.
 - Ubuntu live local execution. Dedicated inert control and compute runtimes now
   exist, but they have no selector, scheduler, claim loop, enabled execution
-  path, or approval for live use before independent review. A real Worker
-  exact-control token file is not yet present on the server for this runtime and
-  must not be created until separately approved.
+  path, or approval for live use before independent review. The staged host
+  wrapper exists only for exact, confirmed one-job orchestration after future
+  approval. A real Worker exact-control token file is not yet present on the
+  server for this runtime and must not be created until separately approved.
 - Reuse of missed manual-race job `35004cbd-a428-419f-93bf-96c3bcb54598`;
   it completed under cloud authority and is permanently excluded as the first
   local pilot.
@@ -221,30 +226,37 @@ the sole general production authority.
 
 Phase 5C then added the dedicated inert Ubuntu Reel runtime in commit
 `2f9f8e4a843ac994f53aa6836a4f406e4380a835`, corrected native PostgreSQL control
-in commit `e42cb63100b55302416e616e53d369b0d31477e9`, and corrected the
-control/compute secret boundary in commit `aff756d`. The final server runtime
-is split into stopped/profile-gated services: `phase5-control` handles exact
-PostgreSQL and future Worker control only, with no Codex auth mount; and
-`phase5-compute` handles media/Codex only, with no PostgreSQL password, no
-Worker admin token reference, no `REEL_PHASE5_PG*` environment, and no
-`cartdotcom-data` network. Final images are
+in commit `e42cb63100b55302416e616e53d369b0d31477e9`, corrected the
+control/compute secret boundary in commit `aff756d`, and corrected the missing
+staged orchestration path in commit `b7e1d0e`.
+The final server runtime is split into stopped/profile-gated services:
+`phase5-control` handles exact PostgreSQL and future Worker control only, with
+no Codex auth mount; and `phase5-compute` handles media/Codex only, with no
+PostgreSQL password, no Worker admin token reference, no `REEL_PHASE5_PG*`
+environment, and no `cartdotcom-data` network. The host-side
+`phase5_one_job_orchestrator.py` now runs exact control -> compute ->
+control-finalize stages with private monotonic checkpoints and forward recovery
+after processor/cloud completion. Final images are
 `cartdotcom-instagram-reel-brain-phase5-control:latest`
-(`sha256:a69e4104f873fa11ac84bf165d0c1881f6821c19896e3b16c79ef7b31a449305`) and
+(`sha256:cdeaa4c2c92e9ece8e16d6532cabd447d99fc9f715a6cb641968ece4ec8b51b7`) and
 `cartdotcom-instagram-reel-brain-phase5-compute:latest`
-(`sha256:27781d361c78ea5bb53180073b397bb1a615246a7faeafdef8a71af8caa7c475`),
-both `443618722` bytes. Ubuntu probes passed inert health for both roles,
-native-PG dry-run against an isolated dropped synthetic schema, guarded local
+(`sha256:ec0e8a1585051f75eef8afe5bb884afbde6e4ef73d3af23803fbbbd524e2070b`),
+both `443632338` bytes. Ubuntu probes passed inert health for both roles,
+native-PG dry-run against isolated dropped synthetic schemas, guarded local
 transition/restart/rollback, fake Worker token-file control, missing-PG/bad-token
 fail-closed behaviour before processor import, control-secret canary, compute
 secret canary through shell and Codex boundary, no-network synthetic media/fake
-Codex synthesis, and one redacted Codex CLI smoke using the existing server auth
-mount. The processor now sanitises Codex subprocess environment inheritance.
-No existing server Phase 5/admin Worker token file was created or mounted, so
-live use remains blocked until an approved token-file mount exists. Post-build
-Cloudflare `/health` remained ok with `backlog_processing=false`; D1 had zero
-active jobs, active Phase 5 fences, armed captures, and backlog queued/running
-jobs; Reel/News/Caddy/PostgreSQL were healthy. See
-`PHASE_5C_INERT_RUNTIME_REPORT_2026-08-22.md`.
+Codex synthesis, one redacted Codex CLI smoke using the existing server auth
+mount, and the staged synthetic matrix for complete, interrupted, duplicate,
+short-authority, abort, and tampered-checkpoint cases. The processor sanitises
+Codex subprocess environment inheritance. No existing server Phase 5/admin
+Worker token file was created or mounted, so live use remains blocked until an
+approved token-file mount exists. Post-build Cloudflare `/health` remained ok
+with `backlog_processing=false`; D1 had zero active jobs, active Phase 5 fences,
+and armed captures; Reel/News/Caddy/PostgreSQL were healthy; and no
+`reel_phase5c_staged_%` schemas or Phase 5 control/compute containers remained
+active. See `PHASE_5C_INERT_RUNTIME_REPORT_2026-08-22.md` and
+`PHASE_5C_STAGED_ORCHESTRATION_CORRECTION_REPORT_2026-08-22.md`.
 
 No carousel, retrieval case, second pilot, Phase 6 work, or authority cutover is
 approved before Phase 5C receives independent review.

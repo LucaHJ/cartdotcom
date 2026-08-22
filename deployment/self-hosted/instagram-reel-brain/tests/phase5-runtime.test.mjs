@@ -9,6 +9,8 @@ const dockerfile = readFileSync(new URL("phase5-runner/Dockerfile", root), "utf8
 const probe = readFileSync(new URL("phase5-runner/phase5_runner_probe.py", root), "utf8");
 const readme = readFileSync(new URL("phase5-runner/README.md", root), "utf8");
 const runner = readFileSync(new URL("scripts/phase5_one_job_runner.py", root), "utf8");
+const stagedRunner = readFileSync(new URL("scripts/phase5_staged_runner.py", root), "utf8");
+const orchestrator = readFileSync(new URL("scripts/phase5_one_job_orchestrator.py", root), "utf8");
 const packagedProcessor = readFileSync(new URL("phase5-runner/container/app.py", root));
 const requirements = readFileSync(new URL("phase5-runner/container/requirements.txt", root), "utf8");
 const cloudProcessorUrl = new URL("../../instagram-reel-brain/container/app.py", root);
@@ -34,6 +36,7 @@ test("Phase 5 runner image pins the existing processor runtime dependencies", ()
   assert.match(dockerfile, /COPY phase5-runner\/container\/requirements\.txt/);
   assert.match(dockerfile, /COPY phase5-runner\/container\/app\.py \/opt\/reel\/processor\/app\.py/);
   assert.match(dockerfile, /COPY scripts\/phase5_one_job_runner\.py/);
+  assert.match(dockerfile, /COPY scripts\/phase5_staged_runner\.py/);
   assert.match(dockerfile, /USER node/);
   assert.doesNotMatch(dockerfile, /INSTAGRAM_|sk-[A-Za-z0-9]|Bearer [A-Za-z0-9_\-.]{16,}/);
   assert.doesNotMatch(dockerfile, /openssh-client|docker\.io|docker-ce|postgresql-client/);
@@ -119,6 +122,41 @@ test("Phase 5 runner selects native PostgreSQL in the container and keeps SSH/Do
   assert.doesNotMatch(runner, /print\(.*token|print\(.*password|PGPASSWORD|password=.*argv|sk-[A-Za-z0-9]|Bearer [A-Za-z0-9_\-.]{16,}/);
 });
 
+test("Phase 5 split runtime has a host orchestrator and staged control/compute commands", () => {
+  assert.match(stagedRunner, /control-start/);
+  assert.match(stagedRunner, /compute-run/);
+  assert.match(stagedRunner, /control-finalize/);
+  assert.match(stagedRunner, /control-abort/);
+  assert.match(stagedRunner, /CHECKPOINT_VERSION = 1/);
+  assert.match(stagedRunner, /STAGE_ORDER/);
+  assert.match(stagedRunner, /stage regression refused/);
+  assert.match(stagedRunner, /phase5-control role cannot load|control role may not load/);
+  assert.match(stagedRunner, /compute environment contains control-plane variables/);
+  assert.match(stagedRunner, /pre-publication abort refused after processor completion/);
+  assert.match(stagedRunner, /callback authority is expired or below the minimum safe processing window/);
+  assert.match(stagedRunner, /processor result job_id mismatch/);
+  assert.match(stagedRunner, /os\.chmod\(path\.parent, 0o700\)/);
+  assert.match(stagedRunner, /os\.chmod\(path, 0o600\)/);
+  assert.doesNotMatch(stagedRunner, /docker\.sock|privileged|PGPASSWORD|sk-[A-Za-z0-9]|Bearer [A-Za-z0-9_\-.]{16,}/);
+
+  assert.match(orchestrator, /phase5-control/);
+  assert.match(orchestrator, /phase5-compute/);
+  assert.match(orchestrator, /--entrypoint", "python3"/);
+  assert.match(orchestrator, /docker_network_gateway/);
+  assert.match(orchestrator, /cartdotcom-reel-egress/);
+  assert.match(orchestrator, /control-start/);
+  assert.match(orchestrator, /compute-run/);
+  assert.match(orchestrator, /control-finalize/);
+  assert.match(orchestrator, /control-abort/);
+  assert.match(orchestrator, /synthetic-case/);
+  assert.match(orchestrator, /after-processor-before-checkpoint/);
+  assert.match(orchestrator, /after-cloud-finalize-before-local-complete/);
+  assert.match(orchestrator, /short-authority/);
+  assert.match(orchestrator, /tampered-checkpoint/);
+  assert.match(orchestrator, /"--volume", f"\{token_host_file\}:\{CONTAINER_TOKEN_PATH\}:ro"/);
+  assert.doesNotMatch(orchestrator, /--add-host|docker\.sock|privileged|PGPASSWORD|sk-[A-Za-z0-9]|Bearer [A-Za-z0-9_\-.]{16,}/);
+});
+
 test("Phase 5 processor sanitizes the Codex subprocess environment", () => {
   const processorText = packagedProcessor.toString("utf8");
   assert.match(processorText, /def codex_subprocess_env/);
@@ -133,9 +171,14 @@ test("Phase 5 runner documentation keeps the runtime inert by default", () => {
   assert.match(readme, /profile/);
   assert.match(readme, /restart` is disabled/);
   assert.match(readme, /read-only/);
-  assert.match(readme, /must not be\s+used for backlog or general worker execution/);
+  assert.match(readme, /must not be used\s+for backlog or general worker execution/);
   assert.match(readme, /native PostgreSQL/);
   assert.match(readme, /phase5-control/);
   assert.match(readme, /phase5-compute/);
   assert.match(readme, /phase5_admin_token/);
+  assert.match(readme, /phase5_one_job_orchestrator\.py/);
+  assert.match(readme, /control-start/);
+  assert.match(readme, /compute-run/);
+  assert.match(readme, /control-finalize/);
+  assert.doesNotMatch(readme, /requires a host-side exact, confirmed one-shot\s+wrapper that invokes control/);
 });

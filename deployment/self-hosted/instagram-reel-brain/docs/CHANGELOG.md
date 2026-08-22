@@ -2,6 +2,23 @@
 
 ## 2026-08-22
 
+- Corrected the remaining Phase 5C operational blocker in commit
+  `b7e1d0e`: added a host-side exact one-shot
+  `phase5_one_job_orchestrator.py` plus staged `phase5_staged_runner.py`
+  commands for control start, compute execution, control finalize, and
+  pre-publication abort across the split `phase5-control` / `phase5-compute`
+  containers. Ubuntu synthetic E2E now covers complete flow, crash/restart
+  after start, after compute, after processor callbacks before checkpoint,
+  after cloud finalize before local completion, duplicate invocation,
+  short-authority zero-compute, compute failure abort, and tampered checkpoint
+  fail-closed. Final images are
+  `cartdotcom-instagram-reel-brain-phase5-control:latest`
+  (`sha256:cdeaa4c2c92e9ece8e16d6532cabd447d99fc9f715a6cb641968ece4ec8b51b7`)
+  and `cartdotcom-instagram-reel-brain-phase5-compute:latest`
+  (`sha256:ec0e8a1585051f75eef8afe5bb884afbde6e4ef73d3af23803fbbbd524e2070b`),
+  both `443632338` bytes. No Worker deploy, real token setup, live arm/job,
+  backlog, outbound action, production mutation, or authority change occurred;
+  Phase 5 services remain stopped.
 - Corrected the Phase 5C security blocker in commit `aff756d`: the runtime is
   now split into stopped/profile-gated `phase5-control` and `phase5-compute`
   services. PostgreSQL and future Worker control secrets are available only to
