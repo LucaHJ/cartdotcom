@@ -5,11 +5,11 @@ Bounded Phase 5 preparation is implemented and deployed. The first live
 controlled-compute pilot was pre-intake captured, locally claimed, renewed,
 and completed for one exact Reel job and accepted as Phase 5 case 1 of 3.
 Phase 5B runner hardening is accepted. Phase 5C has built the inert Ubuntu
-runtime, corrected the native-control and control/compute secret-isolation
-blockers, and added the missing staged host orchestrator for control -> compute
--> control-finalize recovery. It is stopped for independent supervisor review
-before any real Worker control token, second pilot, carousel/retrieval case,
-Phase 6 work, or general authority change.
+runtime, corrected native-control and control/compute secret isolation, added
+the staged host orchestrator, authenticated control checkpoints, and installed
+a dedicated narrow Worker control token as a control-only mode-0600 server
+file. The runtime is ready for the next exact live carousel pilot. It remains
+stopped until a brand-new carousel is explicitly submitted and fenced.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
@@ -70,10 +70,12 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   by migration `0021_phase5_local_pilot_fence.sql`.
 - Empty production D1 Phase 5 pre-intake arm table `phase5_preintake_arms`,
   created by migration `0022_phase5_preintake_arm.sql`.
-- Admin-only Cloudflare Phase 5 arm/fence/rollback/renew endpoints.
-- Admin-only Cloudflare Phase 5 exact local runner start/finalize/abort
-  endpoints on corrected Worker version
-  `98d34e1f-912a-4209-887a-450243444b7c`.
+- Narrow-token Cloudflare Phase 5 arm/fence/rollback/renew endpoints. The
+  dedicated `PHASE5_CONTROL_TOKEN` is accepted only for Phase 5 local-pilot
+  routes; the existing broad admin token remains an operator fallback.
+- Narrow-token Cloudflare Phase 5 exact local runner start/finalize/abort
+  endpoints on Worker version `a1ed3971-9604-4961-a62a-d166b73fba08` after
+  narrow secret installation.
 - Non-authoritative local Phase 5 lease/event tables from
   `0005_phase5_controlled_pilot.sql`, with one-active-lease enforcement through
   `phase5_pilot_leases_one_active_idx`.
@@ -93,16 +95,24 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   `/srv/cartdotcom/instagram-reel-brain/scripts/phase5_one_job_runner.py`.
 - Phase 5B runner hardening report:
   `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
-- Dedicated inert Phase 5C split runtime images after the staged-orchestration
+- Dedicated inert Phase 5C split runtime images after authenticated checkpoint
   correction:
   `cartdotcom-instagram-reel-brain-phase5-control:latest`
-  (`sha256:cdeaa4c2c92e9ece8e16d6532cabd447d99fc9f715a6cb641968ece4ec8b51b7`)
+  (`sha256:d5f7ca1814d572eaaf49b85918292f04c4a2caf1988346e3dce0cbaf7d071b3f`)
   and `cartdotcom-instagram-reel-brain-phase5-compute:latest`
-  (`sha256:ec0e8a1585051f75eef8afe5bb884afbde6e4ef73d3af23803fbbbd524e2070b`).
+  (`sha256:ababd6f3a1ef297952193f01411ecc5ffc5135c8f3e958f08acc7410c35e3cdc`).
+- Dedicated Phase 5 Worker control secret installed in Cloudflare as
+  `PHASE5_CONTROL_TOKEN` and on Ubuntu at
+  `/srv/cartdotcom/instagram-reel-brain/secrets/phase5_admin_token`, mode
+  `0600`, mounted only into one-shot `phase5-control` invocations.
 - Phase 5C inert runtime report:
   `PHASE_5C_INERT_RUNTIME_REPORT_2026-08-22.md`.
 - Phase 5C staged-orchestration correction report:
   `PHASE_5C_STAGED_ORCHESTRATION_CORRECTION_REPORT_2026-08-22.md`.
+- Phase 5C authenticated checkpoint report:
+  `PHASE_5C_CHECKPOINT_INTEGRITY_REPORT_2026-08-23.md`.
+- Phase 5C narrow control credential report:
+  `PHASE_5C_CONTROL_AUTH_REPORT_2026-08-23.md`.
 
 ## Disabled
 
@@ -131,14 +141,13 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   from the Ubuntu server after validation completed.
 - Unrestricted Phase 5 local claims; only the reviewed exact pre-intake pilot
   job has been processed locally.
-- Additional live Phase 5 pilot execution before independent review of the
-  dedicated inert Ubuntu Reel runtime.
-- Ubuntu live local execution. Dedicated inert control and compute runtimes now
-  exist, but they have no selector, scheduler, claim loop, enabled execution
-  path, or approval for live use before independent review. The staged host
-  wrapper exists only for exact, confirmed one-job orchestration after future
-  approval. A real Worker exact-control token file is not yet present on the
-  server for this runtime and must not be created until separately approved.
+- Additional live Phase 5 execution without a brand-new explicitly submitted
+  exact carousel or retrieval case.
+- General Ubuntu local execution. Dedicated inert control and compute runtimes
+  exist, but they have no selector, scheduler, claim loop, backlog access, or
+  general authority. The staged host wrapper runs only an exact, confirmed,
+  fenced one-job flow. The required control token is installed, but no live
+  Phase 5 container is running and no job is currently armed.
 - Reuse of missed manual-race job `35004cbd-a428-419f-93bf-96c3bcb54598`;
   it completed under cloud authority and is permanently excluded as the first
   local pilot.

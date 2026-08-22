@@ -30,6 +30,8 @@ Important files:
 - `docs/INSTAGRAM_REEL_MIGRATION_STATE.md`: migration ledger and current gate.
 - `docs/PHASE_5C_CHECKPOINT_INTEGRITY_REPORT_2026-08-23.md`: current staged
   handoff proof.
+- `docs/PHASE_5C_CONTROL_AUTH_REPORT_2026-08-23.md`: narrow Worker control
+  credential installation and scope proof.
 
 Services:
 
@@ -91,7 +93,8 @@ python3 scripts/phase5_one_job_orchestrator.py \
   --job-id '<exact-job-id>' \
   --source-message-id '<exact-source-message-id>' \
   --lease-owner phase5-local-worker-1 \
-  --admin-token-host-file '<approved-mode-0600-file>'
+  --admin-token-host-file \
+    /srv/cartdotcom/instagram-reel-brain/secrets/phase5_admin_token
 ```
 
 The host invokes:
@@ -103,6 +106,11 @@ The host invokes:
 
 Every restart repeats this sequence. Container-level idempotency and signed
 state decide whether work should resume, finalize, or return complete.
+
+The token file is control-plane material. Never mount it into
+`phase5-compute`, copy it into an image, print it, or use it for ordinary admin
+routes. Its expected metadata is owner `lucaj`, mode `0600`; verify metadata
+with `stat` without reading the value.
 
 ## Troubleshooting
 
