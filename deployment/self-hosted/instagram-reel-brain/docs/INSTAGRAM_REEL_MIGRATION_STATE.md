@@ -173,17 +173,24 @@ contains a matching `leased` Phase 5 pilot lease for owner
 Phase 5B then hardened the reusable runner. Commit `918a496` added an
 admin-only exact start/finalize/abort Worker control surface and replaced
 operational Wrangler/D1 mutation in the local runner. Supervisor review then
-found crash/restart recovery gaps, now corrected and deployed on Worker version
-`98d34e1f-912a-4209-887a-450243444b7c` from corrective commit `121da3d`. The
-correction adds an explicit
-exact-job start/finalize/abort recovery state machine, audit-marker repair,
-partial-start repair/compensation postconditions, and runner logic that skips
-processor/Codex/publication/reactions when cloud state already proves
-completion. `/health` is `ok=true`, `ingest_mode=live`, and
-`backlog_processing=false`. Post-deploy production state has zero
-queued/running jobs, zero active Phase 5 fences, and zero armed Phase 5 arms.
-The inert Ubuntu runner remains disabled. Ubuntu full live execution remains
-blocked until a dedicated Reel media/Codex runtime is provided; see
+found crash/restart recovery gaps, corrected in commit `121da3d` and Worker
+version `98d34e1f-912a-4209-887a-450243444b7c`. A later supervisor review found
+one remaining expiry-bound recovery defect: `local_processing + running/queued`
+restart decisions could ignore overall fence, local-lease, and callback-token
+expiry. Commit `739b01f` fixes that by making `phase5StartRecoveryDecision()`
+time-aware, adding exact bounded `renew_processing_lease` handling for valid
+overall fences, refreshing both job callback expiry and fence local-lease expiry
+for queued/running repair, and failing closed with
+`fence_expired_abort_required` before processor loading when the overall fence
+is stale. This is deployed as Worker version
+`1b7055bd-0a18-41c3-a3f2-17972c8d145b`. `/health` is `ok=true`,
+`ingest_mode=live`, and `backlog_processing=false`. Post-deploy production
+state has zero queued/running jobs, zero active Phase 5 fences, zero armed Phase
+5 arms, and zero backlog queued/running jobs. The unrelated normal cloud job
+`2f307553-9b66-499c-b012-04d9ca137b22` was allowed to finish
+`complete/complete` before deployment and was not touched. The inert Ubuntu
+runner remains disabled. Ubuntu full live execution remains blocked until a
+dedicated Reel media/Codex runtime is provided; see
 `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 No carousel, retrieval case, second pilot, Phase 6 work, or authority cutover is
