@@ -227,6 +227,7 @@ export interface Env {
   INGEST_MODE?: "disabled" | "test_only" | "live";
   PUBLIC_BASE_URL?: string;
   ADMIN_TOKEN?: string;
+  PHASE5_CONTROL_TOKEN?: string;
   PHASE4_MIRROR_TOKEN?: string;
   PHASE4_REPLAY_TOKEN?: string;
   CALLBACK_SIGNING_KEY?: string;
@@ -1229,6 +1230,14 @@ function requireAdmin(request: Request, env: Env): Response | null {
   if (!env.ADMIN_TOKEN || bearer(request) !== env.ADMIN_TOKEN) {
     return json({ error: "Unauthorised" }, { status: 401 });
   }
+  return null;
+}
+
+function requirePhase5Control(request: Request, env: Env): Response | null {
+  const provided = bearer(request);
+  const phase5Match = Boolean(env.PHASE5_CONTROL_TOKEN && provided === env.PHASE5_CONTROL_TOKEN);
+  const adminMatch = Boolean(env.ADMIN_TOKEN && provided === env.ADMIN_TOKEN);
+  if (!phase5Match && !adminMatch) return json({ error: "Unauthorised" }, { status: 401 });
   return null;
 }
 
@@ -5432,6 +5441,19 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname.startsWith("/api/phase4/mirror/")) return handlePhase4Mirror(request, env);
   if (url.pathname === "/api/test/jobs" && request.method === "POST") return handleTestCreate(request, env);
   if (url.pathname === "/api/intake" && request.method === "POST") return handleNormalizedIntake(request, env);
+  if (url.pathname.startsWith("/api/admin/phase5/local-pilot/")) {
+    const phase5Unauthorized = requirePhase5Control(request, env);
+    if (phase5Unauthorized) return phase5Unauthorized;
+    if (url.pathname === "/api/admin/phase5/local-pilot/arm-next-reel" && request.method === "POST") return handlePhase5PreintakeArm(request, env);
+    if (url.pathname === "/api/admin/phase5/local-pilot/cancel-arm" && request.method === "POST") return handlePhase5PreintakeCancel(request, env);
+    if (url.pathname === "/api/admin/phase5/local-pilot/fence" && request.method === "POST") return handlePhase5Fence(request, env);
+    if (url.pathname === "/api/admin/phase5/local-pilot/renew" && request.method === "POST") return handlePhase5RenewLease(request, env);
+    if (url.pathname === "/api/admin/phase5/local-pilot/rollback" && request.method === "POST") return handlePhase5Rollback(request, env);
+    if (url.pathname === "/api/admin/phase5/local-pilot/start" && request.method === "POST") return handlePhase5StartLocalProcessing(request, env);
+    if (url.pathname === "/api/admin/phase5/local-pilot/finalize" && request.method === "POST") return handlePhase5FinalizeLocalProcessing(request, env);
+    if (url.pathname === "/api/admin/phase5/local-pilot/abort" && request.method === "POST") return handlePhase5AbortLocalProcessing(request, env);
+    return json({ error: "Not found" }, { status: 404 });
+  }
   const unauthorized = requireAdmin(request, env);
   if (unauthorized) return unauthorized;
 
@@ -5453,14 +5475,6 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/api/backlog/pilot/reprocess" && request.method === "POST") return handlePilotReprocess(request, env);
   if (url.pathname === "/api/backlog/pilot/rearchive" && request.method === "POST") return handlePilotRearchive(request, env);
   if (url.pathname === "/api/admin/media-enrich" && request.method === "POST") return handleMediaEnrich(request, env);
-  if (url.pathname === "/api/admin/phase5/local-pilot/arm-next-reel" && request.method === "POST") return handlePhase5PreintakeArm(request, env);
-  if (url.pathname === "/api/admin/phase5/local-pilot/cancel-arm" && request.method === "POST") return handlePhase5PreintakeCancel(request, env);
-  if (url.pathname === "/api/admin/phase5/local-pilot/fence" && request.method === "POST") return handlePhase5Fence(request, env);
-  if (url.pathname === "/api/admin/phase5/local-pilot/renew" && request.method === "POST") return handlePhase5RenewLease(request, env);
-  if (url.pathname === "/api/admin/phase5/local-pilot/rollback" && request.method === "POST") return handlePhase5Rollback(request, env);
-  if (url.pathname === "/api/admin/phase5/local-pilot/start" && request.method === "POST") return handlePhase5StartLocalProcessing(request, env);
-  if (url.pathname === "/api/admin/phase5/local-pilot/finalize" && request.method === "POST") return handlePhase5FinalizeLocalProcessing(request, env);
-  if (url.pathname === "/api/admin/phase5/local-pilot/abort" && request.method === "POST") return handlePhase5AbortLocalProcessing(request, env);
   if (url.pathname === "/api/admin/instagram-confirm-live" && request.method === "POST") return handleConfirmLiveMode(env);
   if (url.pathname === "/api/admin/instagram-pilot-summary" && request.method === "POST") return handlePilotSummaryDm(request, env);
   if (url.pathname === "/api/admin/instagram-recover-message" && request.method === "POST") return handleRecoverInstagramMessage(request, env);

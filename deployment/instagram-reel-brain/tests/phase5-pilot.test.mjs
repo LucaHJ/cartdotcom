@@ -697,6 +697,7 @@ test("Phase 5 active fences expire fail-closed", () => {
 
 test("Phase 5 cloud routes remain admin-only and do not add unauthenticated mutation surfaces", () => {
   const handleApiIndex = source.indexOf("async function handleApi");
+  const phase5GateIndex = source.indexOf("const phase5Unauthorized = requirePhase5Control(request, env);", handleApiIndex);
   const adminGateIndex = source.indexOf("const unauthorized = requireAdmin(request, env);", handleApiIndex);
   const fenceRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/fence"', handleApiIndex);
   const rollbackRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/rollback"', handleApiIndex);
@@ -706,12 +707,14 @@ test("Phase 5 cloud routes remain admin-only and do not add unauthenticated muta
   const phase4RouteIndex = source.indexOf('"/api/phase4/mirror/"', handleApiIndex);
 
   assert.ok(phase4RouteIndex > handleApiIndex && phase4RouteIndex < adminGateIndex, "Phase 4 read-only mirror remains before admin gate");
-  assert.ok(fenceRouteIndex > adminGateIndex, "Phase 5 fence must be behind admin gate");
-  assert.ok(rollbackRouteIndex > adminGateIndex, "Phase 5 rollback must be behind admin gate");
-  assert.ok(startRouteIndex > adminGateIndex, "Phase 5 start must be behind admin gate");
-  assert.ok(finalizeRouteIndex > adminGateIndex, "Phase 5 finalize must be behind admin gate");
-  assert.ok(abortRouteIndex > adminGateIndex, "Phase 5 abort must be behind admin gate");
-  assert.doesNotMatch(source.slice(handleApiIndex, adminGateIndex), /phase5\/local-pilot/);
+  assert.ok(phase5GateIndex > handleApiIndex && phase5GateIndex < adminGateIndex, "Phase 5 routes must use the narrow control gate");
+  assert.ok(fenceRouteIndex > phase5GateIndex && fenceRouteIndex < adminGateIndex, "Phase 5 fence must be behind the Phase 5 gate");
+  assert.ok(rollbackRouteIndex > phase5GateIndex && rollbackRouteIndex < adminGateIndex, "Phase 5 rollback must be behind the Phase 5 gate");
+  assert.ok(startRouteIndex > phase5GateIndex && startRouteIndex < adminGateIndex, "Phase 5 start must be behind the Phase 5 gate");
+  assert.ok(finalizeRouteIndex > phase5GateIndex && finalizeRouteIndex < adminGateIndex, "Phase 5 finalize must be behind the Phase 5 gate");
+  assert.ok(abortRouteIndex > phase5GateIndex && abortRouteIndex < adminGateIndex, "Phase 5 abort must be behind the Phase 5 gate");
+  assert.match(source, /env\.PHASE5_CONTROL_TOKEN/);
+  assert.match(source, /const adminMatch = Boolean\(env\.ADMIN_TOKEN/);
 });
 
 test("Phase 5 cloud processor checks the active fence before running container work", () => {
@@ -830,13 +833,14 @@ test("Phase 5 pre-intake D1 migration enforces max-one active arm and preserves 
 
 test("Phase 5 pre-intake routes are admin-only and capture happens before queue send", () => {
   const handleApiIndex = source.indexOf("async function handleApi");
+  const phase5GateIndex = source.indexOf("const phase5Unauthorized = requirePhase5Control(request, env);", handleApiIndex);
   const adminGateIndex = source.indexOf("const unauthorized = requireAdmin(request, env);", handleApiIndex);
   const armRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/arm-next-reel"', handleApiIndex);
   const cancelRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/cancel-arm"', handleApiIndex);
   const renewRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/renew"', handleApiIndex);
-  assert.ok(armRouteIndex > adminGateIndex, "pre-intake arm route must be behind admin gate");
-  assert.ok(cancelRouteIndex > adminGateIndex, "pre-intake cancel route must be behind admin gate");
-  assert.ok(renewRouteIndex > adminGateIndex, "lease renewal route must be behind admin gate");
+  assert.ok(armRouteIndex > phase5GateIndex && armRouteIndex < adminGateIndex, "pre-intake arm route must be behind Phase 5 control gate");
+  assert.ok(cancelRouteIndex > phase5GateIndex && cancelRouteIndex < adminGateIndex, "pre-intake cancel route must be behind Phase 5 control gate");
+  assert.ok(renewRouteIndex > phase5GateIndex && renewRouteIndex < adminGateIndex, "lease renewal route must be behind Phase 5 control gate");
 
   const createJobIndex = source.indexOf("async function createJob");
   const captureIndex = source.indexOf("capturePhase5PreintakeArmForJob(env", createJobIndex);
