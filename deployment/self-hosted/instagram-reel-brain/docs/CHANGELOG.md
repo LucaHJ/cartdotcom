@@ -8,12 +8,20 @@
   runtime/egress networks only, and all execution/mutation flags disabled.
 - Built Ubuntu image
   `cartdotcom-instagram-reel-brain-phase5-runner:latest`
-  (`sha256:00248789d8d059e2c05ca2f36e98bb82d16076c1f710f1051aa6248e91cbaf5e`,
-  `438344540` bytes) and proved inert health, dependency versions,
+  (`sha256:a3bbdc7a1ee58214c895c85a64103c49dc0e13a46fd4d168a6622baec2a74d64`,
+  `443614754` bytes) and proved inert health, dependency versions,
   fail-closed runner invocation, no-network synthetic media extraction/fake
   Codex, and one redacted Codex CLI auth smoke. The runtime remains stopped and
   no live job, arm, backlog, publication, reaction, or authority change
   occurred.
+- Corrected the Phase 5C runtime blocker in commit `e42cb63`: the exact runner
+  now has container-native PostgreSQL control through `psycopg` and a read-only
+  `/run/secrets/postgres_password` mount, while the old SSH/Docker/psql path is
+  explicit `legacy-ssh` mode only. Ubuntu probes now prove exact dry-run,
+  guarded local transition, restart, rollback, fake Worker token-file control,
+  and fail-closed missing-PG/bad-token behaviour before processor import. No
+  existing server Phase 5/admin Worker token file was found, so live use remains
+  blocked pending an approved token-file mount.
 - Accepted the first exact Reel local pilot
   `b14b79a0-9264-4613-9421-9920cba053c3` as Phase 5 case 1 of 3 after
   independent review; Phase 5 and Phase 6 remain blocked.

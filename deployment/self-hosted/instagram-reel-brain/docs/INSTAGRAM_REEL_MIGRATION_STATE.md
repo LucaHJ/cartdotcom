@@ -128,7 +128,8 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   dedicated inert Ubuntu Reel runtime.
 - Ubuntu live local execution. A dedicated inert Reel media/Codex runtime now
   exists, but it has no selector, scheduler, claim loop, enabled execution path,
-  or approval for live use before independent review.
+  or approval for live use before independent review. A real Worker exact-control
+  token file is not yet present on the server for this runtime.
 - Reuse of missed manual-race job `35004cbd-a428-419f-93bf-96c3bcb54598`;
   it completed under cloud authority and is permanently excluded as the first
   local pilot.
@@ -144,7 +145,9 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 - PID limit: 128 per existing inert service; 256 for the profile-gated
   `phase5-runner` image.
 - No host ports.
-- No shared `cartdotcom-edge` or `cartdotcom-data` membership in Phase 1.
+- No shared `cartdotcom-edge` membership. The stopped `phase5-runner` profile
+  is the only Reel service allowed to attach to `cartdotcom-data`, and only for
+  native PostgreSQL control-plane checks.
 
 ## Current gate
 
@@ -201,8 +204,8 @@ loading. `/health` is `ok=true`, `ingest_mode=live`, and
 `backlog_processing=false`. Post-deploy production state has zero queued/running
 jobs, zero active Phase 5 fences, zero armed Phase 5 arms, and zero backlog
 queued/running jobs. The inert Ubuntu runner remains disabled. Ubuntu full live
-execution remains blocked until a dedicated Reel media/Codex runtime is
-provided; see
+execution remains blocked until the dedicated Reel media/Codex runtime receives
+independent review and an approved Worker token-file mount exists; see
 `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 Phase 5B was accepted by independent supervisor review after commits `08c94a3`
@@ -215,16 +218,23 @@ Phase 5C then added the dedicated inert Ubuntu Reel media/Codex runtime in
 commit `2f9f8e4a843ac994f53aa6836a4f406e4380a835`. The server image
 `cartdotcom-instagram-reel-brain-phase5-runner:latest` was built under the
 `phase5-runner` profile with image ID
-`sha256:00248789d8d059e2c05ca2f36e98bb82d16076c1f710f1051aa6248e91cbaf5e`
-and size `438344540` bytes. The runtime is stopped/inert, has `restart: "no"`,
-no selector/scheduler/claim loop, no host ports, isolated Reel runtime/egress
-networks only, read-only root filesystem, writable tmpfs scratch directories,
-and read-only Codex `auth.json` mounted into a writable tmpfs `CODEX_HOME` by
-symlink. Ubuntu probes passed for inert health, tool versions, fail-closed
-runner invocation, no-network synthetic media extraction/fake Codex synthesis,
-and one redacted Codex CLI smoke using the existing server auth mount.
-Post-build Cloudflare `/health` remained ok with `backlog_processing=false`;
-D1 had zero active jobs, active Phase 5 fences, armed captures, and backlog
+`sha256:a3bbdc7a1ee58214c895c85a64103c49dc0e13a46fd4d168a6622baec2a74d64`
+and size `443614754` bytes after corrective commit
+`e42cb63100b55302416e616e53d369b0d31477e9`. The runtime is stopped/inert, has
+`restart: "no"`, no selector/scheduler/claim loop, no host ports, isolated Reel
+runtime/egress networks, read-only root filesystem, writable tmpfs scratch
+directories, read-only Codex `auth.json` mounted into writable tmpfs
+`CODEX_HOME` by symlink, and a native PostgreSQL control path through `psycopg`
+over the required internal `cartdotcom-data` network. Ubuntu probes passed for
+inert health, tool versions, fail-closed runner invocation, no-network
+synthetic media extraction/fake Codex synthesis, exact native-PG dry-run against
+an isolated dropped synthetic schema, guarded local transition/restart/rollback,
+fake Worker token-file control, missing-PG/bad-token fail-closed behaviour
+before processor import, and one redacted Codex CLI smoke using the existing
+server auth mount. No existing server Phase 5/admin Worker token file was found,
+so live use remains blocked until an approved token-file mount exists.
+Post-build Cloudflare `/health` remained ok with `backlog_processing=false`; D1
+had zero active jobs, active Phase 5 fences, armed captures, and backlog
 queued/running jobs; Reel/News/Caddy/PostgreSQL were healthy. See
 `PHASE_5C_INERT_RUNTIME_REPORT_2026-08-22.md`.
 
