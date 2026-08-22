@@ -1,5 +1,29 @@
 # Instagram Reel Self-Hosted Changelog
 
+## 2026-08-22
+
+- Accepted the first exact Reel local pilot
+  `b14b79a0-9264-4613-9421-9920cba053c3` as Phase 5 case 1 of 3 after
+  independent review; Phase 5 and Phase 6 remain blocked.
+- Completed bounded Phase 5B runner hardening in commit `918a496` and deployed
+  Worker version `8d408b01-5323-40f3-847c-559320869be9`.
+- Added admin-only exact start/finalize/abort Worker control routes and moved
+  the self-hosted runner away from operational direct Wrangler/D1 mutation.
+- Added checkpointed crash/restart stages and one-command exact
+  pre-publication rollback to `scripts/phase5_one_job_runner.py`.
+- Copied the disabled-by-default Ubuntu runner to
+  `/srv/cartdotcom/instagram-reel-brain/scripts/phase5_one_job_runner.py` and
+  the cloud processor source to
+  `/srv/cartdotcom/instagram-reel-brain/phase5-runner/container/app.py`.
+- Proved Ubuntu no-live dry-run and synthetic rollback against isolated schema
+  `reel_phase5b_runner_test_20260822133451`; no real job, arm, backlog,
+  carousel, retrieval, note, Codex execution, publication, or Instagram
+  outbound action occurred.
+- Recorded the remaining Ubuntu runtime blocker: host Codex CLI and media
+  dependencies are absent, while the News Codex runner has Codex/auth but not
+  the Python/media stack required by the Reel processor. A dedicated Reel
+  runner runtime is needed before the next live local case.
+
 ## 2026-08-21
 
 - Completed the corrected Phase 4 historical replay validation after

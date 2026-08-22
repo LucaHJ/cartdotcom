@@ -3,8 +3,9 @@
 Status: Phase 4 shadow live intake observation passed independent review.
 Bounded Phase 5 preparation is implemented and deployed. The first live
 controlled-compute pilot was pre-intake captured, locally claimed, renewed,
-and completed for one exact Reel job. Phase 5 is stopped for independent
-supervisor review before any second pilot or Phase 6 work.
+and completed for one exact Reel job and accepted as Phase 5 case 1 of 3.
+Phase 5B runner hardening is complete and stopped for independent supervisor
+review before any second pilot, carousel/retrieval case, or Phase 6 work.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
@@ -17,7 +18,10 @@ correction and historical validation blocker are recorded in
 `PHASE_4_TIMESTAMP_CORRECTION_REPORT_2026-08-21.md`; the completed corrected
 historical replay validation is recorded in
 `PHASE_4_HISTORICAL_REPLAY_VALIDATION_REPORT_2026-08-21.md`. Phase 5
-preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
+preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`; the first
+one-job local run is recorded in
+`PHASE_5_ONE_JOB_LOCAL_RUN_REPORT_2026-08-22.md`; Phase 5B runner hardening is
+recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 ## Enabled
 
@@ -62,8 +66,9 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
   by migration `0021_phase5_local_pilot_fence.sql`.
 - Empty production D1 Phase 5 pre-intake arm table `phase5_preintake_arms`,
   created by migration `0022_phase5_preintake_arm.sql`.
-- Admin-only Cloudflare Phase 5 arm/fence/rollback/renew endpoints on Worker
-  version `b24cf2ea-1536-42d3-8647-7a700eeccc16`.
+- Admin-only Cloudflare Phase 5 arm/fence/rollback/renew endpoints.
+- Admin-only Cloudflare Phase 5 exact local runner start/finalize/abort
+  endpoints on Worker version `8d408b01-5323-40f3-847c-559320869be9`.
 - Non-authoritative local Phase 5 lease/event tables from
   `0005_phase5_controlled_pilot.sql`, with one-active-lease enforcement through
   `phase5_pilot_leases_one_active_idx`.
@@ -79,6 +84,10 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
   `b14b79a0-9264-4613-9421-9920cba053c3`.
 - First one-job local runner report:
   `PHASE_5_ONE_JOB_LOCAL_RUN_REPORT_2026-08-22.md`.
+- Hardened disabled-by-default Phase 5B Ubuntu runner copy:
+  `/srv/cartdotcom/instagram-reel-brain/scripts/phase5_one_job_runner.py`.
+- Phase 5B runner hardening report:
+  `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 ## Disabled
 
@@ -107,8 +116,12 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
   from the Ubuntu server after validation completed.
 - Unrestricted Phase 5 local claims; only the reviewed exact pre-intake pilot
   job has been processed locally.
-- Additional live Phase 5 pilot execution before independent review of the
-  first completed one-job run.
+- Additional live Phase 5 pilot execution before independent review of Phase
+  5B runner hardening and Ubuntu runtime readiness.
+- Ubuntu live local execution. The host currently lacks Codex CLI and the
+  media processor dependencies (`yt_dlp` was missing during import); the News
+  Codex runner has Codex/auth but not Python/media dependencies, so a dedicated
+  Reel runner runtime is still required before another local live case.
 - Reuse of missed manual-race job `35004cbd-a428-419f-93bf-96c3bcb54598`;
   it completed under cloud authority and is permanently excluded as the first
   local pilot.
@@ -153,5 +166,19 @@ contains a matching `leased` Phase 5 pilot lease for owner
   job count is zero, and active Phase 5 fence count is zero. The result is
   recorded in `PHASE_5_ONE_JOB_LOCAL_RUN_REPORT_2026-08-22.md`.
 
+Phase 5B then hardened the reusable runner. Commit `918a496` added an
+admin-only exact start/finalize/abort Worker control surface and replaced
+operational Wrangler/D1 mutation in the local runner. Worker version
+`8d408b01-5323-40f3-847c-559320869be9` is deployed; `/health` is `ok=true`,
+`ingest_mode=live`, and `backlog_processing=false`. Post-deploy production
+state has zero queued/running jobs, zero active Phase 5 fences, and zero armed
+Phase 5 arms. The inert Ubuntu runner was copied to
+`/srv/cartdotcom/instagram-reel-brain/scripts/phase5_one_job_runner.py`, dry-run
+checked against isolated schema `reel_phase5b_runner_test_20260822133451`, and
+synthetic rollback wrote exactly one local rollback event through a fake local
+Worker endpoint. Ubuntu full live execution remains blocked until a dedicated
+Reel media/Codex runtime is provided; see
+`PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
+
 No carousel, retrieval case, second pilot, Phase 6 work, or authority cutover is
-approved before this first pre-armed Reel receives independent review.
+approved before Phase 5B receives independent review.
