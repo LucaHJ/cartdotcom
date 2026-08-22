@@ -2,8 +2,8 @@
 
 Status: Phase 4 shadow live intake observation passed independent review.
 Bounded Phase 5 preparation is implemented and deployed. The first live
-controlled-compute pilot is waiting for an admin-authenticated pre-intake arm
-followed by one brand-new Reel share within the arm window.
+controlled-compute pilot has been pre-intake captured and locally claimed for
+one exact Reel job, but live local processing has not started.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
@@ -66,6 +66,8 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
 - Non-authoritative local Phase 5 lease/event tables from
   `0005_phase5_controlled_pilot.sql`, with one-active-lease enforcement through
   `phase5_pilot_leases_one_active_idx`.
+- Exact local claim report:
+  `PHASE_5_LOCAL_CLAIM_REPORT_2026-08-22.md`.
 - Synthetic-only local Phase 5 harness for media, transcription, Codex schema,
   token accounting, reaction audit, publication artifact, private playback, and
   R2-mirror receipt checks.
@@ -83,7 +85,8 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
 - Archiver.
 - Auth rotation.
 - Local processing authority.
-- Local job claims.
+- Unrestricted local job claims. The only local claim recorded is exact job
+  `b14b79a0-9264-4613-9421-9920cba053c3`.
 - Local Codex execution.
 - Local publisher.
 - Instagram outbound actions.
@@ -128,6 +131,14 @@ could be fenced and completed under cloud authority. The replacement mechanism
 is pre-intake arming: an admin must arm capture of the next new Reel for the
 exact allowlisted sender, with a maximum 15-minute expiry, before the user sends
 the Reel. Intake consumes the arm and creates the exact active fence before any
-cloud queue message is published. No carousel, retrieval case, second pilot,
-Phase 6 work, or authority cutover is approved before the first pre-armed Reel
-completes and receives independent review.
+cloud queue message is published. This was exercised with arm
+`phase5-next-reel-20260822-122532`, which captured job
+`b14b79a0-9264-4613-9421-9920cba053c3`. The cloud fence is now
+`local_claimed`, and the local shadow schema `reel_phase4_shadow_20260821_014246`
+contains a matching `leased` Phase 5 pilot lease for owner
+`phase5-local-worker-1`. The deployed self-hosted services remain inert-health
+services, so no live media/Codex/publication runner has started. Next action is
+to implement/start the bounded live local runner for this exact job or roll it
+back to Cloudflare. No carousel, retrieval case, second pilot, Phase 6 work, or
+authority cutover is approved before the first pre-armed Reel completes and
+receives independent review.
