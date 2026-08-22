@@ -114,6 +114,14 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
     runner.indexOf('start_response.get("processor_already_complete")') < runner.indexOf("processor.process(payload)"),
     "restart after cloud completion must skip processor execution before the processor call site",
   );
+  assert.ok(
+    runner.indexOf('if not start_response.get("ok")') < runner.indexOf("processor.process(payload)"),
+    "failed cloud start or failed processing-lease renewal must abort before processor execution",
+  );
+  assert.ok(
+    runner.indexOf('"token_expires_at": start_response.get("token_expires_at")') < runner.indexOf("processor.process(payload)"),
+    "runner must checkpoint the Worker-returned effective/renewed execution expiry before processor execution",
+  );
   assert.match(runner, /sanitize_result/);
   assert.match(runner, /INSTAGRAM_COOKIES_JSON/);
   assert.doesNotMatch(runner, /wrangler_d1/);

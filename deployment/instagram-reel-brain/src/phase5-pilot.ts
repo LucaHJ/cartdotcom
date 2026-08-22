@@ -520,7 +520,17 @@ export function phase5StartRecoveryDecision(
       const callbackWithinFence = phase5TimestampAtOrBefore(row.upload_token_expires_at, row.expires_at);
       const localLeaseWithinFence = phase5TimestampAtOrBefore(row.local_lease_expires_at, row.expires_at);
       const matchingExecutionExpiries = row.upload_token_expires_at === row.local_lease_expires_at;
-      if (!callbackLeaseValid || !localLeaseValid || !callbackWithinFence || !localLeaseWithinFence || !matchingExecutionExpiries) {
+      const callbackCoversRequestedWindow = phase5TimestampAtOrBefore(executionExpiry.effectiveTokenExpiresAt, row.upload_token_expires_at);
+      const localLeaseCoversRequestedWindow = phase5TimestampAtOrBefore(executionExpiry.effectiveTokenExpiresAt, row.local_lease_expires_at);
+      if (
+        !callbackLeaseValid
+        || !localLeaseValid
+        || !callbackWithinFence
+        || !localLeaseWithinFence
+        || !matchingExecutionExpiries
+        || !callbackCoversRequestedWindow
+        || !localLeaseCoversRequestedWindow
+      ) {
         return {
           status: "renew_processing_lease",
           ok: true,

@@ -64,11 +64,12 @@ function phase5Snapshot(overrides = {}) {
 
 function simulateStart(snapshot, { callbackTokenHash = phase5Hash, fault = "", now = phase5Now, requestedTokenExpiresAt = phase5RequestedExpiresAt, renewalSucceeds = true } = {}) {
   const state = { ...snapshot };
-  const effects = { reactions: 0, start_audits: Number(state.marker_events || 0), processor_calls: 0 };
+  const effects = { reactions: 0, start_audits: Number(state.marker_events || 0), processor_calls: 0, guarded_starts: 0, queued_repairs: 0, renewals: 0 };
   const decision = phase5StartRecoveryDecision(state, { leaseOwner: phase5Owner, callbackTokenHash, tokenExpiresAt: requestedTokenExpiresAt, now });
   const effectiveTokenExpiresAt = decision.effectiveTokenExpiresAt || requestedTokenExpiresAt;
   if (!decision.ok) return { state, effects, decision };
   if (decision.status === "guarded_start") {
+    effects.guarded_starts += 1;
     state.status = "local_processing";
     state.local_lease_expires_at = effectiveTokenExpiresAt;
     if (fault === "after_fence_update") return { state, effects, decision };
@@ -79,6 +80,7 @@ function simulateStart(snapshot, { callbackTokenHash = phase5Hash, fault = "", n
     if (fault === "after_job_update_before_audit") return { state, effects, decision };
   } else if (decision.status === "repair_queued_start") {
     if (!renewalSucceeds) return { state, effects, decision: { ...decision, ok: false, recoveryStatus: "partial_start_repair_failed" } };
+    effects.queued_repairs += 1;
     state.local_lease_expires_at = effectiveTokenExpiresAt;
     state.job_status = "running";
     state.job_stage = "downloading";
@@ -86,6 +88,7 @@ function simulateStart(snapshot, { callbackTokenHash = phase5Hash, fault = "", n
     state.upload_token_expires_at = effectiveTokenExpiresAt;
   } else if (decision.status === "renew_processing_lease") {
     if (!renewalSucceeds) return { state, effects, decision: { ...decision, ok: false, recoveryStatus: "processing_lease_renewal_failed" } };
+    effects.renewals += 1;
     state.local_lease_expires_at = effectiveTokenExpiresAt;
     state.upload_token_expires_at = effectiveTokenExpiresAt;
   }
@@ -239,9 +242,9 @@ test("Phase 5 start recovery decision covers the exact crash/restart matrix", ()
     phase5Snapshot({
       status: "local_processing",
       job_status: "running",
-      local_lease_expires_at: phase5LeaseExpiresAt,
+      local_lease_expires_at: phase5RequestedExpiresAt,
       upload_token_hash: phase5Hash,
-      upload_token_expires_at: phase5LeaseExpiresAt,
+      upload_token_expires_at: phase5RequestedExpiresAt,
       marker_events: 0,
     }),
     { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now },
@@ -296,7 +299,7 @@ test("Phase 5 start recovery decision covers the exact crash/restart matrix", ()
 });
 
 test("Phase 5 start recovery is expiry-aware and never silently revives stale authority", () => {
-  const validRunning = phase5Snapshot({
+  const shortRunning = phase5Snapshot({
     status: "local_processing",
     job_status: "running",
     local_lease_expires_at: phase5LeaseExpiresAt,
@@ -305,36 +308,42 @@ test("Phase 5 start recovery is expiry-aware and never silently revives stale au
     marker_events: 1,
   });
   assert.equal(
-    phase5StartRecoveryDecision(validRunning, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: Date.parse("2026-08-22T03:29:59.000Z") }).status,
-    "resume_running",
-    "running recovery resumes immediately before both execution expiries",
+    phase5StartRecoveryDecision(shortRunning, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: Date.parse("2026-08-22T03:29:59.000Z") }).status,
+    "renew_processing_lease",
+    "running recovery renews still-valid leases when they do not cover the newly requested safe processing window",
   );
   assert.equal(
-    phase5StartRecoveryDecision(validRunning, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: Date.parse("2026-08-22T03:30:01.000Z") }).status,
+    phase5StartRecoveryDecision(shortRunning, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: Date.parse("2026-08-22T03:30:01.000Z") }).status,
     "renew_processing_lease",
     "running recovery renews the processing lease after callback/local lease expiry but before overall fence expiry",
   );
+  const longRunning = { ...shortRunning, local_lease_expires_at: phase5RequestedExpiresAt, upload_token_expires_at: phase5RequestedExpiresAt };
   assert.equal(
-    phase5StartRecoveryDecision({ ...validRunning, upload_token_expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).status,
+    phase5StartRecoveryDecision(longRunning, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).status,
+    "resume_running",
+    "running recovery resumes without a write when existing equal leases cover the effective requested window",
+  );
+  assert.equal(
+    phase5StartRecoveryDecision({ ...shortRunning, upload_token_expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).status,
     "renew_processing_lease",
     "expired callback expiry alone requires a bounded renewal before processor work",
   );
   assert.equal(
-    phase5StartRecoveryDecision({ ...validRunning, local_lease_expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).status,
+    phase5StartRecoveryDecision({ ...shortRunning, local_lease_expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).status,
     "renew_processing_lease",
     "expired local fence lease alone requires a bounded renewal before processor work",
   );
   assert.equal(
-    phase5StartRecoveryDecision({ ...validRunning, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).recoveryStatus,
+    phase5StartRecoveryDecision({ ...shortRunning, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).recoveryStatus,
     "fence_expired_abort_required",
     "overall fence expiry fails closed instead of reviving the pilot",
   );
   assert.equal(
-    phase5StartRecoveryDecision({ ...validRunning, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).prepublicationAbortRequired,
+    phase5StartRecoveryDecision({ ...shortRunning, expires_at: phase5ExpiredAt }, { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).prepublicationAbortRequired,
     true,
   );
   assert.equal(
-    phase5StartRecoveryDecision(validRunning, { leaseOwner: phase5Owner, callbackTokenHash: "b".repeat(64), tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).recoveryStatus,
+    phase5StartRecoveryDecision(shortRunning, { leaseOwner: phase5Owner, callbackTokenHash: "b".repeat(64), tokenExpiresAt: phase5RequestedExpiresAt, now: phase5Now }).recoveryStatus,
     "callback_hash_mismatch",
   );
 
@@ -455,6 +464,55 @@ test("Phase 5 execution expiry is bounded by the overall fence with safety margi
   );
   assert.equal(insufficientStart.decision.recoveryStatus, "insufficient_fence_window_abort_required");
   assert.equal(insufficientStart.effects.processor_calls, 0, "insufficient overall fence window must stop before processor execution");
+});
+
+test("Phase 5 running recovery renews short stored leases before processor work", () => {
+  const oneHourFenceExpiry = new Date(phase5Now + 60 * 60_000).toISOString();
+  const requestedOneHourExpiry = oneHourFenceExpiry;
+  const effectiveOneHourExpiry = new Date(Date.parse(oneHourFenceExpiry) - PHASE5_EXECUTION_EXPIRY_SAFETY_MARGIN_MS).toISOString();
+  const oneSecondLeaseExpiry = new Date(phase5Now + 1_000).toISOString();
+
+  const shortStoredLease = phase5Snapshot({
+    status: "local_processing",
+    job_status: "running",
+    expires_at: oneHourFenceExpiry,
+    local_lease_expires_at: oneSecondLeaseExpiry,
+    upload_token_hash: phase5Hash,
+    upload_token_expires_at: oneSecondLeaseExpiry,
+    marker_events: 1,
+  });
+  const renewalDecision = phase5StartRecoveryDecision(
+    shortStoredLease,
+    { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash, tokenExpiresAt: requestedOneHourExpiry, now: phase5Now },
+  );
+  assert.equal(renewalDecision.status, "renew_processing_lease");
+  assert.equal(renewalDecision.effectiveTokenExpiresAt, effectiveOneHourExpiry);
+
+  const renewed = simulateStart(shortStoredLease, { requestedTokenExpiresAt: requestedOneHourExpiry });
+  assert.equal(renewed.decision.status, "renew_processing_lease");
+  assert.equal(renewed.state.local_lease_expires_at, effectiveOneHourExpiry);
+  assert.equal(renewed.state.upload_token_expires_at, effectiveOneHourExpiry);
+  assert.equal(renewed.effects.renewals, 1);
+  assert.equal(renewed.effects.processor_calls, 1, "processor work is allowed only after the short stored leases are renewed");
+
+  const failedRenewal = simulateStart(shortStoredLease, { requestedTokenExpiresAt: requestedOneHourExpiry, renewalSucceeds: false });
+  assert.equal(failedRenewal.decision.ok, false);
+  assert.equal(failedRenewal.decision.recoveryStatus, "processing_lease_renewal_failed");
+  assert.equal(failedRenewal.effects.renewals, 0);
+  assert.equal(failedRenewal.effects.processor_calls, 0, "failed renewal must stop before processor loading/execution");
+
+  const longStoredLease = { ...shortStoredLease, local_lease_expires_at: effectiveOneHourExpiry, upload_token_expires_at: effectiveOneHourExpiry };
+  const resumed = simulateStart(longStoredLease, { requestedTokenExpiresAt: requestedOneHourExpiry });
+  assert.equal(resumed.decision.status, "resume_running");
+  assert.equal(resumed.effects.renewals, 0, "sufficient existing leases resume without a renewal write");
+  assert.equal(resumed.effects.processor_calls, 1);
+
+  const insufficientFence = simulateStart(
+    { ...shortStoredLease, expires_at: new Date(phase5Now + PHASE5_EXECUTION_EXPIRY_SAFETY_MARGIN_MS + PHASE5_MIN_SAFE_PROCESSING_WINDOW_MS - 1).toISOString() },
+    { requestedTokenExpiresAt: requestedOneHourExpiry },
+  );
+  assert.equal(insufficientFence.decision.recoveryStatus, "insufficient_fence_window_abort_required");
+  assert.equal(insufficientFence.effects.processor_calls, 0, "insufficient authority must not load processor work");
 });
 
 test("Phase 5 finalize recovery decision repairs missing audit before idempotent success", () => {
