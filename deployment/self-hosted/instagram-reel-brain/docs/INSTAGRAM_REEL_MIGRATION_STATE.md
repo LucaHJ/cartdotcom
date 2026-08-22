@@ -2,8 +2,9 @@
 
 Status: Phase 4 shadow live intake observation passed independent review.
 Bounded Phase 5 preparation is implemented and deployed. The first live
-controlled-compute pilot has been pre-intake captured and locally claimed for
-one exact Reel job, but live local processing has not started.
+controlled-compute pilot was pre-intake captured, locally claimed, renewed,
+and completed for one exact Reel job. Phase 5 is stopped for independent
+supervisor review before any second pilot or Phase 6 work.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
@@ -61,8 +62,8 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
   by migration `0021_phase5_local_pilot_fence.sql`.
 - Empty production D1 Phase 5 pre-intake arm table `phase5_preintake_arms`,
   created by migration `0022_phase5_preintake_arm.sql`.
-- Admin-only Cloudflare Phase 5 arm/fence/rollback endpoints on Worker version
-  `fa6edd0c-f0a6-4f30-852c-94b1d5c94c9f`.
+- Admin-only Cloudflare Phase 5 arm/fence/rollback/renew endpoints on Worker
+  version `b24cf2ea-1536-42d3-8647-7a700eeccc16`.
 - Non-authoritative local Phase 5 lease/event tables from
   `0005_phase5_controlled_pilot.sql`, with one-active-lease enforcement through
   `phase5_pilot_leases_one_active_idx`.
@@ -71,6 +72,13 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
 - Synthetic-only local Phase 5 harness for media, transcription, Codex schema,
   token accounting, reaction audit, publication artifact, private playback, and
   R2-mirror receipt checks.
+- Secret-free Phase 5 exact-job guard script
+  `scripts/phase5_exact_pilot_guard.py`.
+- Disabled-by-default Phase 5 one-shot local runner
+  `scripts/phase5_one_job_runner.py`, exercised once for exact completed job
+  `b14b79a0-9264-4613-9421-9920cba053c3`.
+- First one-job local runner report:
+  `PHASE_5_ONE_JOB_LOCAL_RUN_REPORT_2026-08-22.md`.
 
 ## Disabled
 
@@ -87,19 +95,20 @@ preparation is recorded in `PHASE_5_PREP_REPORT_2026-08-22.md`.
 - Local processing authority.
 - Unrestricted local job claims. The only local claim recorded is exact job
   `b14b79a0-9264-4613-9421-9920cba053c3`.
-- Local Codex execution.
-- Local publisher.
-- Instagram outbound actions.
+- General local Codex execution outside the one completed exact pilot.
+- General local publisher outside the one completed exact pilot.
+- General Instagram outbound actions outside the one completed exact pilot's
+  normal source-message status reactions.
 - Historical backlog enumeration, replay, selection, or processing.
 - Production D1/R2/KV mutation.
 - Phase 5 authority cutover.
 - Temporary historical replay credential `PHASE4_REPLAY_TOKEN`; the corrected
   replay credential was created only for validation, then revoked and removed
   from the Ubuntu server after validation completed.
-- Unrestricted Phase 5 local claims; only one future exact admin-fenced job may
-  be processed locally.
-- Live Phase 5 pilot execution until a brand-new Reel share is explicitly
-  preceded by an explicit pre-intake arm and then identified.
+- Unrestricted Phase 5 local claims; only the reviewed exact pre-intake pilot
+  job has been processed locally.
+- Additional live Phase 5 pilot execution before independent review of the
+  first completed one-job run.
 - Reuse of missed manual-race job `35004cbd-a428-419f-93bf-96c3bcb54598`;
   it completed under cloud authority and is permanently excluded as the first
   local pilot.
@@ -136,9 +145,13 @@ cloud queue message is published. This was exercised with arm
 `b14b79a0-9264-4613-9421-9920cba053c3`. The cloud fence is now
 `local_claimed`, and the local shadow schema `reel_phase4_shadow_20260821_014246`
 contains a matching `leased` Phase 5 pilot lease for owner
-`phase5-local-worker-1`. The deployed self-hosted services remain inert-health
-services, so no live media/Codex/publication runner has started. Next action is
-to implement/start the bounded live local runner for this exact job or roll it
-back to Cloudflare. No carousel, retrieval case, second pilot, Phase 6 work, or
-authority cutover is approved before the first pre-armed Reel completes and
-receives independent review.
+  `phase5-local-worker-1`. The exact lease was renewed to
+  `2026-08-22T08:40:59.535Z` before live execution. The bounded one-shot local
+  runner then completed the exact Reel job
+  `b14b79a0-9264-4613-9421-9920cba053c3`; the job is complete, the cloud fence is
+  `local_complete`, the local lease is `completed`, production queued/running
+  job count is zero, and active Phase 5 fence count is zero. The result is
+  recorded in `PHASE_5_ONE_JOB_LOCAL_RUN_REPORT_2026-08-22.md`.
+
+No carousel, retrieval case, second pilot, Phase 6 work, or authority cutover is
+approved before this first pre-armed Reel receives independent review.

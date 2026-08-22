@@ -2,6 +2,7 @@ export const PHASE5_FENCE_CONFIRMATION = "FENCE EXACT PHASE 5 LOCAL PILOT JOB";
 export const PHASE5_ROLLBACK_CONFIRMATION = "ROLL BACK PHASE 5 LOCAL PILOT JOB";
 export const PHASE5_ARM_CONFIRMATION = "ARM NEXT PHASE 5 REEL PILOT SHARE";
 export const PHASE5_CANCEL_ARM_CONFIRMATION = "CANCEL PHASE 5 REEL PILOT ARM";
+export const PHASE5_RENEW_CONFIRMATION = "RENEW EXACT PHASE 5 LOCAL PILOT LEASE";
 export const PHASE5_MIN_EXPLICIT_JOB_CREATED_AT = "2026-08-21T15:01:28.000Z";
 
 export const PHASE5_ACTIVE_FENCE_STATUSES = Object.freeze(["armed", "local_claimed", "local_processing"] as const);
@@ -33,6 +34,16 @@ export type Phase5RollbackRequest = {
   pilot_key?: string;
   job_id?: string;
   confirmation?: string;
+  reason?: string;
+};
+
+export type Phase5RenewRequest = {
+  pilot_key?: string;
+  job_id?: string;
+  source_message_id?: string;
+  lease_owner?: string;
+  confirmation?: string;
+  expires_minutes?: number;
   reason?: string;
 };
 
@@ -113,6 +124,11 @@ export function phase5ArmExpiry(input: Phase5PreintakeArmRequest, now = Date.now
   return new Date(now + minutes * 60_000).toISOString();
 }
 
+export function phase5RenewalExpiry(input: Phase5RenewRequest, now = Date.now()): string {
+  const minutes = Math.max(5, Math.min(Number(input.expires_minutes || 180) || 180, 360));
+  return new Date(now + minutes * 60_000).toISOString();
+}
+
 export function validatePhase5FenceRequest(input: Phase5FenceRequest): {
   pilotKey: string;
   jobId: string;
@@ -142,6 +158,29 @@ export function validatePhase5RollbackRequest(input: Phase5RollbackRequest): {
     pilotKey: normalisePhase5PilotKey(input.pilot_key),
     jobId: normalisePhase5JobId(input.job_id),
     reason: String(input.reason || "operator_requested_phase5_rollback").trim().slice(0, 500),
+  };
+}
+
+export function validatePhase5RenewRequest(input: Phase5RenewRequest, now = Date.now()): {
+  pilotKey: string;
+  jobId: string;
+  sourceMessageId: string;
+  leaseOwner: string;
+  expiresAt: string;
+  reason: string;
+} {
+  if (input.confirmation !== PHASE5_RENEW_CONFIRMATION) {
+    throw new Error(`confirmation must equal ${PHASE5_RENEW_CONFIRMATION}`);
+  }
+  const leaseOwner = String(input.lease_owner || "").trim();
+  if (!/^[a-z0-9][a-z0-9_.:-]{2,120}$/i.test(leaseOwner)) throw new Error("An exact lease_owner is required");
+  return {
+    pilotKey: normalisePhase5PilotKey(input.pilot_key),
+    jobId: normalisePhase5JobId(input.job_id),
+    sourceMessageId: normalisePhase5SourceMessageId(input.source_message_id),
+    leaseOwner,
+    expiresAt: phase5RenewalExpiry(input, now),
+    reason: String(input.reason || "phase5_exact_job_lease_renewal").trim().slice(0, 500),
   };
 }
 

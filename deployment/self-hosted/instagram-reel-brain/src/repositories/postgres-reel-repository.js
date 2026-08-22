@@ -312,6 +312,49 @@ export class PostgresReelRepository {
     return result.rows?.[0] || null;
   }
 
+  async renewPhase5PilotLease({ pilotKey, jobId, sourceMessageId, leaseOwner, leaseSeconds = 10_800, reason }) {
+    return this.withTransaction(async () => {
+      const result = await this.query(
+        `UPDATE ${this.table("phase5_pilot_leases")} l
+         SET lease_heartbeat_at=now(),
+             lease_expires_at=now() + ($5 || ' seconds')::interval,
+             expires_at=now() + ($5 || ' seconds')::interval,
+             updated_at=now()
+         FROM ${this.table("jobs")} j
+         WHERE l.exact_job_id=j.id
+           AND l.pilot_key=$1
+           AND l.exact_job_id=$2
+           AND l.source_message_id=$3
+           AND l.lease_owner=$4
+           AND l.status='leased'
+           AND l.lease_expires_at > now()
+           AND j.status='queued'
+           AND j.completed_at IS NULL
+           AND j.html_key IS NULL
+           AND j.library_path IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM ${this.table("artifacts")} a
+             WHERE a.job_id=l.exact_job_id
+               AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM ${this.table("job_events")} e
+             WHERE e.job_id=l.exact_job_id
+               AND e.stage IN ('complete','published','phase5_local_complete')
+           )
+         RETURNING l.*`,
+        [pilotKey, jobId, sourceMessageId, leaseOwner, String(Math.max(300, Math.min(Number(leaseSeconds || 10_800), 21_600)))],
+      );
+      if (!result.rows?.[0]) return null;
+      await this.insertPhase5PilotEvent(pilotKey, jobId, "lease_renewed", "leased", {
+        lease_owner: leaseOwner,
+        lease_seconds: Math.max(300, Math.min(Number(leaseSeconds || 10_800), 21_600)),
+        reason: reason || "phase5_exact_job_lease_renewal",
+      });
+      return result.rows[0];
+    });
+  }
+
   async markPhase5PilotProcessing({ pilotKey, jobId, leaseOwner }) {
     return this.withTransaction(async () => {
       const result = await this.query(

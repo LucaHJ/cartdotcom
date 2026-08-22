@@ -24,12 +24,14 @@ import {
   PHASE5_ARM_CONFIRMATION,
   PHASE5_CANCEL_ARM_CONFIRMATION,
   PHASE5_MIN_EXPLICIT_JOB_CREATED_AT,
+  PHASE5_RENEW_CONFIRMATION,
   isPhase5ActiveFenceStatus,
   phase5FenceActive,
   phase5ArmCanCaptureShare,
   validatePhase5PreintakeArmRequest,
   validatePhase5PreintakeCancelRequest,
   validatePhase5FenceRequest,
+  validatePhase5RenewRequest,
   validatePhase5RollbackRequest,
   type Phase5PreintakeArmRow,
   type Phase5FenceRow,
@@ -2968,6 +2970,90 @@ async function handlePhase5Rollback(request: Request, env: Env): Promise<Respons
   return json({ ok: true, rolled_back: true, queued: true, pilot_key: validated.pilotKey, job_id: validated.jobId });
 }
 
+async function handlePhase5RenewLease(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{
+    pilot_key?: string;
+    job_id?: string;
+    source_message_id?: string;
+    lease_owner?: string;
+    confirm_renew?: string;
+    expires_minutes?: number;
+    reason?: string;
+  }>(request);
+  let validated: ReturnType<typeof validatePhase5RenewRequest>;
+  try {
+    validated = validatePhase5RenewRequest({ ...input, confirmation: input.confirm_renew });
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const row = await env.REEL_DB.prepare(
+    `SELECT f.pilot_key,f.job_id,f.source_message_id,f.status,f.local_lease_owner,f.local_lease_expires_at,
+            j.status AS job_status,j.stage AS job_stage,j.html_key,j.library_path,j.completed_at,
+            (SELECT COUNT(*) FROM artifacts a WHERE a.job_id=f.job_id AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')) AS publication_artifacts,
+            (SELECT COUNT(*) FROM job_events e WHERE e.job_id=f.job_id AND e.stage IN ('complete','published','phase5_local_complete')) AS completion_events
+     FROM phase5_local_pilot_fences f
+     JOIN jobs j ON j.id=f.job_id
+     WHERE f.pilot_key=? AND f.job_id=? AND f.source_message_id=?`,
+  ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId).first<Phase5FenceRow & {
+    job_status: string;
+    job_stage: string;
+    html_key: string | null;
+    library_path: string | null;
+    completed_at: string | null;
+    publication_artifacts: number;
+    completion_events: number;
+  }>();
+  if (!row) return json({ ok: false, error: "Exact Phase 5 fence/job not found" }, { status: 404 });
+  if (row.status !== "local_claimed" || row.local_lease_owner !== validated.leaseOwner) {
+    return json({ ok: false, error: "Phase 5 renewal requires the exact local_claimed fence and lease owner", fence_status: row.status, lease_owner: row.local_lease_owner }, { status: 409 });
+  }
+  if (row.job_status !== "queued") {
+    return json({ ok: false, error: "Phase 5 renewal requires the job to remain queued", job_status: row.job_status, job_stage: row.job_stage }, { status: 409 });
+  }
+  if (row.html_key || row.library_path || row.completed_at || Number(row.publication_artifacts || 0) > 0 || Number(row.completion_events || 0) > 0) {
+    return json({ ok: false, error: "Phase 5 renewal refused because completion/publication evidence exists" }, { status: 409 });
+  }
+  const marker = `phase5-local-pilot:${validated.pilotKey}:renew:${validated.expiresAt}`;
+  const updated = await env.REEL_DB.prepare(
+    `UPDATE phase5_local_pilot_fences
+     SET expires_at=?,local_lease_expires_at=?,updated_at=CURRENT_TIMESTAMP
+     WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_claimed' AND local_lease_owner=?
+       AND EXISTS (
+         SELECT 1 FROM jobs j
+         WHERE j.id=phase5_local_pilot_fences.job_id
+           AND j.status='queued'
+           AND j.html_key IS NULL
+           AND j.library_path IS NULL
+           AND j.completed_at IS NULL
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM artifacts a
+         WHERE a.job_id=phase5_local_pilot_fences.job_id
+           AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM job_events e
+         WHERE e.job_id=phase5_local_pilot_fences.job_id
+           AND e.stage IN ('complete','published','phase5_local_complete')
+       )`,
+  ).bind(validated.expiresAt, validated.expiresAt, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
+  if ((updated.meta.changes || 0) !== 1) {
+    return json({ ok: false, error: "Phase 5 renewal lost the guarded claim or the job is no longer renewable" }, { status: 409 });
+  }
+  await env.REEL_DB.prepare(
+    "INSERT INTO job_events(job_id,stage,status,emoji,detail) VALUES (?,'phase5_local_lease_renewed','queued','🧪',?)",
+  ).bind(validated.jobId, JSON.stringify({
+    marker,
+    pilot_key: validated.pilotKey,
+    source_message_id: validated.sourceMessageId,
+    lease_owner: validated.leaseOwner,
+    expires_at: validated.expiresAt,
+    reason: validated.reason,
+    confirmation: PHASE5_RENEW_CONFIRMATION,
+  })).run();
+  return json({ ok: true, renewed: true, pilot_key: validated.pilotKey, job_id: validated.jobId, lease_owner: validated.leaseOwner, expires_at: validated.expiresAt });
+}
+
 async function handlePhase5PreintakeArm(request: Request, env: Env): Promise<Response> {
   const input = await readJson<{ arm_key?: string; sender_id?: string; confirm_arm?: string; expires_minutes?: number }>(request);
   let validated: ReturnType<typeof validatePhase5PreintakeArmRequest>;
@@ -3187,7 +3273,25 @@ async function validateCallback(request: Request, env: Env, jobId: string): Prom
     .first<JobRow>();
   if (!job || !job.upload_token_hash || !job.upload_token_expires_at) return null;
   if (Date.parse(job.upload_token_expires_at) < Date.now()) return null;
-  return (await sha256(token)) === job.upload_token_hash ? job : null;
+  if ((await sha256(token)) !== job.upload_token_hash) return null;
+  const phase5Fence = await env.REEL_DB.prepare(
+    `SELECT status,local_lease_owner,local_lease_expires_at
+     FROM phase5_local_pilot_fences
+     WHERE job_id=?
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+  ).bind(jobId).first<{ status: string; local_lease_owner: string | null; local_lease_expires_at: string | null }>();
+  if (phase5Fence) {
+    if (
+      phase5Fence.status !== "local_processing"
+      || !phase5Fence.local_lease_expires_at
+      || Date.parse(phase5Fence.local_lease_expires_at) < Date.now()
+      || !phase5Fence.local_lease_owner
+    ) {
+      return null;
+    }
+  }
+  return job;
 }
 
 async function createJob(
@@ -4661,6 +4765,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname === "/api/admin/phase5/local-pilot/arm-next-reel" && request.method === "POST") return handlePhase5PreintakeArm(request, env);
   if (url.pathname === "/api/admin/phase5/local-pilot/cancel-arm" && request.method === "POST") return handlePhase5PreintakeCancel(request, env);
   if (url.pathname === "/api/admin/phase5/local-pilot/fence" && request.method === "POST") return handlePhase5Fence(request, env);
+  if (url.pathname === "/api/admin/phase5/local-pilot/renew" && request.method === "POST") return handlePhase5RenewLease(request, env);
   if (url.pathname === "/api/admin/phase5/local-pilot/rollback" && request.method === "POST") return handlePhase5Rollback(request, env);
   if (url.pathname === "/api/admin/instagram-confirm-live" && request.method === "POST") return handleConfirmLiveMode(env);
   if (url.pathname === "/api/admin/instagram-pilot-summary" && request.method === "POST") return handlePilotSummaryDm(request, env);

@@ -7,6 +7,7 @@ import {
   PHASE5_CANCEL_ARM_CONFIRMATION,
   PHASE5_FENCE_CONFIRMATION,
   PHASE5_MIN_EXPLICIT_JOB_CREATED_AT,
+  PHASE5_RENEW_CONFIRMATION,
   PHASE5_ROLLBACK_CONFIRMATION,
   phase5ArmCanCaptureShare,
   phase5FenceActive,
@@ -14,6 +15,7 @@ import {
   validatePhase5FenceRequest,
   validatePhase5PreintakeArmRequest,
   validatePhase5PreintakeCancelRequest,
+  validatePhase5RenewRequest,
   validatePhase5RollbackRequest,
 } from "../src/phase5-pilot.ts";
 
@@ -56,6 +58,35 @@ test("Phase 5 rollback request requires exact confirmation and reason is bounded
     reason: "synthetic rollback",
   });
   assert.equal(validated.reason, "synthetic rollback");
+});
+
+test("Phase 5 renewal request requires exact identity, owner and caps renewal to six hours", () => {
+  assert.throws(
+    () => validatePhase5RenewRequest({
+      pilot_key: "phase5-reel-1",
+      job_id: "job-new-1",
+      source_message_id: "mid.1",
+      lease_owner: "phase5-local-worker-1",
+      confirmation: "wrong",
+    }),
+    /confirmation must equal/,
+  );
+  const now = Date.parse("2026-08-22T02:40:00.000Z");
+  const validated = validatePhase5RenewRequest({
+    pilot_key: "phase5-reel-1",
+    job_id: "job-new-1",
+    source_message_id: "mid.1",
+    lease_owner: "phase5-local-worker-1",
+    confirmation: PHASE5_RENEW_CONFIRMATION,
+    expires_minutes: 999,
+    reason: "implementation window",
+  }, now);
+  assert.equal(validated.pilotKey, "phase5-reel-1");
+  assert.equal(validated.jobId, "job-new-1");
+  assert.equal(validated.sourceMessageId, "mid.1");
+  assert.equal(validated.leaseOwner, "phase5-local-worker-1");
+  assert.equal(validated.expiresAt, "2026-08-22T08:40:00.000Z");
+  assert.equal(validated.reason, "implementation window");
 });
 
 test("Phase 5 active fences expire fail-closed", () => {
@@ -214,8 +245,10 @@ test("Phase 5 pre-intake routes are admin-only and capture happens before queue 
   const adminGateIndex = source.indexOf("const unauthorized = requireAdmin(request, env);", handleApiIndex);
   const armRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/arm-next-reel"', handleApiIndex);
   const cancelRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/cancel-arm"', handleApiIndex);
+  const renewRouteIndex = source.indexOf('"/api/admin/phase5/local-pilot/renew"', handleApiIndex);
   assert.ok(armRouteIndex > adminGateIndex, "pre-intake arm route must be behind admin gate");
   assert.ok(cancelRouteIndex > adminGateIndex, "pre-intake cancel route must be behind admin gate");
+  assert.ok(renewRouteIndex > adminGateIndex, "lease renewal route must be behind admin gate");
 
   const createJobIndex = source.indexOf("async function createJob");
   const captureIndex = source.indexOf("capturePhase5PreintakeArmForJob(env", createJobIndex);
@@ -233,4 +266,29 @@ test("Phase 5 pre-intake routes are admin-only and capture happens before queue 
   const rollbackIndex = source.indexOf("async function handlePhase5Rollback");
   assert.ok(source.indexOf("UPDATE phase5_preintake_arms", rollbackIndex) > rollbackIndex);
   assert.ok(source.indexOf("env.REEL_QUEUE.send", rollbackIndex) > source.indexOf("UPDATE phase5_preintake_arms", rollbackIndex));
+});
+
+test("Phase 5 renewal route fails closed on queued exact-job claim without completion or publication", () => {
+  const renewIndex = source.indexOf("async function handlePhase5RenewLease");
+  assert.ok(renewIndex > 0);
+  assert.ok(source.indexOf("validatePhase5RenewRequest", renewIndex) > renewIndex);
+  assert.ok(source.indexOf("f.pilot_key=? AND f.job_id=? AND f.source_message_id=?", renewIndex) > renewIndex);
+  assert.ok(source.indexOf('row.status !== "local_claimed"', renewIndex) > renewIndex);
+  assert.ok(source.indexOf("row.local_lease_owner !== validated.leaseOwner", renewIndex) > renewIndex);
+  assert.ok(source.indexOf('row.job_status !== "queued"', renewIndex) > renewIndex);
+  assert.ok(source.indexOf("row.html_key || row.library_path || row.completed_at", renewIndex) > renewIndex);
+  assert.ok(source.indexOf("publication_artifacts", renewIndex) > renewIndex);
+  assert.ok(source.indexOf("completion_events", renewIndex) > renewIndex);
+  assert.ok(source.indexOf("updated.meta.changes", renewIndex) > renewIndex);
+  assert.ok(source.indexOf("job is no longer renewable", renewIndex) > renewIndex);
+  assert.ok(source.indexOf("phase5_local_lease_renewed", renewIndex) > renewIndex);
+});
+
+test("Phase 5 callback validation refuses fenced jobs after rollback, expiry or owner mismatch", () => {
+  const callbackIndex = source.indexOf("async function validateCallback");
+  assert.ok(callbackIndex > 0);
+  assert.ok(source.indexOf("phase5_local_pilot_fences", callbackIndex) > callbackIndex);
+  assert.ok(source.indexOf('phase5Fence.status !== "local_processing"', callbackIndex) > callbackIndex);
+  assert.ok(source.indexOf("Date.parse(phase5Fence.local_lease_expires_at) < Date.now()", callbackIndex) > callbackIndex);
+  assert.ok(source.indexOf("!phase5Fence.local_lease_owner", callbackIndex) > callbackIndex);
 });

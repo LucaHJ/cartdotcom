@@ -5,10 +5,13 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   PHASE5_LOCAL_PILOT_CONFIRMATION,
+  PHASE5_LOCAL_RENEW_CONFIRMATION,
   PHASE5_LOCAL_ROLLBACK_CONFIRMATION,
   PHASE5_SYNTHETIC_STAGES,
+  phase5LeaseRenewalSeconds,
   validatePhase5LeaseRequest,
   validatePhase5LocalRollback,
+  validatePhase5LocalRenewal,
 } from "../src/domain/phase5-pilot.js";
 import { runSyntheticPhase5Pipeline } from "../src/domain/phase5-synthetic-pipeline.js";
 import { FixtureQueryClient } from "../src/repositories/fixture-client.js";
@@ -46,6 +49,63 @@ test("Phase 5 local lease validation requires exact identity and confirmation", 
   assert.equal(rollback.reason, "synthetic rollback");
 });
 
+test("Phase 5 local renewal validation requires exact identity, owner and caps at six hours", () => {
+  assert.throws(
+    () => validatePhase5LocalRenewal({
+      pilotKey: "phase5-reel-1",
+      jobId: "job-new-1",
+      sourceMessageId: "mid.1",
+      leaseOwner: "worker-1",
+      confirmation: "wrong",
+    }),
+    /confirmation must equal/,
+  );
+  const renewal = validatePhase5LocalRenewal({
+    pilotKey: "phase5-reel-1",
+    jobId: "job-new-1",
+    sourceMessageId: "mid.1",
+    cloudFenceKey: "phase5-reel-1",
+    leaseOwner: "phase5-local-worker-1",
+    leaseSeconds: 99_999,
+    confirmation: PHASE5_LOCAL_RENEW_CONFIRMATION,
+    reason: "implementation window",
+  });
+  assert.equal(renewal.leaseOwner, "phase5-local-worker-1");
+  assert.equal(renewal.leaseSeconds, 21_600);
+  assert.equal(renewal.reason, "implementation window");
+  assert.equal(phase5LeaseRenewalSeconds({ minutes: 1 }), 300);
+});
+
+test("Phase 5 guard script is exact-job scoped and secret-free", async () => {
+  const script = await readFile(new URL("../scripts/phase5_exact_pilot_guard.py", import.meta.url), "utf8");
+  assert.match(script, /PHASE5_ADMIN_TOKEN/);
+  assert.match(script, /RENEW EXACT PHASE 5 LOCAL PILOT LEASE/);
+  assert.match(script, /ROLL BACK PHASE 5 LOCAL PILOT JOB/);
+  assert.match(script, /pilot_key/);
+  assert.match(script, /source_message_id/);
+  assert.match(script, /lease_owner/);
+  assert.match(script, /j\.status/);
+  assert.match(script, /publication_artifacts/);
+  assert.doesNotMatch(script, /sk-[A-Za-z0-9]/);
+  assert.doesNotMatch(script, /Bearer [A-Za-z0-9_\-.]{16,}/);
+});
+
+test("Phase 5 one-shot runner requires exact live confirmation and reuses the production processor", async () => {
+  const runner = await readFile(new URL("../scripts/phase5_one_job_runner.py", import.meta.url), "utf8");
+  assert.match(runner, /RUN EXACT PHASE 5 LOCAL PILOT/);
+  assert.match(runner, /verify_cloud/);
+  assert.match(runner, /verify_local/);
+  assert.match(runner, /status='local_claimed'/);
+  assert.match(runner, /status='local_processing'/);
+  assert.match(runner, /status='running'/);
+  assert.match(runner, /stage='downloading'/);
+  assert.match(runner, /processor\.process\(payload\)/);
+  assert.match(runner, /result\.pop\("auth_json", None\)/);
+  assert.match(runner, /INSTAGRAM_COOKIES_JSON/);
+  assert.doesNotMatch(runner, /sk-[A-Za-z0-9]/);
+  assert.doesNotMatch(runner, /Bearer [A-Za-z0-9_\-.]{16,}/);
+});
+
 test("Phase 5 repository methods use exact one-job lease SQL and auditable events", async () => {
   const client = new FixtureQueryClient();
   const repo = new PostgresReelRepository(client);
@@ -66,6 +126,15 @@ test("Phase 5 repository methods use exact one-job lease SQL and auditable event
     leaseOwner: "worker-1",
     leaseSeconds: 120,
   });
+  client.enqueue({ rows: [{ pilot_key: "phase5-reel-1", exact_job_id: "job-new-1", status: "leased" }] });
+  await repo.renewPhase5PilotLease({
+    pilotKey: "phase5-reel-1",
+    jobId: "job-new-1",
+    sourceMessageId: "mid.1",
+    leaseOwner: "worker-1",
+    leaseSeconds: 21_600,
+    reason: "implementation window",
+  });
   client.enqueue({ rows: [{ pilot_key: "phase5-reel-1", exact_job_id: "job-new-1", status: "rolled_back" }] });
   await repo.rollbackPhase5PilotLease({
     pilotKey: "phase5-reel-1",
@@ -79,6 +148,10 @@ test("Phase 5 repository methods use exact one-job lease SQL and auditable event
   assert.match(sql, /WHERE pilot_key=\$1\s+AND exact_job_id=\$2/);
   assert.match(sql, /INSERT INTO reel_brain\.phase5_pilot_events/);
   assert.match(sql, /status IN \('armed','leased','processing'\)/);
+  assert.match(sql, /l\.source_message_id=\$3/);
+  assert.match(sql, /j\.status='queued'/);
+  assert.match(sql, /NOT EXISTS \(\s+SELECT 1 FROM reel_brain\.artifacts/);
+  assert.ok(client.queries.some((query) => query.values?.includes("lease_renewed")), "renewal event must be parameterised into the audit insert");
 });
 
 class SyntheticRepo {
