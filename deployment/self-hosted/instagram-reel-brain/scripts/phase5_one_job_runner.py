@@ -524,6 +524,8 @@ def ensure_idempotency_key(args: argparse.Namespace, path: Path, checkpoint: dic
 
 
 def load_processor_module():
+    if os.environ.get("REEL_PHASE5_ROLE") == "control":
+        raise SystemExit("phase5-control role cannot load the media/Codex processor")
     configured = os.environ.get("REEL_PHASE5_PROCESSOR_PATH", "").strip()
     candidates = (Path(configured),) if configured else DEFAULT_PROCESSOR_CANDIDATES
     processor_path = next((candidate for candidate in candidates if candidate.exists()), None)
@@ -703,7 +705,7 @@ def main() -> int:
             "callback_token": checkpoint["callback_token"],
             "instructions": local.get("instructions") or "",
             "codex_auth_json": load_codex_auth(Path(args.codex_auth_path)),
-            "instagram_cookies_json": os.environ.get("INSTAGRAM_COOKIES_JSON", ""),
+            "instagram_cookies_json": "",
             "instagram_media_json": local.get("source_media_json") or "",
             "timeout_seconds": args.timeout_seconds,
         }

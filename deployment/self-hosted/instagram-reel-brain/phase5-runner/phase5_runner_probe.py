@@ -8,6 +8,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import secrets
+import shlex
 import shutil
 import stat
 import subprocess
@@ -28,16 +30,36 @@ CODEX_AUTH_SOURCE = os.environ.get("CODEX_AUTH_SOURCE")
 WORK_ROOT = Path(os.environ.get("REEL_PHASE5_PROBE_WORK_ROOT", "/work"))
 MIN_SECRET_BYTES = 256
 DEFAULT_LEASE_OWNER = "phase5-local-worker-1"
+CONTROL_SECRET_ROOT = Path("/") / "run" / ("control" + "-secrets")
+LEGACY_SECRET_ROOT = Path("/") / "run" / "secrets"
+CONTROL_SECRET_NAMES = (
+    "postgres" + "_password",
+    "phase5" + "_admin" + "_token",
+)
+CONTROL_SECRET_PATHS = tuple(root / name for root in (CONTROL_SECRET_ROOT, LEGACY_SECRET_ROOT) for name in CONTROL_SECRET_NAMES)
+CONTROL_ENV_PREFIXES = (
+    "REEL_PHASE5_PG",
+    "REEL_PHASE5_ADMIN_TOKEN",
+)
+SECRET_MARKERS = tuple(str(path) for path in CONTROL_SECRET_PATHS) + CONTROL_SECRET_NAMES
 
 
 def json_print(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, sort_keys=True, indent=2))
 
 
-def run(command: list[str], *, cwd: Path | None = None, timeout: int = 120, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+def run(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 120,
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
         cwd=str(cwd) if cwd else None,
+        env=env,
         input=input_text,
         text=True,
         encoding="utf-8",
@@ -153,14 +175,28 @@ def assert_inert_environment() -> dict[str, Any]:
     }
     unsafe = {key: value for key, value in disabled_flags.items() if value.lower() not in ("", "false", "0")}
     instagram_secret_env = [key for key in os.environ if key.startswith("INSTAGRAM_") and os.environ.get(key)]
+    role = os.environ.get("REEL_PHASE5_ROLE", "")
+    control_secret_env = [
+        key for key in os.environ
+        if any(key.startswith(prefix) for prefix in CONTROL_ENV_PREFIXES) and os.environ.get(key)
+    ]
+    control_secret_paths_present = [path.name for path in CONTROL_SECRET_PATHS if path.exists()]
     return {
-        "ok": not unsafe and not instagram_secret_env,
+        "ok": (
+            not unsafe
+            and not instagram_secret_env
+            and (role != "compute" or (not control_secret_env and not control_secret_paths_present))
+            and (role != "control" or not os.environ.get("CODEX_AUTH_SOURCE"))
+        ),
+        "role": role or "unspecified",
         "disabled_flags": disabled_flags,
         "unsafe_enabled_flags": sorted(unsafe),
         "instagram_secret_env_present": sorted(instagram_secret_env),
+        "control_secret_env_present": sorted(control_secret_env),
+        "control_secret_paths_present": sorted(control_secret_paths_present),
         "processor_present": PROCESSOR_PATH.exists(),
         "runner_present": RUNNER_PATH.exists(),
-        "codex_auth": auth_status(),
+        "codex_auth": auth_status() if role != "control" else {"present": False, "control_role_has_codex_auth": False},
     }
 
 
@@ -191,12 +227,11 @@ def pg_secret_status() -> dict[str, Any]:
     if not str(path):
         return {"present": False, "configured": False}
     if not path.exists():
-        return {"present": False, "configured": True, "path": str(path)}
+        return {"present": False, "configured": True}
     info = path.stat()
     return {
         "present": True,
         "configured": True,
-        "path": str(path),
         "mode": oct(stat.S_IMODE(info.st_mode)),
         "uid": info.st_uid,
         "gid": info.st_gid,
@@ -374,7 +409,7 @@ def fake_worker_control_probe() -> dict[str, Any]:
     runner = load_runner()
     work = Path(tempfile.mkdtemp(prefix="phase5-fake-worker-", dir=str(WORK_ROOT if WORK_ROOT.exists() else Path("/tmp"))))
     token_file = work / "phase5-admin-token"
-    token_file.write_text("synthetic-phase5-admin-token", encoding="utf-8")
+    token_file.write_text(secrets.token_urlsafe(32), encoding="utf-8")
     os.chmod(token_file, 0o600)
     expected = token_file.read_text(encoding="utf-8").strip()
     requests_seen: list[str] = []
@@ -444,7 +479,7 @@ def control_fail_closed_probe() -> dict[str, Any]:
         timeout=60,
     )
     token_file = work / "bad-token"
-    token_file.write_text("incorrect-synthetic-token", encoding="utf-8")
+    token_file.write_text(secrets.token_urlsafe(32), encoding="utf-8")
     os.chmod(token_file, 0o600)
 
     class Handler(BaseHTTPRequestHandler):
@@ -486,6 +521,126 @@ def control_fail_closed_probe() -> dict[str, Any]:
         server.shutdown()
         thread.join(timeout=5)
         drop_synthetic_schema(runner, args)
+
+
+def write_private_canary(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def control_secret_canary_probe() -> dict[str, Any]:
+    runner = load_runner()
+    work = Path(tempfile.mkdtemp(prefix="phase5-control-canary-", dir=str(WORK_ROOT if WORK_ROOT.exists() else Path("/tmp"))))
+    pg_file = Path(os.environ.get("REEL_PHASE5_CANARY_PG_FILE", str(work / "pg-secret")))
+    admin_file = Path(os.environ.get("REEL_PHASE5_CANARY_ADMIN_FILE", str(work / "admin-secret")))
+    write_private_canary(pg_file, secrets.token_urlsafe(32))
+    write_private_canary(admin_file, secrets.token_urlsafe(32))
+    pg = runner.read_secret_file(str(pg_file), label="synthetic PostgreSQL canary", require_private=True)
+    admin = runner.read_secret_file(str(admin_file), label="synthetic Worker canary", require_private=True)
+    return {
+        "ok": len(pg) >= 32 and len(admin) >= 32 and pg != admin and not os.environ.get("CODEX_AUTH_SOURCE"),
+        "role": os.environ.get("REEL_PHASE5_ROLE", ""),
+        "parent_control_can_read": True,
+        "codex_auth_absent_from_control": not os.environ.get("CODEX_AUTH_SOURCE"),
+        "secret_values_redacted": True,
+        "secret_paths_redacted": True,
+        "pg_secret_sha256": hashlib.sha256(pg.encode("utf-8")).hexdigest(),
+        "admin_secret_sha256": hashlib.sha256(admin.encode("utf-8")).hexdigest(),
+    }
+
+
+def compute_secret_canary_probe(run_codex_boundary: bool = False, timeout: int = 120) -> dict[str, Any]:
+    role = os.environ.get("REEL_PHASE5_ROLE", "")
+    leaked_env = sorted(
+        key for key in os.environ
+        if any(key.startswith(prefix) for prefix in CONTROL_ENV_PREFIXES) and os.environ.get(key)
+    )
+    present_paths = [path for path in CONTROL_SECRET_PATHS if path.exists()]
+    shell_checks = "\n".join(f"check_path {shlex.quote(str(path))}" for path in CONTROL_SECRET_PATHS)
+    shell_script = f'''
+set -eu
+check_path() {{
+  path="$1"
+  if [ -e "$path" ]; then exit 11; fi
+  if stat "$path" >/dev/null 2>&1; then exit 12; fi
+  if [ -r "$path" ]; then exit 13; fi
+}}
+{shell_checks}
+exit 0
+'''
+    shell = run(["/bin/sh", "-c", shell_script], timeout=30)
+    module = load_processor()
+    previous_env = {
+        key: os.environ.get(key)
+        for key in ("REEL_PHASE5_PG_PASSWORD_FILE", "REEL_PHASE5_ADMIN_TOKEN_FILE", "SYNTHETIC_SECRET_TOKEN")
+    }
+    os.environ["REEL_PHASE5_PG_PASSWORD_FILE"] = str(CONTROL_SECRET_ROOT / CONTROL_SECRET_NAMES[0])
+    os.environ["REEL_PHASE5_ADMIN_TOKEN_FILE"] = str(CONTROL_SECRET_ROOT / CONTROL_SECRET_NAMES[1])
+    os.environ["SYNTHETIC_SECRET_TOKEN"] = secrets.token_urlsafe(32)
+    codex_home = WORK_ROOT / "codex-home-canary"
+    if CODEX_AUTH_SOURCE:
+        codex_home.mkdir(parents=True, exist_ok=True)
+        auth_link = codex_home / "auth.json"
+        if not auth_link.exists() and not auth_link.is_symlink():
+            auth_link.symlink_to(Path(CODEX_AUTH_SOURCE))
+    try:
+        codex_env = module.codex_subprocess_env(codex_home)
+    finally:
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    codex_prompt = "Reply with exactly OK."
+    codex_command = [
+        "codex", "exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
+        "--json", "--sandbox", "read-only", "-C", str(WORK_ROOT), "-m",
+        os.environ.get("CODEX_RESEARCH_MODEL", "gpt-5.6-luna"),
+        "-c", 'model_reasoning_effort="low"', "-",
+    ]
+    marker_blob = "\n".join([codex_prompt, " ".join(codex_command), json.dumps(codex_env, sort_keys=True)])
+    marker_leak = [marker for marker in SECRET_MARKERS if marker in marker_blob]
+    codex_result: dict[str, Any] = {"executed": False}
+    if run_codex_boundary:
+        status = auth_status()
+        if not status.get("present") or not status.get("auth_file_readable"):
+            codex_result = {"executed": False, "available": False, "reason": "codex_auth_unavailable"}
+        else:
+            result = run(codex_command, cwd=WORK_ROOT, env=codex_env, timeout=timeout, input_text=codex_prompt)
+            output = "\n".join(part for part in [result.stdout, result.stderr] if part)
+            codex_result = {
+                "executed": True,
+                "returncode": result.returncode,
+                "output_sha256": hashlib.sha256(output.encode("utf-8", errors="replace")).hexdigest() if output else None,
+                "marker_leak_in_output": any(marker in output for marker in SECRET_MARKERS),
+            }
+    return {
+        "ok": (
+            role == "compute"
+            and not leaked_env
+            and not present_paths
+            and shell.returncode == 0
+            and not marker_leak
+            and (
+                not run_codex_boundary
+                or (
+                    codex_result.get("executed")
+                    and codex_result.get("returncode") == 0
+                    and not codex_result.get("marker_leak_in_output")
+                )
+            )
+        ),
+        "role": role,
+        "control_secret_env_present": leaked_env,
+        "control_secret_paths_present": [path.name for path in present_paths],
+        "spawned_shell_cannot_stat_read_hash": shell.returncode == 0,
+        "codex_env_keys": sorted(codex_env.keys()),
+        "codex_prompt_has_secret_markers": any(marker in codex_prompt for marker in SECRET_MARKERS),
+        "codex_argv_has_secret_markers": any(marker in " ".join(codex_command) for marker in SECRET_MARKERS),
+        "codex_env_has_secret_markers": bool(marker_leak),
+        "codex_boundary": codex_result,
+    }
 
 
 def fixture_media() -> dict[str, Any]:
@@ -618,6 +773,10 @@ def main() -> int:
     sub.add_parser("native-control")
     sub.add_parser("fake-worker-control")
     sub.add_parser("control-fail-closed")
+    sub.add_parser("control-secret-canary")
+    compute_canary = sub.add_parser("compute-secret-canary")
+    compute_canary.add_argument("--codex-boundary", action="store_true")
+    compute_canary.add_argument("--timeout", type=int, default=120)
     codex = sub.add_parser("codex-smoke")
     codex.add_argument("--model", default=os.environ.get("CODEX_RESEARCH_MODEL", "gpt-5.6-luna"))
     codex.add_argument("--timeout", type=int, default=120)
@@ -638,6 +797,10 @@ def main() -> int:
             payload = fake_worker_control_probe()
         elif args.command == "control-fail-closed":
             payload = control_fail_closed_probe()
+        elif args.command == "control-secret-canary":
+            payload = control_secret_canary_probe()
+        elif args.command == "compute-secret-canary":
+            payload = compute_secret_canary_probe(args.codex_boundary, args.timeout)
         elif args.command == "codex-smoke":
             payload = codex_smoke(args.model, args.timeout)
         else:

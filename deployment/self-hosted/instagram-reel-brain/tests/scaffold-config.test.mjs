@@ -14,7 +14,8 @@ test("compose declares only isolated reel networks", () => {
   assert.match(compose, /cartdotcom-reel-runtime/);
   assert.match(compose, /cartdotcom-reel-egress/);
   assert.doesNotMatch(compose, /cartdotcom-edge/);
-  assert.match(compose, /profiles: \["phase5-runner"\][\s\S]*platform-data/);
+  assert.match(compose, /phase5-control:[\s\S]*profiles: \["phase5-runner"\][\s\S]*platform-data/);
+  assert.doesNotMatch(compose.match(/phase5-compute:[\s\S]*?(?=\nnetworks:|\n  [a-zA-Z0-9_-]+:\n)/)?.[0] || "", /platform-data/);
   assert.match(compose, /platform-data:\s+name: cartdotcom-data\s+external: true/s);
   assert.doesNotMatch(compose, /ports:/);
 });
@@ -53,9 +54,9 @@ test("compose resource ceilings remain under phase one limits", () => {
 
 test("all services have pid and no-new-privileges constraints", () => {
   const serviceCount = (compose.match(/REEL_SERVICE_NAME:/g) || []).length;
-  assert.equal(serviceCount, 7);
+  assert.equal(serviceCount, 8);
   assert.match(compose, /profiles: \["phase5-runner"\]/);
-  assert.equal((compose.match(/pids_limit: 128/g) || []).length, 1);
+  assert.equal((compose.match(/pids_limit: 128/g) || []).length, 2);
   assert.match(compose, /pids_limit: 256/);
   assert.match(compose, /no-new-privileges:true/);
 });

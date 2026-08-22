@@ -972,6 +972,28 @@ def codex_usage_from_jsonl(stdout: str) -> dict[str, int]:
     return usage
 
 
+def codex_subprocess_env(codex_home: Path) -> dict[str, str]:
+    """Return a minimal environment for Codex subprocesses.
+
+    Runtime control-plane environment such as REEL_PHASE5_* paths, database
+    settings, token-file locations, cookies, and other secret-adjacent values
+    must never be inherited by the untrusted Codex/model boundary.
+    """
+    allowed_keys = (
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "TMPDIR",
+    )
+    env = {key: value for key in allowed_keys if (value := os.environ.get(key))}
+    env["CODEX_HOME"] = str(codex_home)
+    return env
+
+
 def run_codex(
     workdir: Path,
     prompt: str,
@@ -1025,7 +1047,7 @@ def run_codex(
         result = subprocess.run(
             command,
             cwd=str(workdir),
-            env={**os.environ, "CODEX_HOME": str(codex_home)},
+            env=codex_subprocess_env(codex_home),
             input=prompt,
             text=True,
             encoding="utf-8",
@@ -1069,7 +1091,7 @@ def probe_codex_auth(payload: dict[str, Any]) -> dict[str, Any]:
         result = subprocess.run(
             command,
             cwd=str(workdir),
-            env={**os.environ, "CODEX_HOME": str(codex_home)},
+            env=codex_subprocess_env(codex_home),
             input="Reply with exactly OK. Do not browse or inspect files.",
             text=True,
             encoding="utf-8",

@@ -116,6 +116,7 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
   assert.match(runner, /INSERT INTO \{schema\}\.phase5_pilot_events/);
   assert.match(runner, /rows\[0\]\.get\("updated"\) != 1/);
   assert.match(runner, /processor\.process\(payload\)/);
+  assert.match(runner, /phase5-control role cannot load the media\/Codex processor/);
   assert.ok(
     runner.indexOf("token = admin_token(args, required=True)") < runner.indexOf("processor.process(payload)"),
     "Worker token file validation must happen before processor execution",
@@ -133,7 +134,8 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
     "runner must checkpoint the Worker-returned effective/renewed execution expiry before processor execution",
   );
   assert.match(runner, /sanitize_result/);
-  assert.match(runner, /INSTAGRAM_COOKIES_JSON/);
+  assert.match(runner, /"instagram_cookies_json": ""/);
+  assert.doesNotMatch(runner, /INSTAGRAM_COOKIES_JSON/);
   assert.doesNotMatch(runner, /wrangler_d1/);
   assert.doesNotMatch(runner, /wrangler", "d1"/);
   assert.doesNotMatch(runner, /PGPASSWORD/);
