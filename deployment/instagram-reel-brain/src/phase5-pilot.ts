@@ -167,6 +167,12 @@ export function normalisePhase5CallbackTokenHash(value: unknown): string {
   return hash;
 }
 
+export function normaliseOptionalPhase5CallbackTokenHash(value: unknown): string | null {
+  const hash = String(value || "").trim();
+  if (!hash) return null;
+  return normalisePhase5CallbackTokenHash(hash);
+}
+
 function validatePhase5ControlIdentity(input: Phase5ControlRequest): {
   pilotKey: string;
   jobId: string;
@@ -242,7 +248,7 @@ export function validatePhase5StartRequest(input: Phase5ControlRequest, now = Da
   sourceMessageId: string;
   leaseOwner: string;
   idempotencyKey: string;
-  callbackTokenHash: string;
+  callbackTokenHash: string | null;
   tokenExpiresAt: string;
   marker: string;
   reason: string;
@@ -253,10 +259,342 @@ export function validatePhase5StartRequest(input: Phase5ControlRequest, now = Da
   const identity = validatePhase5ControlIdentity(input);
   return {
     ...identity,
-    callbackTokenHash: normalisePhase5CallbackTokenHash(input.callback_token_hash),
+    callbackTokenHash: normaliseOptionalPhase5CallbackTokenHash(input.callback_token_hash),
     tokenExpiresAt: phase5CallbackExpiry(input, now),
     marker: `phase5-control:${identity.pilotKey}:start:${identity.idempotencyKey}`,
     reason: String(input.reason || "phase5_exact_job_local_start").trim().slice(0, 500),
+  };
+}
+
+export type Phase5ControlSnapshot = {
+  status: string | null;
+  job_status: string | null;
+  job_stage?: string | null;
+  local_lease_owner?: string | null;
+  upload_token_hash?: string | null;
+  upload_token_expires_at?: string | null;
+  html_key?: string | null;
+  library_path?: string | null;
+  completed_at?: string | null;
+  publication_artifacts?: number | null;
+  completion_events?: number | null;
+  marker_events?: number | null;
+};
+
+export type Phase5StartRecoveryStatus =
+  | "guarded_start"
+  | "resume_running"
+  | "processor_already_complete"
+  | "repair_queued_start"
+  | "fail_closed";
+
+export type Phase5StartRecoveryDecision = {
+  status: Phase5StartRecoveryStatus;
+  ok: boolean;
+  httpStatus: number;
+  error?: string;
+  recoveryStatus: string;
+  requiresCallbackToken?: boolean;
+  repairAudit?: boolean;
+  idempotent?: boolean;
+  processorAlreadyComplete?: boolean;
+  finalized?: boolean;
+};
+
+export type Phase5FinalizeRecoveryStatus =
+  | "guarded_finalize"
+  | "repair_finalize_audit"
+  | "idempotent_finalized"
+  | "fail_closed";
+
+export type Phase5FinalizeRecoveryDecision = {
+  status: Phase5FinalizeRecoveryStatus;
+  ok: boolean;
+  httpStatus: number;
+  error?: string;
+  recoveryStatus: string;
+  repairAudit?: boolean;
+  idempotent?: boolean;
+};
+
+export type Phase5AbortRecoveryStatus =
+  | "guarded_abort"
+  | "requeue_audit_missing"
+  | "idempotent_aborted"
+  | "fail_closed";
+
+export type Phase5AbortRecoveryDecision = {
+  status: Phase5AbortRecoveryStatus;
+  ok: boolean;
+  httpStatus: number;
+  error?: string;
+  recoveryStatus: string;
+  idempotent?: boolean;
+};
+
+export function phase5SnapshotHasPublication(row: Phase5ControlSnapshot): boolean {
+  return Boolean(
+    row.html_key
+    || row.library_path
+    || row.completed_at
+    || Number(row.publication_artifacts || 0) > 0
+    || Number(row.completion_events || 0) > 0
+  );
+}
+
+export function phase5StartRecoveryDecision(
+  row: Phase5ControlSnapshot,
+  input: { leaseOwner: string; callbackTokenHash?: string | null },
+): Phase5StartRecoveryDecision {
+  const markerCount = Number(row.marker_events || 0);
+  if (row.local_lease_owner !== input.leaseOwner) {
+    return {
+      status: "fail_closed",
+      ok: false,
+      httpStatus: 409,
+      recoveryStatus: "lease_owner_mismatch",
+      error: "Phase 5 start requires the exact lease owner",
+    };
+  }
+
+  if (row.status === "local_claimed") {
+    if (row.job_status !== "queued") {
+      return {
+        status: "fail_closed",
+        ok: false,
+        httpStatus: 409,
+        recoveryStatus: "job_not_queued",
+        error: "Phase 5 start requires the job to remain queued",
+      };
+    }
+    if (phase5SnapshotHasPublication(row)) {
+      return {
+        status: "fail_closed",
+        ok: false,
+        httpStatus: 409,
+        recoveryStatus: "publication_exists",
+        error: "Phase 5 start refused because completion/publication evidence exists",
+      };
+    }
+    if (!input.callbackTokenHash) {
+      return {
+        status: "fail_closed",
+        ok: false,
+        httpStatus: 400,
+        recoveryStatus: "callback_hash_required",
+        requiresCallbackToken: true,
+        error: "A SHA-256 callback_token_hash is required before starting a queued job",
+      };
+    }
+    return { status: "guarded_start", ok: true, httpStatus: 200, recoveryStatus: "guarded_start" };
+  }
+
+  if (row.status === "local_processing") {
+    if (row.job_status === "running") {
+      if (!input.callbackTokenHash) {
+        return {
+          status: "fail_closed",
+          ok: false,
+          httpStatus: 400,
+          recoveryStatus: "callback_hash_required",
+          requiresCallbackToken: true,
+          error: "A SHA-256 callback_token_hash is required to resume a running local job",
+        };
+      }
+      if (row.upload_token_hash !== input.callbackTokenHash) {
+        return {
+          status: "fail_closed",
+          ok: false,
+          httpStatus: 409,
+          recoveryStatus: "callback_hash_mismatch",
+          error: "Phase 5 start resume refused because the callback token hash does not match",
+        };
+      }
+      return {
+        status: "resume_running",
+        ok: true,
+        httpStatus: 200,
+        recoveryStatus: markerCount > 0 ? "resume_running" : "resume_running_repair_audit",
+        repairAudit: markerCount === 0,
+        idempotent: true,
+      };
+    }
+
+    if (row.job_status === "complete") {
+      return {
+        status: "processor_already_complete",
+        ok: true,
+        httpStatus: 200,
+        recoveryStatus: markerCount > 0 ? "processor_already_complete" : "processor_already_complete_repair_audit",
+        repairAudit: markerCount === 0,
+        processorAlreadyComplete: true,
+        idempotent: true,
+      };
+    }
+
+    if (row.job_status === "queued") {
+      if (phase5SnapshotHasPublication(row)) {
+        return {
+          status: "fail_closed",
+          ok: false,
+          httpStatus: 409,
+          recoveryStatus: "queued_with_publication",
+          error: "Phase 5 start repair refused because completion/publication evidence exists",
+        };
+      }
+      if (!input.callbackTokenHash) {
+        return {
+          status: "fail_closed",
+          ok: false,
+          httpStatus: 400,
+          recoveryStatus: "callback_hash_required",
+          requiresCallbackToken: true,
+          error: "A SHA-256 callback_token_hash is required to repair a partial local start",
+        };
+      }
+      return { status: "repair_queued_start", ok: true, httpStatus: 200, recoveryStatus: "repair_queued_start" };
+    }
+
+    return {
+      status: "fail_closed",
+      ok: false,
+      httpStatus: 409,
+      recoveryStatus: "unsupported_local_processing_job_state",
+      error: "Phase 5 start found an unsupported local_processing job state",
+    };
+  }
+
+  if (row.status === "local_complete" && row.job_status === "complete") {
+    return {
+      status: "processor_already_complete",
+      ok: true,
+      httpStatus: 200,
+      recoveryStatus: "cloud_already_finalized",
+      processorAlreadyComplete: true,
+      finalized: true,
+      idempotent: true,
+    };
+  }
+
+  return {
+    status: "fail_closed",
+    ok: false,
+    httpStatus: 409,
+    recoveryStatus: "unsupported_fence_state",
+    error: "Phase 5 start requires local_claimed, local_processing, or already-complete exact state",
+  };
+}
+
+export function phase5FinalizeRecoveryDecision(
+  row: Phase5ControlSnapshot,
+  input: { leaseOwner: string },
+): Phase5FinalizeRecoveryDecision {
+  const markerCount = Number(row.marker_events || 0);
+  if (row.local_lease_owner !== input.leaseOwner) {
+    return {
+      status: "fail_closed",
+      ok: false,
+      httpStatus: 409,
+      recoveryStatus: "lease_owner_mismatch",
+      error: "Phase 5 finalize requires the exact lease owner",
+    };
+  }
+
+  if (row.status === "local_complete" && row.job_status === "complete") {
+    if (markerCount > 0) {
+      return {
+        status: "idempotent_finalized",
+        ok: true,
+        httpStatus: 200,
+        recoveryStatus: "idempotent_finalized",
+        idempotent: true,
+      };
+    }
+    return {
+      status: "repair_finalize_audit",
+      ok: true,
+      httpStatus: 200,
+      recoveryStatus: "repair_finalize_audit",
+      repairAudit: true,
+      idempotent: true,
+    };
+  }
+
+  if (row.status === "local_processing" && row.job_status === "complete") {
+    return {
+      status: "guarded_finalize",
+      ok: true,
+      httpStatus: 200,
+      recoveryStatus: "guarded_finalize",
+    };
+  }
+
+  return {
+    status: "fail_closed",
+    ok: false,
+    httpStatus: 409,
+    recoveryStatus: "not_ready_to_finalize",
+    error: "Phase 5 finalize requires local_processing fence owned by the runner and a complete job",
+  };
+}
+
+export function phase5AbortRecoveryDecision(
+  row: Phase5ControlSnapshot,
+  input: { leaseOwner: string },
+): Phase5AbortRecoveryDecision {
+  if (phase5SnapshotHasPublication(row) || row.job_status === "complete") {
+    return {
+      status: "fail_closed",
+      ok: false,
+      httpStatus: 409,
+      recoveryStatus: "publication_exists",
+      error: "Phase 5 abort refused because completion/publication evidence exists",
+    };
+  }
+
+  if (row.status === "rolled_back" && row.job_status === "queued") {
+    if (Number(row.marker_events || 0) > 0) {
+      return {
+        status: "idempotent_aborted",
+        ok: true,
+        httpStatus: 200,
+        recoveryStatus: "idempotent_aborted",
+        idempotent: true,
+      };
+    }
+    return {
+      status: "requeue_audit_missing",
+      ok: true,
+      httpStatus: 200,
+      recoveryStatus: "requeue_audit_missing",
+    };
+  }
+
+  if (!isPhase5ActiveFenceStatus(row.status || "") || row.local_lease_owner !== input.leaseOwner) {
+    return {
+      status: "fail_closed",
+      ok: false,
+      httpStatus: 409,
+      recoveryStatus: "active_fence_owner_mismatch",
+      error: "Phase 5 abort requires the exact active fence and lease owner",
+    };
+  }
+
+  if (!["queued", "running", "failed"].includes(String(row.job_status || ""))) {
+    return {
+      status: "fail_closed",
+      ok: false,
+      httpStatus: 409,
+      recoveryStatus: "job_not_abortable",
+      error: "Phase 5 abort requires a queued, running, or failed pre-publication job",
+    };
+  }
+
+  return {
+    status: "guarded_abort",
+    ok: true,
+    httpStatus: 200,
+    recoveryStatus: "guarded_abort",
   };
 }
 

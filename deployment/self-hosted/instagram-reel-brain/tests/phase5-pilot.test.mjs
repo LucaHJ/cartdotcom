@@ -99,6 +99,10 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
   assert.match(runner, /\/api\/admin\/phase5\/local-pilot\/abort/);
   assert.match(runner, /Authorization/);
   assert.match(runner, /callback_token_hash/);
+  assert.match(runner, /requires_callback_token/);
+  assert.match(runner, /retryable_start/);
+  assert.match(runner, /processor_already_complete/);
+  assert.match(runner, /recovered_after_cloud_completion/);
   assert.match(runner, /atomic_write_json/);
   assert.match(runner, /os\.chmod\(path, 0o600\)/);
   assert.match(runner, /checkpoint/);
@@ -106,6 +110,10 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
   assert.match(runner, /INSERT INTO \{schema\}\.phase5_pilot_events/);
   assert.match(runner, /rows\[0\]\.get\("updated"\) != 1/);
   assert.match(runner, /processor\.process\(payload\)/);
+  assert.ok(
+    runner.indexOf('start_response.get("processor_already_complete")') < runner.indexOf("processor.process(payload)"),
+    "restart after cloud completion must skip processor execution before the processor call site",
+  );
   assert.match(runner, /sanitize_result/);
   assert.match(runner, /INSTAGRAM_COOKIES_JSON/);
   assert.doesNotMatch(runner, /wrangler_d1/);

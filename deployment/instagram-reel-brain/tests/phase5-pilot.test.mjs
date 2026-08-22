@@ -23,11 +23,81 @@ import {
   validatePhase5StartRequest,
   validatePhase5FinalizeRequest,
   validatePhase5AbortRequest,
+  phase5StartRecoveryDecision,
+  phase5FinalizeRecoveryDecision,
+  phase5AbortRecoveryDecision,
 } from "../src/phase5-pilot.ts";
 
 const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../migrations/0021_phase5_local_pilot_fence.sql", import.meta.url), "utf8");
 const armMigration = readFileSync(new URL("../migrations/0022_phase5_preintake_arm.sql", import.meta.url), "utf8");
+const phase5Owner = "phase5-local-worker-1";
+const phase5Hash = "a".repeat(64);
+
+function phase5Snapshot(overrides = {}) {
+  return {
+    status: "local_claimed",
+    job_status: "queued",
+    job_stage: "queued",
+    local_lease_owner: phase5Owner,
+    upload_token_hash: null,
+    upload_token_expires_at: null,
+    html_key: null,
+    library_path: null,
+    completed_at: null,
+    publication_artifacts: 0,
+    completion_events: 0,
+    marker_events: 0,
+    ...overrides,
+  };
+}
+
+function simulateStart(snapshot, { callbackTokenHash = phase5Hash, fault = "" } = {}) {
+  const state = { ...snapshot };
+  const effects = { reactions: 0, start_audits: Number(state.marker_events || 0) };
+  const decision = phase5StartRecoveryDecision(state, { leaseOwner: phase5Owner, callbackTokenHash });
+  if (!decision.ok) return { state, effects, decision };
+  if (decision.status === "guarded_start") {
+    state.status = "local_processing";
+    if (fault === "after_fence_update") return { state, effects, decision };
+    state.job_status = "running";
+    state.job_stage = "downloading";
+    state.upload_token_hash = callbackTokenHash;
+    if (fault === "after_job_update_before_audit") return { state, effects, decision };
+  } else if (decision.status === "repair_queued_start") {
+    state.job_status = "running";
+    state.job_stage = "downloading";
+    state.upload_token_hash = callbackTokenHash;
+  }
+  if ((decision.status === "guarded_start" || decision.status === "repair_queued_start" || decision.status === "resume_running") && Number(state.marker_events || 0) === 0) {
+    state.marker_events = 1;
+    effects.start_audits = 1;
+    effects.reactions += 1;
+  }
+  if (fault === "after_audit_before_response") return { state, effects, decision };
+  if (decision.status === "processor_already_complete" && decision.repairAudit && Number(state.marker_events || 0) === 0) {
+    state.marker_events = 1;
+    effects.start_audits = 1;
+  }
+  return { state, effects, decision };
+}
+
+function simulateFinalize(snapshot, { fault = "" } = {}) {
+  const state = { ...snapshot };
+  const effects = { finalize_updates: 0, finalize_audits: Number(state.marker_events || 0) };
+  const decision = phase5FinalizeRecoveryDecision(state, { leaseOwner: phase5Owner });
+  if (!decision.ok) return { state, effects, decision };
+  if (decision.status === "guarded_finalize") {
+    state.status = "local_complete";
+    effects.finalize_updates += 1;
+    if (fault === "after_fence_update_before_audit") return { state, effects, decision };
+  }
+  if ((decision.status === "guarded_finalize" || decision.status === "repair_finalize_audit") && Number(state.marker_events || 0) === 0) {
+    state.marker_events = 1;
+    effects.finalize_audits = 1;
+  }
+  return { state, effects, decision };
+}
 
 test("Phase 5 fence request requires exact durable identifiers and confirmation", () => {
   assert.throws(
@@ -136,6 +206,169 @@ test("Phase 5 exact runner control requests require confirmation, owner, source 
   });
   assert.equal(aborted.marker, "phase5-control:phase5-reel-1:abort:runner-attempt-1");
   assert.equal(aborted.reason, "pre-publication rollback");
+});
+
+test("Phase 5 start recovery decision covers the exact crash/restart matrix", () => {
+  assert.equal(
+    phase5StartRecoveryDecision(phase5Snapshot(), { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash }).status,
+    "guarded_start",
+  );
+
+  const runningRepair = phase5StartRecoveryDecision(
+    phase5Snapshot({ status: "local_processing", job_status: "running", upload_token_hash: phase5Hash, marker_events: 0 }),
+    { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash },
+  );
+  assert.equal(runningRepair.status, "resume_running");
+  assert.equal(runningRepair.repairAudit, true);
+
+  const alreadyComplete = phase5StartRecoveryDecision(
+    phase5Snapshot({ status: "local_processing", job_status: "complete", completed_at: "2026-08-22T03:20:00Z", marker_events: 0 }),
+    { leaseOwner: phase5Owner },
+  );
+  assert.equal(alreadyComplete.status, "processor_already_complete");
+  assert.equal(alreadyComplete.processorAlreadyComplete, true);
+  assert.equal(alreadyComplete.repairAudit, true);
+
+  assert.equal(
+    phase5StartRecoveryDecision(
+      phase5Snapshot({ status: "local_complete", job_status: "complete", completed_at: "2026-08-22T03:20:00Z", marker_events: 1 }),
+      { leaseOwner: phase5Owner },
+    ).recoveryStatus,
+    "cloud_already_finalized",
+  );
+
+  assert.equal(
+    phase5StartRecoveryDecision(
+      phase5Snapshot({ status: "local_processing", job_status: "queued" }),
+      { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash },
+    ).status,
+    "repair_queued_start",
+  );
+
+  assert.equal(
+    phase5StartRecoveryDecision(
+      phase5Snapshot({ status: "local_processing", job_status: "queued", publication_artifacts: 1 }),
+      { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash },
+    ).recoveryStatus,
+    "queued_with_publication",
+  );
+
+  assert.equal(
+    phase5StartRecoveryDecision(
+      phase5Snapshot({ local_lease_owner: "other-worker" }),
+      { leaseOwner: phase5Owner, callbackTokenHash: phase5Hash },
+    ).recoveryStatus,
+    "lease_owner_mismatch",
+  );
+
+  assert.equal(
+    phase5StartRecoveryDecision(phase5Snapshot(), { leaseOwner: phase5Owner }).recoveryStatus,
+    "callback_hash_required",
+  );
+});
+
+test("Phase 5 finalize recovery decision repairs missing audit before idempotent success", () => {
+  assert.equal(
+    phase5FinalizeRecoveryDecision(
+      phase5Snapshot({ status: "local_processing", job_status: "complete", completed_at: "2026-08-22T03:20:00Z" }),
+      { leaseOwner: phase5Owner },
+    ).status,
+    "guarded_finalize",
+  );
+
+  const missingAudit = phase5FinalizeRecoveryDecision(
+    phase5Snapshot({ status: "local_complete", job_status: "complete", completed_at: "2026-08-22T03:20:00Z", marker_events: 0 }),
+    { leaseOwner: phase5Owner },
+  );
+  assert.equal(missingAudit.status, "repair_finalize_audit");
+  assert.equal(missingAudit.repairAudit, true);
+
+  assert.equal(
+    phase5FinalizeRecoveryDecision(
+      phase5Snapshot({ status: "local_complete", job_status: "complete", completed_at: "2026-08-22T03:20:00Z", marker_events: 1 }),
+      { leaseOwner: phase5Owner },
+    ).status,
+    "idempotent_finalized",
+  );
+});
+
+test("Phase 5 executable recovery simulation repairs crash boundaries without duplicate effects", () => {
+  const afterFence = simulateStart(phase5Snapshot(), { fault: "after_fence_update" });
+  assert.deepEqual(
+    { fence: afterFence.state.status, job: afterFence.state.job_status, audits: afterFence.effects.start_audits },
+    { fence: "local_processing", job: "queued", audits: 0 },
+  );
+  const repairedFence = simulateStart(afterFence.state);
+  assert.equal(repairedFence.decision.status, "repair_queued_start");
+  assert.equal(repairedFence.state.job_status, "running");
+  assert.equal(repairedFence.effects.reactions, 1);
+
+  const afterJob = simulateStart(phase5Snapshot(), { fault: "after_job_update_before_audit" });
+  const repairedAudit = simulateStart(afterJob.state);
+  assert.equal(repairedAudit.decision.status, "resume_running");
+  assert.equal(repairedAudit.effects.start_audits, 1);
+  assert.equal(repairedAudit.effects.reactions, 1);
+
+  const afterAudit = simulateStart(phase5Snapshot(), { fault: "after_audit_before_response" });
+  const resumedAfterAudit = simulateStart(afterAudit.state);
+  assert.equal(resumedAfterAudit.decision.status, "resume_running");
+  assert.equal(resumedAfterAudit.effects.reactions, 0, "same reaction is not sent again when the start marker exists");
+
+  const processorCompleteBeforeCheckpoint = phase5Snapshot({
+    status: "local_processing",
+    job_status: "complete",
+    completed_at: "2026-08-22T03:20:00Z",
+    publication_artifacts: 3,
+    completion_events: 1,
+    marker_events: 1,
+  });
+  const recoveredStart = simulateStart(processorCompleteBeforeCheckpoint, { callbackTokenHash: null });
+  assert.equal(recoveredStart.decision.status, "processor_already_complete");
+  assert.equal(recoveredStart.decision.processorAlreadyComplete, true);
+
+  const finalizeCrash = simulateFinalize(
+    phase5Snapshot({ status: "local_processing", job_status: "complete", completed_at: "2026-08-22T03:20:00Z", marker_events: 0 }),
+    { fault: "after_fence_update_before_audit" },
+  );
+  assert.equal(finalizeCrash.state.status, "local_complete");
+  assert.equal(finalizeCrash.effects.finalize_audits, 0);
+  const repairedFinalizeAudit = simulateFinalize(finalizeCrash.state);
+  assert.equal(repairedFinalizeAudit.decision.status, "repair_finalize_audit");
+  assert.equal(repairedFinalizeAudit.effects.finalize_updates, 0, "idempotent finalize repair does not repeat the fence update");
+  assert.equal(repairedFinalizeAudit.effects.finalize_audits, 1);
+
+  const afterCloudFinalizeBeforeLocalCompletion = phase5Snapshot({
+    status: "local_complete",
+    job_status: "complete",
+    completed_at: "2026-08-22T03:20:00Z",
+    publication_artifacts: 3,
+    completion_events: 1,
+    marker_events: 1,
+  });
+  assert.equal(
+    phase5StartRecoveryDecision(afterCloudFinalizeBeforeLocalCompletion, { leaseOwner: phase5Owner }).recoveryStatus,
+    "cloud_already_finalized",
+  );
+  assert.equal(
+    phase5FinalizeRecoveryDecision(afterCloudFinalizeBeforeLocalCompletion, { leaseOwner: phase5Owner }).status,
+    "idempotent_finalized",
+  );
+});
+
+test("Phase 5 duplicate abort delivery is documented as at-least-once queue retry guarded by fence state", () => {
+  const aborted = phase5Snapshot({ status: "rolled_back", job_status: "queued", marker_events: 1 });
+  assert.equal(
+    phase5AbortRecoveryDecision(aborted, { leaseOwner: phase5Owner }).status,
+    "idempotent_aborted",
+  );
+  assert.equal(
+    phase5AbortRecoveryDecision(phase5Snapshot({ status: "rolled_back", job_status: "queued", marker_events: 0 }), { leaseOwner: phase5Owner }).status,
+    "requeue_audit_missing",
+  );
+  assert.equal(
+    phase5AbortRecoveryDecision(phase5Snapshot({ status: "local_processing", job_status: "complete", completion_events: 1 }), { leaseOwner: phase5Owner }).recoveryStatus,
+    "publication_exists",
+  );
 });
 
 test("Phase 5 active fences expire fail-closed", () => {
@@ -349,30 +582,36 @@ test("Phase 5 exact control routes guard every cloud transition before audit or 
 
   const startBody = source.slice(startIndex, finalizeIndex);
   assert.match(startBody, /validatePhase5StartRequest/);
-  assert.match(startBody, /existing\.status === "local_processing"[\s\S]+idempotent: true/);
+  assert.match(startBody, /phase5StartRecoveryDecision/);
+  assert.match(startBody, /decision\.status === "resume_running"/);
+  assert.match(startBody, /decision\.status === "processor_already_complete"/);
+  assert.match(startBody, /decision\.status === "repair_queued_start"/);
   assert.match(startBody, /fenceUpdate\.meta\.changes/);
-  assert.match(startBody, /jobUpdate\.meta\.changes/);
-  assert.match(startBody, /fence compensation attempted/);
-  assert.match(startBody, /phase5_local_processing/);
-  assert.ok(startBody.indexOf("jobUpdate.meta.changes") < startBody.indexOf("phase5_local_processing"), "start audit must occur after guarded job update succeeds");
+  assert.match(startBody, /compensation\.meta\.changes/);
+  assert.match(startBody, /compensated_to_local_claimed/);
+  assert.match(startBody, /ambiguous_partial_start/);
+  assert.match(startBody, /phase5EnsureStartAudit/);
+  assert.match(startBody, /const repaired = await phase5RepairQueuedStart[\s\S]+const repairedAudit = await phase5EnsureStartAudit/);
   assert.match(startBody, /postcondition failed/);
-  assert.doesNotMatch(startBody, /callback_token(?!_hash)/, "start route must not accept or return callback token plaintext");
+  assert.doesNotMatch(startBody, /["']callback_token["']\s*:/, "start route must not accept or return callback token plaintext");
 
   const finalizeBody = source.slice(finalizeIndex, abortIndex);
   assert.match(finalizeBody, /validatePhase5FinalizeRequest/);
-  assert.match(finalizeBody, /existing\.status === "local_complete"[\s\S]+idempotent: true/);
+  assert.match(finalizeBody, /phase5FinalizeRecoveryDecision/);
+  assert.match(finalizeBody, /decision\.status === "idempotent_finalized" \|\| decision\.status === "repair_finalize_audit"/);
   assert.match(finalizeBody, /updated\.meta\.changes/);
-  assert.ok(finalizeBody.indexOf("updated.meta.changes") < finalizeBody.indexOf("phase5_local_complete"), "finalize audit must occur after guarded fence update succeeds");
+  assert.match(finalizeBody, /if \(\(updated\.meta\.changes \|\| 0\) !== 1\)[\s\S]+const insertedAudit = await phase5EnsureFinalizeAudit/);
   assert.match(finalizeBody, /AND EXISTS \(SELECT 1 FROM jobs j WHERE j\.id=phase5_local_pilot_fences\.job_id AND j\.status='complete'\)/);
   assert.match(finalizeBody, /finalize postcondition failed/);
 
   const abortBody = source.slice(abortIndex, source.indexOf("async function handlePhase5PreintakeArm", abortIndex));
   assert.match(abortBody, /validatePhase5AbortRequest/);
-  assert.match(abortBody, /phase5HasPublication/);
+  assert.match(abortBody, /phase5AbortRecoveryDecision/);
+  assert.match(abortBody, /decision\.status === "idempotent_aborted"/);
   assert.match(abortBody, /jobUpdate\.meta\.changes/);
   assert.match(abortBody, /fenceUpdate\.meta\.changes/);
   assert.ok(abortBody.indexOf("fenceUpdate.meta.changes") < abortBody.indexOf("env.REEL_QUEUE.send"), "cloud requeue must happen only after the guarded rollback is recorded");
-  assert.match(abortBody, /existing\.status === "rolled_back"[\s\S]+marker_events/);
+  assert.match(abortBody, /requeue_audit_missing|guarded_abort/);
 });
 
 test("Phase 5 callback validation refuses fenced jobs after rollback, expiry or owner mismatch", () => {

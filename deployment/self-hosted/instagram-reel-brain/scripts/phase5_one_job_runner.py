@@ -145,7 +145,15 @@ def admin_token(args: argparse.Namespace, *, required: bool = True) -> str:
     return token
 
 
-def post_admin_json(worker_url: str, path: str, token: str, payload: dict[str, Any], *, timeout: int = 90) -> dict[str, Any]:
+def post_admin_json(
+    worker_url: str,
+    path: str,
+    token: str,
+    payload: dict[str, Any],
+    *,
+    timeout: int = 90,
+    allowed_statuses: tuple[int, ...] = (),
+) -> dict[str, Any]:
     url = worker_url.rstrip("/") + path
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     request = Request(
@@ -164,6 +172,7 @@ def post_admin_json(worker_url: str, path: str, token: str, payload: dict[str, A
             parsed = json.loads(response_body or "{}")
             if not isinstance(parsed, dict):
                 raise RuntimeError("Worker control response was not a JSON object")
+            parsed["_http_status"] = response.status
             return parsed
     except HTTPError as error:
         response_body = error.read().decode("utf-8", errors="replace")
@@ -171,6 +180,9 @@ def post_admin_json(worker_url: str, path: str, token: str, payload: dict[str, A
             parsed = json.loads(response_body or "{}")
         except json.JSONDecodeError:
             parsed = {"error": response_body[:500]}
+        if error.code in allowed_statuses and isinstance(parsed, dict):
+            parsed["_http_status"] = error.code
+            return parsed
         raise RuntimeError(f"Worker control {path} failed with HTTP {error.code}: {json.dumps(parsed, sort_keys=True)}") from error
     except URLError as error:
         raise RuntimeError(f"Worker control {path} failed: {error.reason}") from error
@@ -239,7 +251,7 @@ def verify_local(args: argparse.Namespace) -> dict[str, Any]:
     row = rows[0]
     if row["lease_status"] in ("completed", "rolled_back"):
         return row
-    ok = (
+    startable = (
         row["lease_status"] in ("leased", "processing")
         and row["job_status"] in ("queued", "running")
         and not row.get("completed_at")
@@ -248,7 +260,18 @@ def verify_local(args: argparse.Namespace) -> dict[str, Any]:
         and int(row.get("publication_artifacts") or 0) == 0
         and int(row.get("completion_events") or 0) == 0
     )
-    if not ok:
+    forward_recoverable = (
+        row["lease_status"] in ("leased", "processing")
+        and (
+            row["job_status"] == "complete"
+            or row.get("completed_at")
+            or row.get("html_key")
+            or row.get("library_path")
+            or int(row.get("publication_artifacts") or 0) > 0
+            or int(row.get("completion_events") or 0) > 0
+        )
+    )
+    if not (startable or forward_recoverable):
         raise SystemExit(f"local lease/job is not startable or recoverable: {json.dumps(row, sort_keys=True, default=str)}")
     return row
 
@@ -326,21 +349,24 @@ def rollback_local_lease(args: argparse.Namespace, reason: str) -> None:
 
 
 def cloud_start(args: argparse.Namespace, token: str, checkpoint: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "pilot_key": args.pilot_key,
+        "job_id": args.job_id,
+        "source_message_id": args.source_message_id,
+        "lease_owner": args.lease_owner,
+        "idempotency_key": checkpoint["idempotency_key"],
+        "token_minutes": args.token_minutes,
+        "confirm_start": CLOUD_START_CONFIRMATION,
+        "reason": "phase5b_exact_runner_start",
+    }
+    if checkpoint.get("callback_token_hash"):
+        payload["callback_token_hash"] = checkpoint["callback_token_hash"]
     return post_admin_json(
         args.worker_url,
         "/api/admin/phase5/local-pilot/start",
         token,
-        {
-            "pilot_key": args.pilot_key,
-            "job_id": args.job_id,
-            "source_message_id": args.source_message_id,
-            "lease_owner": args.lease_owner,
-            "idempotency_key": checkpoint["idempotency_key"],
-            "callback_token_hash": checkpoint["callback_token_hash"],
-            "token_minutes": args.token_minutes,
-            "confirm_start": CLOUD_START_CONFIRMATION,
-            "reason": "phase5b_exact_runner_start",
-        },
+        payload,
+        allowed_statuses=(400, 409),
     )
 
 
@@ -394,6 +420,18 @@ def ensure_callback_token(args: argparse.Namespace, path: Path, checkpoint: dict
         callback_token_hash=token_hash,
         callback_token_expires_at=token_expires_at,
         idempotency_key=idempotency_key,
+    )
+
+
+def ensure_idempotency_key(args: argparse.Namespace, path: Path, checkpoint: dict[str, Any]) -> dict[str, Any]:
+    if checkpoint.get("idempotency_key"):
+        return checkpoint
+    return write_checkpoint(
+        args,
+        path,
+        checkpoint,
+        "idempotency_key_minted",
+        idempotency_key=f"{args.pilot_key}:{args.job_id}:runner-1",
     )
 
 
@@ -516,21 +554,48 @@ def main() -> int:
         raise SystemExit(f"--confirm-live-run must equal {expected_confirmation}")
 
     token = admin_token(args, required=True)
-    checkpoint = ensure_callback_token(args, path, checkpoint)
+    checkpoint = ensure_idempotency_key(args, path, checkpoint)
     start_response = cloud_start(args, token, checkpoint)
+    if not start_response.get("ok") and (
+        start_response.get("requires_callback_token")
+        or start_response.get("recovery_status") == "callback_hash_required"
+        or start_response.get("retryable_start")
+    ):
+        checkpoint = ensure_callback_token(args, path, checkpoint)
+        start_response = cloud_start(args, token, checkpoint)
+    if not start_response.get("ok"):
+        raise RuntimeError(f"Worker start reconciliation failed: {json.dumps({k: v for k, v in start_response.items() if k != '_http_status'}, sort_keys=True)}")
     checkpoint = write_checkpoint(
         args,
         path,
         checkpoint,
         "cloud_started",
-        cloud_start={"ok": bool(start_response.get("ok")), "started": bool(start_response.get("started")), "idempotent": bool(start_response.get("idempotent")), "token_expires_at": start_response.get("token_expires_at")},
+        cloud_start={
+            "ok": bool(start_response.get("ok")),
+            "started": bool(start_response.get("started")),
+            "idempotent": bool(start_response.get("idempotent")),
+            "processor_already_complete": bool(start_response.get("processor_already_complete")),
+            "recovery_status": start_response.get("recovery_status"),
+            "token_expires_at": start_response.get("token_expires_at"),
+        },
     )
 
     if local.get("lease_status") != "processing":
         mark_local_processing(args)
     checkpoint = write_checkpoint(args, path, checkpoint, "local_processing")
 
-    if checkpoint.get("processor_complete"):
+    if start_response.get("processor_already_complete") and not checkpoint.get("processor_complete"):
+        result_summary = {
+            "ok": True,
+            "recovered_after_cloud_completion": True,
+            "recovery_status": start_response.get("recovery_status"),
+            "shortcode": None,
+            "resources": None,
+            "frames": None,
+            "carousel_items": None,
+        }
+        checkpoint = write_checkpoint(args, path, checkpoint, "processor_complete", processor_complete=True, processor_result=result_summary)
+    elif checkpoint.get("processor_complete"):
         result_summary = checkpoint.get("processor_result") or {}
     else:
         processor = load_processor_module()

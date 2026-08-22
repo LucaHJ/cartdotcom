@@ -5,7 +5,10 @@ Bounded Phase 5 preparation is implemented and deployed. The first live
 controlled-compute pilot was pre-intake captured, locally claimed, renewed,
 and completed for one exact Reel job and accepted as Phase 5 case 1 of 3.
 Phase 5B runner hardening is complete and stopped for independent supervisor
-review before any second pilot, carousel/retrieval case, or Phase 6 work.
+review before any second pilot, carousel/retrieval case, or Phase 6 work. The
+Phase 5B crash/restart recovery correction is committed as `36c7ef0`,
+deployed as Worker version `98d34e1f-912a-4209-887a-450243444b7c`, and awaiting
+independent review.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
@@ -68,7 +71,8 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   created by migration `0022_phase5_preintake_arm.sql`.
 - Admin-only Cloudflare Phase 5 arm/fence/rollback/renew endpoints.
 - Admin-only Cloudflare Phase 5 exact local runner start/finalize/abort
-  endpoints on Worker version `8d408b01-5323-40f3-847c-559320869be9`.
+  endpoints on corrected Worker version
+  `98d34e1f-912a-4209-887a-450243444b7c`.
 - Non-authoritative local Phase 5 lease/event tables from
   `0005_phase5_controlled_pilot.sql`, with one-active-lease enforcement through
   `phase5_pilot_leases_one_active_idx`.
@@ -168,16 +172,18 @@ contains a matching `leased` Phase 5 pilot lease for owner
 
 Phase 5B then hardened the reusable runner. Commit `918a496` added an
 admin-only exact start/finalize/abort Worker control surface and replaced
-operational Wrangler/D1 mutation in the local runner. Worker version
-`8d408b01-5323-40f3-847c-559320869be9` is deployed; `/health` is `ok=true`,
-`ingest_mode=live`, and `backlog_processing=false`. Post-deploy production
-state has zero queued/running jobs, zero active Phase 5 fences, and zero armed
-Phase 5 arms. The inert Ubuntu runner was copied to
-`/srv/cartdotcom/instagram-reel-brain/scripts/phase5_one_job_runner.py`, dry-run
-checked against isolated schema `reel_phase5b_runner_test_20260822133451`, and
-synthetic rollback wrote exactly one local rollback event through a fake local
-Worker endpoint. Ubuntu full live execution remains blocked until a dedicated
-Reel media/Codex runtime is provided; see
+operational Wrangler/D1 mutation in the local runner. Supervisor review then
+found crash/restart recovery gaps, now corrected and deployed on Worker version
+`98d34e1f-912a-4209-887a-450243444b7c` from corrective commit `36c7ef0`. The
+correction adds an explicit
+exact-job start/finalize/abort recovery state machine, audit-marker repair,
+partial-start repair/compensation postconditions, and runner logic that skips
+processor/Codex/publication/reactions when cloud state already proves
+completion. `/health` is `ok=true`, `ingest_mode=live`, and
+`backlog_processing=false`. Post-deploy production state has zero
+queued/running jobs, zero active Phase 5 fences, and zero armed Phase 5 arms.
+The inert Ubuntu runner remains disabled. Ubuntu full live execution remains
+blocked until a dedicated Reel media/Codex runtime is provided; see
 `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 No carousel, retrieval case, second pilot, Phase 6 work, or authority cutover is
