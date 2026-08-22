@@ -593,3 +593,154 @@ completion/publication is already durable, use forward finalize recovery only.
 - Ubuntu durable live-runner parity is still blocked on a dedicated Reel
   media/Codex runtime. No second live case should run until the supervisor
   approves the next bounded stage.
+
+## Overall-fence execution-expiry correction addendum
+
+Timestamp: `2026-08-22T14:50:10+10:00`
+
+Supervisor review found one final authority-bound defect: ordinary start,
+queued repair, or running renewal could mint a callback/local-lease expiry
+later than the overall Phase 5 fence `expires_at`. That silently extended local
+callback authority beyond the active fence lifetime.
+
+### Correction
+
+Commit `5af21e1` changes only the Reel Worker Phase 5 control code and tests:
+
+- `deployment/instagram-reel-brain/src/phase5-pilot.ts`
+  - Added `PHASE5_EXECUTION_EXPIRY_SAFETY_MARGIN_MS = 30000`.
+  - Added `PHASE5_MIN_SAFE_PROCESSING_WINDOW_MS = 300000`.
+  - Added `phase5EffectiveExecutionExpiry()`.
+  - Effective execution expiry is now:
+    `min(requested token expiry, overall fence expires_at - 30 seconds)`.
+  - If the effective expiry leaves less than the minimum safe 5-minute window,
+    start recovery returns `insufficient_fence_window_abort_required` with
+    `prepublicationAbortRequired=true`.
+  - `phase5StartRecoveryDecision()` now carries
+    `effectiveTokenExpiresAt` for initial start, queued repair, and running
+    renewal.
+  - Running resume refuses/renews if existing `upload_token_expires_at` or
+    `local_lease_expires_at` exceeds the overall fence or the two stored
+    expiries diverge.
+- `deployment/instagram-reel-brain/src/index.ts`
+  - Added `phase5StartRequestWithEffectiveExpiry()`.
+  - Added `phase5ExecutionExpiryPostcondition()`.
+  - `phase5RenewProcessingLease()`, `phase5RepairQueuedStart()`, and the
+    initial guarded start path now write only the effective expiry.
+  - SQL guards now prove `datetime(expires_at) >= datetime(?)` for the
+    effective expiry, not merely `expires_at > now`.
+  - Postconditions assert
+    `jobs.upload_token_expires_at == phase5_local_pilot_fences.local_lease_expires_at == effective expiry`
+    and `effective expiry <= overall fence expires_at`.
+- `deployment/instagram-reel-brain/tests/phase5-pilot.test.mjs`
+  - Added executable boundary tests for:
+    - seconds remaining versus multi-hour request;
+    - exact 5-minute safe-window plus 30-second margin;
+    - one millisecond below that boundary;
+    - initial start;
+    - running renewal;
+    - queued repair;
+    - zero processor calls when remaining authority is insufficient.
+
+No implicit overall-fence renewal was added. Stale/insufficient overall
+authority remains fail-closed and must use pre-publication abort if no
+publication exists.
+
+### Verification after final authority correction
+
+Workstation:
+
+- `npm run typecheck` in `deployment/instagram-reel-brain`: passed.
+- `npm test` in `deployment/instagram-reel-brain`: 95/95 Node tests passed.
+- Focused Phase 5 test file through the Node runner: 95/95 loaded tests passed.
+- `npm test` in `deployment/self-hosted/instagram-reel-brain`: 53 passed,
+  1 expected Windows symlink skip.
+- `python -m unittest container.test_app -v` in
+  `deployment/instagram-reel-brain`: 9/9 Python tests passed.
+- `python tests/test_media_processor_api.py` in
+  `deployment/self-hosted/instagram-reel-brain`: 3/3 passed.
+- `python tests/test_phase4_shadow_mirror.py` in
+  `deployment/self-hosted/instagram-reel-brain`: 9/9 passed.
+- `python tests/test_phase4_shadow_mirror_connected.py` in
+  `deployment/self-hosted/instagram-reel-brain`: 5/5 passed.
+- `python -m py_compile` passed for:
+  - `deployment/self-hosted/instagram-reel-brain/scripts/phase5_one_job_runner.py`
+  - `deployment/self-hosted/instagram-reel-brain/services/media-processor-api/app.py`
+- `docker compose -f compose.yaml config --quiet` in
+  `deployment/self-hosted/instagram-reel-brain`: passed.
+
+Deployment:
+
+- Immediate pre-deploy Worker `/health`: `ok=true`, `ingest_mode=live`,
+  `backlog_processing=false`.
+- Immediate pre-deploy D1:
+  - queued/running jobs: `0`
+  - active Phase 5 fences: `0`
+  - active Phase 5 arms: `0`
+  - backlog queued/running jobs: `0`
+- Worker-only deploy command:
+  `npx wrangler deploy --containers-rollout=none`
+- Corrective Worker version:
+  `2400dec0-ab38-4cc4-b704-2f10d467fba2`
+- No container/runtime image rollout was performed.
+
+Post-deploy state:
+
+- Worker `/health`: `ok=true`, `ingest_mode=live`,
+  `backlog_processing=false`, `model=gpt-5.6-luna`.
+- D1:
+  - queued/running jobs: `0`
+  - active Phase 5 fences: `0`
+  - active Phase 5 arms: `0`
+  - backlog queued/running jobs: `0`
+- Server:
+  - Reel services: all six healthy.
+  - News services: healthy.
+  - Caddy and PostgreSQL: healthy.
+  - Host memory sample: `15Gi` total, `1.7Gi` used, `13Gi` available.
+
+### Enabled/disabled state after final authority correction
+
+Enabled:
+
+- Cloudflare remains the sole general production processing authority.
+- Admin-only exact Phase 5 start/finalize/abort routes remain deployed.
+
+Disabled / not performed:
+
+- No live Phase 5 arm.
+- No live local job.
+- No carousel, retrieval, or note case.
+- No historical backlog enumeration/replay/processing.
+- No dedicated runtime image deployment.
+- No local scheduler, selector, general claim loop, Codex execution loop,
+  publication loop, or Instagram outbound loop.
+- No credential rotation and no secret plaintext exposure.
+
+### Rollback
+
+Immediate Worker rollback:
+
+1. Roll the Worker back from version
+   `2400dec0-ab38-4cc4-b704-2f10d467fba2` to previous version
+   `1b7055bd-0a18-41c3-a3f2-17972c8d145b`, or redeploy source before commit
+   `5af21e1`.
+2. Confirm `/health` returns `ok=true` and `backlog_processing=false`.
+3. Confirm D1 has zero queued/running jobs, zero active Phase 5 fences, and
+   zero armed Phase 5 captures.
+
+If a future exact pilot has insufficient remaining overall-fence time before
+publication, use the exact pre-publication abort path rather than restarting
+processor work. If publication already exists, use forward finalize recovery
+only.
+
+### Remaining risks after final authority correction
+
+- The authority-bound expiry paths are covered by executable tests and deployed
+  with idle checks, but they have not yet been exercised on a second real live
+  job.
+- D1 guarded multi-row updates still rely on affected-row checks and
+  postconditions rather than PostgreSQL-style repository transactions.
+- Ubuntu durable live-runner parity is still blocked on a dedicated Reel
+  media/Codex runtime. No second live case should run until the supervisor
+  approves the next bounded stage.
