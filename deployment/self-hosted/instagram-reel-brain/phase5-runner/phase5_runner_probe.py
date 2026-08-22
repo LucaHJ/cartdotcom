@@ -13,7 +13,11 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -23,6 +27,7 @@ CODEX_AUTH_DIR = Path(os.environ.get("CODEX_HOME", "/codex-auth"))
 CODEX_AUTH_SOURCE = os.environ.get("CODEX_AUTH_SOURCE")
 WORK_ROOT = Path(os.environ.get("REEL_PHASE5_PROBE_WORK_ROOT", "/work"))
 MIN_SECRET_BYTES = 256
+DEFAULT_LEASE_OWNER = "phase5-local-worker-1"
 
 
 def json_print(payload: dict[str, Any]) -> None:
@@ -114,6 +119,7 @@ def auth_status() -> dict[str, Any]:
 
 
 def tool_versions() -> dict[str, Any]:
+    psycopg_version = checked_output(["python3", "-c", "import psycopg; print(psycopg.__version__)"])
     versions: dict[str, Any] = {
         "python": checked_output(["python3", "--version"]),
         "node": checked_output(["node", "--version"]),
@@ -122,6 +128,7 @@ def tool_versions() -> dict[str, Any]:
         "ffprobe": checked_output(["ffprobe", "-version"]).splitlines()[0],
         "yt_dlp": checked_output(["yt-dlp", "--version"]),
         "gallery_dl": checked_output(["gallery-dl", "--version"]),
+        "psycopg": psycopg_version,
         "codex": checked_output(["codex", "--version"]),
     }
     return versions
@@ -166,6 +173,319 @@ def load_processor():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_runner():
+    if not RUNNER_PATH.exists():
+        raise RuntimeError(f"runner missing: {RUNNER_PATH}")
+    spec = importlib.util.spec_from_file_location("phase5_one_job_runner", RUNNER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("runner import failed")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def pg_secret_status() -> dict[str, Any]:
+    path = Path(os.environ.get("REEL_PHASE5_PG_PASSWORD_FILE", ""))
+    if not str(path):
+        return {"present": False, "configured": False}
+    if not path.exists():
+        return {"present": False, "configured": True, "path": str(path)}
+    info = path.stat()
+    return {
+        "present": True,
+        "configured": True,
+        "path": str(path),
+        "mode": oct(stat.S_IMODE(info.st_mode)),
+        "uid": info.st_uid,
+        "gid": info.st_gid,
+        "bytes": info.st_size,
+        "readable": os.access(path, os.R_OK),
+    }
+
+
+def runner_namespace(schema: str, job_id: str, source_message_id: str = "fixture-message", pilot_key: str = "fixture-pilot") -> SimpleNamespace:
+    return SimpleNamespace(
+        pilot_key=pilot_key,
+        job_id=job_id,
+        source_message_id=source_message_id,
+        lease_owner=DEFAULT_LEASE_OWNER,
+        schema=schema,
+        pg_mode=os.environ.get("REEL_PHASE5_PG_MODE", "native"),
+        pg_host=os.environ.get("REEL_PHASE5_PGHOST", "cartdotcom-platform-postgres-1"),
+        pg_port=int(os.environ.get("REEL_PHASE5_PGPORT", "5432")),
+        pg_database=os.environ.get("REEL_PHASE5_PGDATABASE", "cartdotcom"),
+        pg_user=os.environ.get("REEL_PHASE5_PGUSER", "cartdotcom"),
+        pg_password_file=os.environ.get("REEL_PHASE5_PG_PASSWORD_FILE", ""),
+        pg_connect_timeout=int(os.environ.get("REEL_PHASE5_PG_CONNECT_TIMEOUT", "10")),
+        ssh_target="",
+        admin_token_file="",
+        admin_token_env="REEL_BRAIN_ADMIN_TOKEN",
+        allow_admin_token_env=False,
+        worker_url="http://127.0.0.1",
+        token_minutes=15,
+    )
+
+
+def execute_native_sql(runner: Any, args: SimpleNamespace, sql: str, values: tuple[Any, ...] = ()) -> None:
+    with runner.native_pg_connection(args) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, values)
+
+
+def create_synthetic_phase5_schema(runner: Any, schema: str) -> SimpleNamespace:
+    args = runner_namespace(schema, "fixture-job")
+    safe = runner.safe_schema(schema)
+    ddl = f"""
+      DROP SCHEMA IF EXISTS {safe} CASCADE;
+      CREATE SCHEMA {safe};
+      CREATE TABLE {safe}.jobs (
+        id text PRIMARY KEY,
+        status text NOT NULL,
+        source_url text,
+        instructions text,
+        source_media_json jsonb,
+        html_key text,
+        library_path text,
+        completed_at timestamptz
+      );
+      CREATE TABLE {safe}.artifacts (
+        id bigserial PRIMARY KEY,
+        job_id text NOT NULL,
+        object_key text NOT NULL
+      );
+      CREATE TABLE {safe}.job_events (
+        id bigserial PRIMARY KEY,
+        job_id text NOT NULL,
+        stage text NOT NULL
+      );
+      CREATE TABLE {safe}.phase5_pilot_leases (
+        pilot_key text PRIMARY KEY,
+        exact_job_id text NOT NULL,
+        source_message_id text NOT NULL,
+        lease_owner text NOT NULL,
+        status text NOT NULL,
+        lease_expires_at timestamptz,
+        lease_heartbeat_at timestamptz,
+        completed_at timestamptz,
+        rollback_at timestamptz,
+        updated_at timestamptz DEFAULT now()
+      );
+      CREATE TABLE {safe}.phase5_pilot_events (
+        id bigserial PRIMARY KEY,
+        pilot_key text NOT NULL,
+        job_id text NOT NULL,
+        stage text NOT NULL,
+        status text NOT NULL,
+        detail jsonb,
+        created_at timestamptz DEFAULT now()
+      );
+    """
+    execute_native_sql(runner, args, ddl)
+    insert_synthetic_lease(runner, args)
+    rollback_args = runner_namespace(schema, "rollback-job", "rollback-message", "rollback-pilot")
+    insert_synthetic_lease(runner, rollback_args)
+    return args
+
+
+def insert_synthetic_lease(runner: Any, args: SimpleNamespace) -> None:
+    safe = runner.safe_schema(args.schema)
+    execute_native_sql(
+        runner,
+        args,
+        f"""
+      INSERT INTO {safe}.jobs(id,status,source_url,instructions,source_media_json)
+      VALUES (%s,'queued','file:///synthetic.mp4','synthetic exact runner test','{{"fixture": true}}'::jsonb);
+        """,
+        (args.job_id,),
+    )
+    execute_native_sql(
+        runner,
+        args,
+        f"""
+      INSERT INTO {safe}.phase5_pilot_leases(
+        pilot_key, exact_job_id, source_message_id, lease_owner, status, lease_expires_at
+      )
+      VALUES (%s,%s,%s,%s,'leased',now() + interval '30 minutes');
+        """,
+        (args.pilot_key, args.job_id, args.source_message_id, args.lease_owner),
+    )
+
+
+def drop_synthetic_schema(runner: Any, args: SimpleNamespace) -> None:
+    safe = runner.safe_schema(args.schema)
+    execute_native_sql(runner, args, f"DROP SCHEMA IF EXISTS {safe} CASCADE;")
+
+
+def runner_base_command(schema: str, job_id: str, source_message_id: str, pilot_key: str, checkpoint: Path) -> list[str]:
+    return [
+        "python3", str(RUNNER_PATH),
+        "--pg-mode", "native",
+        "--pg-host", os.environ.get("REEL_PHASE5_PGHOST", "cartdotcom-platform-postgres-1"),
+        "--pg-port", os.environ.get("REEL_PHASE5_PGPORT", "5432"),
+        "--pg-database", os.environ.get("REEL_PHASE5_PGDATABASE", "cartdotcom"),
+        "--pg-user", os.environ.get("REEL_PHASE5_PGUSER", "cartdotcom"),
+        "--pg-password-file", os.environ.get("REEL_PHASE5_PG_PASSWORD_FILE", ""),
+        "--schema", schema,
+        "--pilot-key", pilot_key,
+        "--job-id", job_id,
+        "--source-message-id", source_message_id,
+        "--lease-owner", DEFAULT_LEASE_OWNER,
+        "--checkpoint-path", str(checkpoint),
+    ]
+
+
+def native_control_probe() -> dict[str, Any]:
+    runner = load_runner()
+    schema = f"reel_phase5c_runtime_probe_{os.getpid()}_{int(time.time())}"
+    checkpoint = WORK_ROOT / f"{schema}.json"
+    args = create_synthetic_phase5_schema(runner, schema)
+    try:
+        dry = run(runner_base_command(schema, "fixture-job", "fixture-message", "fixture-pilot", checkpoint) + ["--dry-run", "--skip-cloud-control"], timeout=60)
+        if dry.returncode != 0:
+            raise RuntimeError(f"dry run failed: {redacted_failure(dry)}")
+        dry_payload = json.loads(dry.stdout)
+        runner.mark_local_processing(args)
+        after_processing = runner.verify_local(args)
+        restart = run(runner_base_command(schema, "fixture-job", "fixture-message", "fixture-pilot", checkpoint) + ["--dry-run", "--skip-cloud-control"], timeout=60)
+        if restart.returncode != 0:
+            raise RuntimeError(f"restart dry run failed: {redacted_failure(restart)}")
+        restart_payload = json.loads(restart.stdout)
+        rollback_args = runner_namespace(schema, "rollback-job", "rollback-message", "rollback-pilot")
+        runner.rollback_local_lease(rollback_args, "synthetic native control rollback")
+        rolled_back = runner.verify_local(rollback_args)
+        return {
+            "ok": True,
+            "schema": schema,
+            "schema_isolated": schema.startswith("reel_phase5c_runtime_probe_"),
+            "dry_run_status": dry_payload.get("local", {}),
+            "processing_status": {key: after_processing.get(key) for key in ("lease_status", "job_status")},
+            "restart_status": restart_payload.get("local", {}),
+            "rollback_status": rolled_back.get("lease_status"),
+            "pg_secret": pg_secret_status(),
+            "dropped": True,
+        }
+    finally:
+        drop_synthetic_schema(runner, args)
+
+
+def fake_worker_control_probe() -> dict[str, Any]:
+    runner = load_runner()
+    work = Path(tempfile.mkdtemp(prefix="phase5-fake-worker-", dir=str(WORK_ROOT if WORK_ROOT.exists() else Path("/tmp"))))
+    token_file = work / "phase5-admin-token"
+    token_file.write_text("synthetic-phase5-admin-token", encoding="utf-8")
+    os.chmod(token_file, 0o600)
+    expected = token_file.read_text(encoding="utf-8").strip()
+    requests_seen: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            _body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
+            if self.headers.get("Authorization") != f"Bearer {expected}":
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":false,"error":"unauthorized"}')
+                return
+            requests_seen.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            if self.path.endswith("/start"):
+                self.wfile.write(b'{"ok":true,"started":true,"token_expires_at":"2099-01-01T00:00:00.000Z"}')
+            elif self.path.endswith("/finalize"):
+                self.wfile.write(b'{"ok":true,"finalized":true}')
+            else:
+                self.wfile.write(b'{"ok":true,"aborted":true}')
+
+        def log_message(self, _format: str, *_args: Any) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        args = runner_namespace("synthetic_schema", "fixture-job")
+        args.worker_url = f"http://127.0.0.1:{server.server_port}"
+        args.admin_token_file = str(token_file)
+        token = runner.admin_token(args)
+        checkpoint = {"idempotency_key": "fixture-idempotency", "callback_token_hash": "0" * 64}
+        start = runner.cloud_start(args, token, checkpoint)
+        finalize = runner.cloud_finalize(args, token, checkpoint)
+        abort = runner.cloud_abort(args, token, checkpoint, "synthetic abort")
+        missing_args = runner_namespace("synthetic_schema", "fixture-job")
+        missing_args.admin_token_file = str(work / "missing-token")
+        missing_failed = False
+        try:
+            runner.admin_token(missing_args)
+        except SystemExit:
+            missing_failed = True
+        return {
+            "ok": bool(start.get("ok") and finalize.get("ok") and abort.get("ok") and missing_failed),
+            "requests_seen": sorted(requests_seen),
+            "token_file_mode": oct(stat.S_IMODE(token_file.stat().st_mode)),
+            "missing_token_failed_closed": missing_failed,
+        }
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def control_fail_closed_probe() -> dict[str, Any]:
+    runner = load_runner()
+    schema = f"reel_phase5c_fail_closed_{os.getpid()}_{int(time.time())}"
+    args = create_synthetic_phase5_schema(runner, schema)
+    work = Path(tempfile.mkdtemp(prefix="phase5-control-fail-", dir=str(WORK_ROOT if WORK_ROOT.exists() else Path("/tmp"))))
+    checkpoint = work / "checkpoint.json"
+    missing_pg = run(
+        runner_base_command(schema, "fixture-job", "fixture-message", "fixture-pilot", checkpoint)
+        + ["--pg-password-file", str(work / "missing-pg"), "--dry-run", "--skip-cloud-control"],
+        timeout=60,
+    )
+    token_file = work / "bad-token"
+    token_file.write_text("incorrect-synthetic-token", encoding="utf-8")
+    os.chmod(token_file, 0o600)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            _body = self.rfile.read(int(self.headers.get("Content-Length", "0") or "0"))
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":false,"error":"unauthorized"}')
+
+        def log_message(self, _format: str, *_args: Any) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        live_failure = run(
+            runner_base_command(schema, "fixture-job", "fixture-message", "fixture-pilot", checkpoint)
+            + [
+                "--worker-url", f"http://127.0.0.1:{server.server_port}",
+                "--admin-token-file", str(token_file),
+                "--confirm-live-run", "RUN EXACT PHASE 5 LOCAL PILOT fixture-job",
+            ],
+            timeout=60,
+        )
+        checkpoint_stage = None
+        if checkpoint.exists():
+            parsed = json.loads(checkpoint.read_text(encoding="utf-8"))
+            checkpoint_stage = parsed.get("stage")
+        return {
+            "ok": missing_pg.returncode != 0 and live_failure.returncode != 0 and checkpoint_stage != "processor_loaded",
+            "missing_pg_failed_closed": missing_pg.returncode != 0,
+            "bad_worker_token_failed_closed": live_failure.returncode != 0,
+            "checkpoint_stage": checkpoint_stage,
+            "processor_loaded": checkpoint_stage == "processor_loaded",
+        }
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        drop_synthetic_schema(runner, args)
 
 
 def fixture_media() -> dict[str, Any]:
@@ -295,6 +615,9 @@ def main() -> int:
     sub.add_parser("tool-versions")
     sub.add_parser("fixture-media")
     sub.add_parser("runner-fail-closed")
+    sub.add_parser("native-control")
+    sub.add_parser("fake-worker-control")
+    sub.add_parser("control-fail-closed")
     codex = sub.add_parser("codex-smoke")
     codex.add_argument("--model", default=os.environ.get("CODEX_RESEARCH_MODEL", "gpt-5.6-luna"))
     codex.add_argument("--timeout", type=int, default=120)
@@ -309,6 +632,12 @@ def main() -> int:
             payload = fixture_media()
         elif args.command == "runner-fail-closed":
             payload = runner_fail_closed()
+        elif args.command == "native-control":
+            payload = native_control_probe()
+        elif args.command == "fake-worker-control":
+            payload = fake_worker_control_probe()
+        elif args.command == "control-fail-closed":
+            payload = control_fail_closed_probe()
         elif args.command == "codex-smoke":
             payload = codex_smoke(args.model, args.timeout)
         else:

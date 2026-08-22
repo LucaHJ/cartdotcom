@@ -135,6 +135,13 @@ services:
       REEL_SERVICE_NAME: phase5-runner
       REEL_PHASE5_RUNNER_ENABLED: "${REEL_PHASE5_RUNNER_ENABLED:-false}"
       REEL_PHASE5_PROCESSOR_PATH: /opt/reel/processor/app.py
+      REEL_PHASE5_PG_MODE: native
+      REEL_PHASE5_PGHOST: cartdotcom-platform-postgres-1
+      REEL_PHASE5_PGPORT: "5432"
+      REEL_PHASE5_PGDATABASE: cartdotcom
+      REEL_PHASE5_PGUSER: cartdotcom
+      REEL_PHASE5_PG_PASSWORD_FILE: /run/secrets/postgres_password
+      REEL_PHASE5_ADMIN_TOKEN_FILE: /run/secrets/phase5_admin_token
       CODEX_HOME: /home/node/.codex
       CODEX_AUTH_SOURCE: /codex-auth/auth.json
       CODEX_RESEARCH_MODEL: "${CODEX_RESEARCH_MODEL:-gpt-5.6-luna}"
@@ -143,6 +150,10 @@ services:
       - type: bind
         source: /home/lucaj/.codex/auth.json
         target: /codex-auth/auth.json
+        read_only: true
+      - type: bind
+        source: /srv/platform/secrets/postgres_password
+        target: /run/secrets/postgres_password
         read_only: true
       - type: bind
         source: ${REEL_RUNS_ROOT:-/srv/cartdotcom/reel-brain-runs}
@@ -162,6 +173,7 @@ services:
     networks:
       - reel-runtime
       - reel-egress
+      - platform-data
     read_only: true
     mem_limit: 768m
     cpus: 0.15
@@ -175,3 +187,6 @@ networks:
     internal: true
   reel-egress:
     name: cartdotcom-reel-egress
+  platform-data:
+    name: cartdotcom-data
+    external: true

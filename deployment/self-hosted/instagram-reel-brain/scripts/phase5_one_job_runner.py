@@ -25,6 +25,8 @@ import importlib.util
 import json
 import os
 import secrets
+import shutil
+import stat
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,8 +34,11 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-MONOREPO_ROOT = Path(os.environ.get("REEL_MONOREPO_ROOT", Path(__file__).resolve().parents[4]))
-SELF_HOSTED_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_PATH = Path(__file__).resolve()
+SCRIPT_PARENTS = SCRIPT_PATH.parents
+DEFAULT_MONOREPO_ROOT = SCRIPT_PARENTS[4] if len(SCRIPT_PARENTS) > 4 else SCRIPT_PATH.parent
+MONOREPO_ROOT = Path(os.environ.get("REEL_MONOREPO_ROOT", DEFAULT_MONOREPO_ROOT))
+SELF_HOSTED_ROOT = SCRIPT_PARENTS[1] if len(SCRIPT_PARENTS) > 1 else SCRIPT_PATH.parent
 DEFAULT_PROCESSOR_CANDIDATES = (
     MONOREPO_ROOT / "deployment" / "instagram-reel-brain" / "container" / "app.py",
     SELF_HOSTED_ROOT / "phase5-runner" / "container" / "app.py",
@@ -126,22 +131,40 @@ def write_checkpoint(args: argparse.Namespace, path: Path, checkpoint: dict[str,
     return checkpoint
 
 
-def read_secret_file(path: str | None) -> str:
+def private_file_summary(path: Path) -> dict[str, Any]:
+    info = path.stat()
+    return {
+        "path": str(path),
+        "mode": oct(stat.S_IMODE(info.st_mode)),
+        "uid": info.st_uid,
+        "gid": info.st_gid,
+        "bytes": info.st_size,
+    }
+
+
+def read_secret_file(path: str | None, *, label: str = "secret file", require_private: bool = False) -> str:
     if not path:
         return ""
     secret_path = Path(path)
     if not secret_path.exists():
-        raise SystemExit(f"secret file does not exist: {secret_path}")
+        raise SystemExit(f"{label} does not exist: {secret_path}")
+    if require_private:
+        mode = stat.S_IMODE(secret_path.stat().st_mode)
+        if mode & 0o077:
+            raise SystemExit(f"{label} permissions must not allow group/other access: {secret_path}")
     text = secret_path.read_text(encoding="utf-8").strip()
     if not text:
-        raise SystemExit(f"secret file is empty: {secret_path}")
+        raise SystemExit(f"{label} is empty: {secret_path}")
     return text
 
 
 def admin_token(args: argparse.Namespace, *, required: bool = True) -> str:
-    token = read_secret_file(args.admin_token_file) or os.environ.get(args.admin_token_env, "").strip()
+    token = read_secret_file(args.admin_token_file, label="Worker admin token file", require_private=True)
+    if not token and args.allow_admin_token_env:
+        token = os.environ.get(args.admin_token_env, "").strip()
     if required and not token:
-        raise SystemExit(f"Worker admin token is required via --admin-token-file or ${args.admin_token_env}")
+        legacy_hint = f" or --allow-admin-token-env ${args.admin_token_env}" if args.allow_admin_token_env else ""
+        raise SystemExit(f"Worker admin token is required via --admin-token-file{legacy_hint}")
     return token
 
 
@@ -188,8 +211,65 @@ def post_admin_json(
         raise RuntimeError(f"Worker control {path} failed: {error.reason}") from error
 
 
-def psql_json(args: argparse.Namespace, schema: str, sql: str) -> list[dict[str, Any]]:
-    safe_schema(schema)
+def pg_mode(args: argparse.Namespace) -> str:
+    requested = getattr(args, "pg_mode", "auto")
+    if requested not in ("auto", "native", "legacy-ssh"):
+        raise SystemExit("--pg-mode must be auto, native, or legacy-ssh")
+    if requested != "auto":
+        return requested
+    password_file = getattr(args, "pg_password_file", "")
+    if password_file and Path(password_file).exists():
+        return "native"
+    return "legacy-ssh"
+
+
+def native_pg_connection(args: argparse.Namespace):
+    try:
+        import psycopg  # type: ignore[import-not-found]
+    except ImportError as error:
+        raise SystemExit("native PostgreSQL mode requires psycopg; install the phase5 runner image dependencies") from error
+    if not args.pg_password_file:
+        raise SystemExit("native PostgreSQL mode requires --pg-password-file")
+    password = read_secret_file(args.pg_password_file, label="PostgreSQL password file", require_private=True)
+    return psycopg.connect(
+        host=args.pg_host,
+        port=args.pg_port,
+        dbname=args.pg_database,
+        user=args.pg_user,
+        password=password,
+        connect_timeout=args.pg_connect_timeout,
+    )
+
+
+def native_psql_json(args: argparse.Namespace, _schema: str, sql: str) -> list[dict[str, Any]]:
+    try:
+        with native_pg_connection(args) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql)
+                rows = cursor.fetchall()
+    except SystemExit:
+        raise
+    except Exception as error:  # noqa: BLE001
+        raise RuntimeError(f"native PostgreSQL query failed: {type(error).__name__}") from error
+    parsed: list[dict[str, Any]] = []
+    for row in rows:
+        value = row[0] if isinstance(row, (tuple, list)) else row
+        if isinstance(value, dict):
+            parsed.append(value)
+        elif isinstance(value, str):
+            parsed.append(json.loads(value))
+        else:
+            raise RuntimeError(f"native PostgreSQL query returned unsupported JSON value: {type(value).__name__}")
+    return parsed
+
+
+def legacy_ssh_psql_json(args: argparse.Namespace, schema: str, sql: str) -> list[dict[str, Any]]:
+    if shutil.which("ssh") is None and args.ssh_target not in ("", "local", "localhost"):
+        raise SystemExit("legacy PostgreSQL mode requires ssh; use --pg-mode native inside the Ubuntu runner")
+    if args.ssh_target in ("", "local", "localhost") and shutil.which("docker") is None:
+        raise SystemExit("legacy local PostgreSQL mode requires docker; use --pg-mode native inside the Ubuntu runner")
+    if args.ssh_target in ("", "local", "localhost") and shutil.which("docker") is not None:
+        pass
     command = "docker exec -i cartdotcom-platform-postgres-1 psql -U cartdotcom -d cartdotcom -v ON_ERROR_STOP=1 -q -t -A"
     run_args = command.split() if args.ssh_target in ("", "local", "localhost") else ["ssh", args.ssh_target, command]
     result = subprocess.run(
@@ -210,6 +290,14 @@ def psql_json(args: argparse.Namespace, schema: str, sql: str) -> list[dict[str,
         if line:
             rows.append(json.loads(line))
     return rows
+
+
+def psql_json(args: argparse.Namespace, schema: str, sql: str) -> list[dict[str, Any]]:
+    safe_schema(schema)
+    mode = pg_mode(args)
+    if mode == "native":
+        return native_psql_json(args, schema, sql)
+    return legacy_ssh_psql_json(args, schema, sql)
 
 
 def verify_local(args: argparse.Namespace) -> dict[str, Any]:
@@ -497,10 +585,18 @@ def main() -> int:
     parser.add_argument("--source-message-id", required=True)
     parser.add_argument("--lease-owner", default=DEFAULT_WORKER)
     parser.add_argument("--schema", default=DEFAULT_SCHEMA)
-    parser.add_argument("--ssh-target", default=os.environ.get("REEL_PHASE2_PG_SSH_TARGET", "cartdotcom-server"), help="Use 'local' when running on the Ubuntu server")
+    parser.add_argument("--pg-mode", default=os.environ.get("REEL_PHASE5_PG_MODE", "auto"), choices=("auto", "native", "legacy-ssh"))
+    parser.add_argument("--pg-host", default=os.environ.get("REEL_PHASE5_PGHOST", "cartdotcom-platform-postgres-1"))
+    parser.add_argument("--pg-port", type=int, default=int(os.environ.get("REEL_PHASE5_PGPORT", "5432")))
+    parser.add_argument("--pg-database", default=os.environ.get("REEL_PHASE5_PGDATABASE", "cartdotcom"))
+    parser.add_argument("--pg-user", default=os.environ.get("REEL_PHASE5_PGUSER", "cartdotcom"))
+    parser.add_argument("--pg-password-file", default=os.environ.get("REEL_PHASE5_PG_PASSWORD_FILE", ""))
+    parser.add_argument("--pg-connect-timeout", type=int, default=int(os.environ.get("REEL_PHASE5_PG_CONNECT_TIMEOUT", "10")))
+    parser.add_argument("--ssh-target", default=os.environ.get("REEL_PHASE2_PG_SSH_TARGET", "cartdotcom-server"), help="Legacy workstation mode only; not used by --pg-mode native")
     parser.add_argument("--worker-url", default=WORKER_BASE_URL)
     parser.add_argument("--admin-token-file", default=os.environ.get("REEL_PHASE5_ADMIN_TOKEN_FILE", ""))
     parser.add_argument("--admin-token-env", default="REEL_BRAIN_ADMIN_TOKEN")
+    parser.add_argument("--allow-admin-token-env", action="store_true", help="legacy workstation mode only; Ubuntu runner should use --admin-token-file")
     parser.add_argument("--codex-auth-path", default=str(Path.home() / ".codex" / "auth.json"))
     parser.add_argument("--checkpoint-path", default="")
     parser.add_argument("--timeout-seconds", type=int, default=900)

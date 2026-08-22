@@ -94,6 +94,12 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
   const runner = await readFile(new URL("../scripts/phase5_one_job_runner.py", import.meta.url), "utf8");
   assert.match(runner, /RUN EXACT PHASE 5 LOCAL PILOT/);
   assert.match(runner, /verify_local/);
+  assert.match(runner, /--pg-mode/);
+  assert.match(runner, /def native_pg_connection/);
+  assert.match(runner, /def legacy_ssh_psql_json/);
+  assert.match(runner, /native PostgreSQL mode requires --pg-password-file/);
+  assert.match(runner, /legacy PostgreSQL mode requires ssh/);
+  assert.match(runner, /legacy local PostgreSQL mode requires docker/);
   assert.match(runner, /\/api\/admin\/phase5\/local-pilot\/start/);
   assert.match(runner, /\/api\/admin\/phase5\/local-pilot\/finalize/);
   assert.match(runner, /\/api\/admin\/phase5\/local-pilot\/abort/);
@@ -111,6 +117,10 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
   assert.match(runner, /rows\[0\]\.get\("updated"\) != 1/);
   assert.match(runner, /processor\.process\(payload\)/);
   assert.ok(
+    runner.indexOf("token = admin_token(args, required=True)") < runner.indexOf("processor.process(payload)"),
+    "Worker token file validation must happen before processor execution",
+  );
+  assert.ok(
     runner.indexOf('start_response.get("processor_already_complete")') < runner.indexOf("processor.process(payload)"),
     "restart after cloud completion must skip processor execution before the processor call site",
   );
@@ -126,6 +136,7 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
   assert.match(runner, /INSTAGRAM_COOKIES_JSON/);
   assert.doesNotMatch(runner, /wrangler_d1/);
   assert.doesNotMatch(runner, /wrangler", "d1"/);
+  assert.doesNotMatch(runner, /PGPASSWORD/);
   assert.doesNotMatch(runner, /sk-[A-Za-z0-9]/);
   assert.doesNotMatch(runner, /Bearer [A-Za-z0-9_\-.]{16,}/);
 });

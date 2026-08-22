@@ -14,7 +14,8 @@ test("compose declares only isolated reel networks", () => {
   assert.match(compose, /cartdotcom-reel-runtime/);
   assert.match(compose, /cartdotcom-reel-egress/);
   assert.doesNotMatch(compose, /cartdotcom-edge/);
-  assert.doesNotMatch(compose, /cartdotcom-data/);
+  assert.match(compose, /profiles: \["phase5-runner"\][\s\S]*platform-data/);
+  assert.match(compose, /platform-data:\s+name: cartdotcom-data\s+external: true/s);
   assert.doesNotMatch(compose, /ports:/);
 });
 
