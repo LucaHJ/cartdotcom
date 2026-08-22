@@ -268,9 +268,11 @@ export function validatePhase5StartRequest(input: Phase5ControlRequest, now = Da
 
 export type Phase5ControlSnapshot = {
   status: string | null;
+  expires_at?: string | null;
   job_status: string | null;
   job_stage?: string | null;
   local_lease_owner?: string | null;
+  local_lease_expires_at?: string | null;
   upload_token_hash?: string | null;
   upload_token_expires_at?: string | null;
   html_key?: string | null;
@@ -284,6 +286,7 @@ export type Phase5ControlSnapshot = {
 export type Phase5StartRecoveryStatus =
   | "guarded_start"
   | "resume_running"
+  | "renew_processing_lease"
   | "processor_already_complete"
   | "repair_queued_start"
   | "fail_closed";
@@ -297,6 +300,8 @@ export type Phase5StartRecoveryDecision = {
   requiresCallbackToken?: boolean;
   repairAudit?: boolean;
   idempotent?: boolean;
+  renewProcessingLease?: boolean;
+  prepublicationAbortRequired?: boolean;
   processorAlreadyComplete?: boolean;
   finalized?: boolean;
 };
@@ -342,10 +347,16 @@ export function phase5SnapshotHasPublication(row: Phase5ControlSnapshot): boolea
   );
 }
 
+function phase5TimestampStillValid(value: string | null | undefined, now: number): boolean {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) && parsed > now;
+}
+
 export function phase5StartRecoveryDecision(
   row: Phase5ControlSnapshot,
-  input: { leaseOwner: string; callbackTokenHash?: string | null },
+  input: { leaseOwner: string; callbackTokenHash?: string | null; now?: number },
 ): Phase5StartRecoveryDecision {
+  const now = Number.isFinite(input.now) ? Number(input.now) : Date.now();
   const markerCount = Number(row.marker_events || 0);
   if (row.local_lease_owner !== input.leaseOwner) {
     return {
@@ -358,6 +369,16 @@ export function phase5StartRecoveryDecision(
   }
 
   if (row.status === "local_claimed") {
+    if (!phase5TimestampStillValid(row.expires_at, now)) {
+      return {
+        status: "fail_closed",
+        ok: false,
+        httpStatus: 409,
+        recoveryStatus: "fence_expired_abort_required",
+        prepublicationAbortRequired: true,
+        error: "Phase 5 start refused because the overall fence has expired",
+      };
+    }
     if (row.job_status !== "queued") {
       return {
         status: "fail_closed",
@@ -390,7 +411,38 @@ export function phase5StartRecoveryDecision(
   }
 
   if (row.status === "local_processing") {
+    if (row.job_status === "complete") {
+      return {
+        status: "processor_already_complete",
+        ok: true,
+        httpStatus: 200,
+        recoveryStatus: markerCount > 0 ? "processor_already_complete" : "processor_already_complete_repair_audit",
+        repairAudit: markerCount === 0,
+        processorAlreadyComplete: true,
+        idempotent: true,
+      };
+    }
+
     if (row.job_status === "running") {
+      if (phase5SnapshotHasPublication(row)) {
+        return {
+          status: "fail_closed",
+          ok: false,
+          httpStatus: 409,
+          recoveryStatus: "running_with_publication",
+          error: "Phase 5 running resume refused because completion/publication evidence exists",
+        };
+      }
+      if (!phase5TimestampStillValid(row.expires_at, now)) {
+        return {
+          status: "fail_closed",
+          ok: false,
+          httpStatus: 409,
+          recoveryStatus: "fence_expired_abort_required",
+          prepublicationAbortRequired: true,
+          error: "Phase 5 running resume refused because the overall fence has expired",
+        };
+      }
       if (!input.callbackTokenHash) {
         return {
           status: "fail_closed",
@@ -410,24 +462,25 @@ export function phase5StartRecoveryDecision(
           error: "Phase 5 start resume refused because the callback token hash does not match",
         };
       }
+      const callbackLeaseValid = phase5TimestampStillValid(row.upload_token_expires_at, now);
+      const localLeaseValid = phase5TimestampStillValid(row.local_lease_expires_at, now);
+      if (!callbackLeaseValid || !localLeaseValid) {
+        return {
+          status: "renew_processing_lease",
+          ok: true,
+          httpStatus: 200,
+          recoveryStatus: markerCount > 0 ? "renew_processing_lease" : "renew_processing_lease_repair_audit",
+          repairAudit: markerCount === 0,
+          idempotent: true,
+          renewProcessingLease: true,
+        };
+      }
       return {
         status: "resume_running",
         ok: true,
         httpStatus: 200,
         recoveryStatus: markerCount > 0 ? "resume_running" : "resume_running_repair_audit",
         repairAudit: markerCount === 0,
-        idempotent: true,
-      };
-    }
-
-    if (row.job_status === "complete") {
-      return {
-        status: "processor_already_complete",
-        ok: true,
-        httpStatus: 200,
-        recoveryStatus: markerCount > 0 ? "processor_already_complete" : "processor_already_complete_repair_audit",
-        repairAudit: markerCount === 0,
-        processorAlreadyComplete: true,
         idempotent: true,
       };
     }
@@ -440,6 +493,16 @@ export function phase5StartRecoveryDecision(
           httpStatus: 409,
           recoveryStatus: "queued_with_publication",
           error: "Phase 5 start repair refused because completion/publication evidence exists",
+        };
+      }
+      if (!phase5TimestampStillValid(row.expires_at, now)) {
+        return {
+          status: "fail_closed",
+          ok: false,
+          httpStatus: 409,
+          recoveryStatus: "fence_expired_abort_required",
+          prepublicationAbortRequired: true,
+          error: "Phase 5 queued start repair refused because the overall fence has expired",
         };
       }
       if (!input.callbackTokenHash) {

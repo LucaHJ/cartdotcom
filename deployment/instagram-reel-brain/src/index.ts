@@ -3159,46 +3159,157 @@ async function phase5EnsureFinalizeAudit(
   });
 }
 
+async function phase5RenewProcessingLease(
+  env: Env,
+  input: ReturnType<typeof validatePhase5StartRequest>,
+): Promise<boolean> {
+  if (!input.callbackTokenHash) return false;
+  const results = await env.REEL_DB.batch([
+    env.REEL_DB.prepare(
+      `UPDATE phase5_local_pilot_fences
+       SET local_lease_expires_at=?,updated_at=CURRENT_TIMESTAMP
+       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_processing' AND local_lease_owner=?
+         AND datetime(expires_at) > datetime('now')
+         AND EXISTS (
+           SELECT 1 FROM jobs j
+           WHERE j.id=phase5_local_pilot_fences.job_id
+             AND j.source_message_id=?
+             AND j.status='running'
+             AND j.upload_token_hash=?
+             AND j.completed_at IS NULL
+             AND j.html_key IS NULL
+             AND j.library_path IS NULL
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM artifacts a
+           WHERE a.job_id=phase5_local_pilot_fences.job_id
+             AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM job_events e
+           WHERE e.job_id=phase5_local_pilot_fences.job_id
+             AND e.stage IN ('complete','published','phase5_local_complete')
+         )`,
+    ).bind(
+      input.tokenExpiresAt,
+      input.pilotKey,
+      input.jobId,
+      input.sourceMessageId,
+      input.leaseOwner,
+      input.sourceMessageId,
+      input.callbackTokenHash,
+    ),
+    env.REEL_DB.prepare(
+      `UPDATE jobs
+       SET upload_token_expires_at=?,updated_at=CURRENT_TIMESTAMP
+       WHERE id=? AND source_message_id=? AND status='running' AND upload_token_hash=?
+         AND completed_at IS NULL
+         AND html_key IS NULL
+         AND library_path IS NULL
+         AND EXISTS (
+           SELECT 1 FROM phase5_local_pilot_fences f
+           WHERE f.job_id=jobs.id
+             AND f.pilot_key=?
+             AND f.source_message_id=?
+             AND f.status='local_processing'
+             AND f.local_lease_owner=?
+             AND f.local_lease_expires_at=?
+             AND datetime(f.expires_at) > datetime('now')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM artifacts a
+           WHERE a.job_id=jobs.id
+             AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM job_events e
+           WHERE e.job_id=jobs.id
+             AND e.stage IN ('complete','published','phase5_local_complete')
+         )`,
+    ).bind(
+      input.tokenExpiresAt,
+      input.jobId,
+      input.sourceMessageId,
+      input.callbackTokenHash,
+      input.pilotKey,
+      input.sourceMessageId,
+      input.leaseOwner,
+      input.tokenExpiresAt,
+    ),
+  ]);
+  return results.every((result) => (result.meta.changes || 0) === 1);
+}
+
 async function phase5RepairQueuedStart(
   env: Env,
   input: ReturnType<typeof validatePhase5StartRequest>,
   emoji: { display: string },
 ): Promise<boolean> {
   if (!input.callbackTokenHash) return false;
-  const jobUpdate = await env.REEL_DB.prepare(
-    `UPDATE jobs
-     SET status='running',stage='downloading',status_emoji=?,started_at=COALESCE(started_at,CURRENT_TIMESTAMP),
-         attempts=attempts+1,upload_token_hash=?,upload_token_expires_at=?,error_code=NULL,error_message=NULL,updated_at=CURRENT_TIMESTAMP
-     WHERE id=? AND source_message_id=? AND status='queued' AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL
-       AND EXISTS (
-         SELECT 1 FROM phase5_local_pilot_fences f
-         WHERE f.job_id=jobs.id
-           AND f.pilot_key=?
-           AND f.source_message_id=?
-           AND f.status='local_processing'
-           AND f.local_lease_owner=?
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM artifacts a
-         WHERE a.job_id=jobs.id
-           AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM job_events e
-         WHERE e.job_id=jobs.id
-           AND e.stage IN ('complete','published','phase5_local_complete')
-       )`,
-  ).bind(
-    emoji.display,
-    input.callbackTokenHash,
-    input.tokenExpiresAt,
-    input.jobId,
-    input.sourceMessageId,
-    input.pilotKey,
-    input.sourceMessageId,
-    input.leaseOwner,
-  ).run();
-  return (jobUpdate.meta.changes || 0) === 1;
+  const results = await env.REEL_DB.batch([
+    env.REEL_DB.prepare(
+      `UPDATE phase5_local_pilot_fences
+       SET local_lease_expires_at=?,updated_at=CURRENT_TIMESTAMP
+       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_processing' AND local_lease_owner=?
+         AND datetime(expires_at) > datetime('now')
+         AND EXISTS (
+           SELECT 1 FROM jobs j
+           WHERE j.id=phase5_local_pilot_fences.job_id
+             AND j.source_message_id=?
+             AND j.status='queued'
+             AND j.completed_at IS NULL
+             AND j.html_key IS NULL
+             AND j.library_path IS NULL
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM artifacts a
+           WHERE a.job_id=phase5_local_pilot_fences.job_id
+             AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM job_events e
+           WHERE e.job_id=phase5_local_pilot_fences.job_id
+             AND e.stage IN ('complete','published','phase5_local_complete')
+         )`,
+    ).bind(input.tokenExpiresAt, input.pilotKey, input.jobId, input.sourceMessageId, input.leaseOwner, input.sourceMessageId),
+    env.REEL_DB.prepare(
+      `UPDATE jobs
+       SET status='running',stage='downloading',status_emoji=?,started_at=COALESCE(started_at,CURRENT_TIMESTAMP),
+           attempts=attempts+1,upload_token_hash=?,upload_token_expires_at=?,error_code=NULL,error_message=NULL,updated_at=CURRENT_TIMESTAMP
+       WHERE id=? AND source_message_id=? AND status='queued' AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL
+         AND EXISTS (
+           SELECT 1 FROM phase5_local_pilot_fences f
+           WHERE f.job_id=jobs.id
+             AND f.pilot_key=?
+             AND f.source_message_id=?
+             AND f.status='local_processing'
+             AND f.local_lease_owner=?
+             AND f.local_lease_expires_at=?
+             AND datetime(f.expires_at) > datetime('now')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM artifacts a
+           WHERE a.job_id=jobs.id
+             AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM job_events e
+           WHERE e.job_id=jobs.id
+             AND e.stage IN ('complete','published','phase5_local_complete')
+         )`,
+    ).bind(
+      emoji.display,
+      input.callbackTokenHash,
+      input.tokenExpiresAt,
+      input.jobId,
+      input.sourceMessageId,
+      input.pilotKey,
+      input.sourceMessageId,
+      input.leaseOwner,
+      input.tokenExpiresAt,
+    ),
+  ]);
+  return results.every((result) => (result.meta.changes || 0) === 1);
 }
 
 async function handlePhase5StartLocalProcessing(request: Request, env: Env): Promise<Response> {
@@ -3214,20 +3325,22 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
     reason?: string;
   }>(request);
   let validated: ReturnType<typeof validatePhase5StartRequest>;
+  const requestNow = Date.now();
   try {
-    validated = validatePhase5StartRequest({ ...input, confirmation: input.confirm_start });
+    validated = validatePhase5StartRequest({ ...input, confirmation: input.confirm_start }, requestNow);
   } catch (error) {
     return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
   }
   const existing = await phase5ControlState(env, validated);
   if (!existing) return json({ ok: false, error: "Exact Phase 5 fence/job not found" }, { status: 404 });
-  const decision = phase5StartRecoveryDecision(existing, validated);
+  const decision = phase5StartRecoveryDecision(existing, { ...validated, now: requestNow });
   if (!decision.ok) {
     return json({
       ok: false,
       error: decision.error,
       recovery_status: decision.recoveryStatus,
       requires_callback_token: Boolean(decision.requiresCallbackToken),
+      prepublication_abort_required: Boolean(decision.prepublicationAbortRequired),
       fence_status: existing.status,
       lease_owner: existing.local_lease_owner,
       job_status: existing.job_status,
@@ -3249,6 +3362,47 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
       pilot_key: validated.pilotKey,
       job_id: validated.jobId,
       token_expires_at: existing.upload_token_expires_at,
+    });
+  }
+
+  if (decision.status === "renew_processing_lease") {
+    const renewed = await phase5RenewProcessingLease(env, validated);
+    if (!renewed) {
+      const post = await phase5ControlState(env, validated);
+      return json({
+        ok: false,
+        error: "Phase 5 processing lease renewal failed closed",
+        recovery_status: "processing_lease_renewal_failed",
+        prepublication_abort_required: true,
+        fence_status: post?.status || existing.status,
+        job_status: post?.job_status || existing.job_status,
+      }, { status: 409 });
+    }
+    const repairedAudit = await phase5EnsureStartAudit(env, validated, validated.tokenExpiresAt, decision.recoveryStatus);
+    if (repairedAudit && shouldReactToStage("downloading")) {
+      await reactToSourceMessage(env, { id: validated.jobId, source_message_id: validated.sourceMessageId, sender_id: null }, "downloading");
+    }
+    const post = await phase5ControlState(env, validated);
+    if (
+      !post
+      || post.status !== "local_processing"
+      || post.job_status !== "running"
+      || post.upload_token_hash !== validated.callbackTokenHash
+      || post.upload_token_expires_at !== validated.tokenExpiresAt
+      || post.local_lease_expires_at !== validated.tokenExpiresAt
+    ) {
+      return json({ ok: false, error: "Phase 5 processing lease renewal postcondition failed", recovery_status: "processing_lease_renewal_postcondition_failed" }, { status: 409 });
+    }
+    return json({
+      ok: true,
+      started: true,
+      idempotent: true,
+      renewed_processing_lease: true,
+      recovery_status: decision.recoveryStatus,
+      repaired_audit: repairedAudit,
+      pilot_key: validated.pilotKey,
+      job_id: validated.jobId,
+      token_expires_at: validated.tokenExpiresAt,
     });
   }
 
@@ -3288,7 +3442,14 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
       await reactToSourceMessage(env, { id: validated.jobId, source_message_id: validated.sourceMessageId, sender_id: null }, "downloading");
     }
     const post = await phase5ControlState(env, validated);
-    if (!post || post.status !== "local_processing" || post.job_status !== "running" || post.upload_token_hash !== validated.callbackTokenHash) {
+    if (
+      !post
+      || post.status !== "local_processing"
+      || post.job_status !== "running"
+      || post.upload_token_hash !== validated.callbackTokenHash
+      || post.upload_token_expires_at !== validated.tokenExpiresAt
+      || post.local_lease_expires_at !== validated.tokenExpiresAt
+    ) {
       return json({ ok: false, error: "Phase 5 partial start repair postcondition failed", recovery_status: "partial_start_repair_postcondition_failed" }, { status: 409 });
     }
     return json({
@@ -3375,7 +3536,15 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
     await reactToSourceMessage(env, { id: validated.jobId, source_message_id: validated.sourceMessageId, sender_id: null }, "downloading");
   }
   const post = await phase5ControlState(env, validated);
-  if (!post || post.status !== "local_processing" || post.job_status !== "running" || post.upload_token_hash !== validated.callbackTokenHash || Number(post.marker_events || 0) <= 0) {
+  if (
+    !post
+    || post.status !== "local_processing"
+    || post.job_status !== "running"
+    || post.upload_token_hash !== validated.callbackTokenHash
+    || post.upload_token_expires_at !== validated.tokenExpiresAt
+    || post.local_lease_expires_at !== validated.tokenExpiresAt
+    || Number(post.marker_events || 0) <= 0
+  ) {
     return json({ ok: false, error: "Phase 5 start postcondition failed" }, { status: 409 });
   }
   return json({ ok: true, started: true, recovery_status: decision.recoveryStatus, repaired_audit: insertedAudit, pilot_key: validated.pilotKey, job_id: validated.jobId, token_expires_at: validated.tokenExpiresAt });
