@@ -5,6 +5,7 @@ import test from "node:test";
 const control = readFileSync(new URL("../scripts/phase6_dispatch_control.py", import.meta.url), "utf8");
 const dispatcher = readFileSync(new URL("../scripts/phase6_dispatcher.py", import.meta.url), "utf8");
 const authority = readFileSync(new URL("../scripts/phase6_authority.py", import.meta.url), "utf8");
+const watchdog = readFileSync(new URL("../scripts/phase6_dispatcher_watchdog.sh", import.meta.url), "utf8");
 const dockerfile = readFileSync(new URL("../phase5-runner/Dockerfile", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../migrations/0006_phase6_processing_authority.sql", import.meta.url), "utf8");
 
@@ -42,4 +43,13 @@ test("Phase 6 authority wrapper provides one-command transition and rollback wit
   assert.match(authority, /authority-cloud/);
   assert.match(authority, /--volume/);
   assert.doesNotMatch(authority, /read_text|Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
+});
+
+test("Phase 6 dispatcher watchdog is reboot-safe and authority-aware", () => {
+  assert.match(watchdog, /processing_authority/);
+  assert.match(watchdog, /authority.*!= "self_hosted"/s);
+  assert.match(watchdog, /\/proc\/\$pid\/cmdline/);
+  assert.match(watchdog, /flock -n/);
+  assert.match(watchdog, /nohup python3/);
+  assert.doesNotMatch(watchdog, /Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
 });
