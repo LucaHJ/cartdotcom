@@ -6,6 +6,7 @@ const control = readFileSync(new URL("../scripts/phase6_dispatch_control.py", im
 const dispatcher = readFileSync(new URL("../scripts/phase6_dispatcher.py", import.meta.url), "utf8");
 const authority = readFileSync(new URL("../scripts/phase6_authority.py", import.meta.url), "utf8");
 const watchdog = readFileSync(new URL("../scripts/phase6_dispatcher_watchdog.sh", import.meta.url), "utf8");
+const soak = readFileSync(new URL("../scripts/phase6_soak_monitor.py", import.meta.url), "utf8");
 const dockerfile = readFileSync(new URL("../phase5-runner/Dockerfile", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../migrations/0006_phase6_processing_authority.sql", import.meta.url), "utf8");
 
@@ -53,4 +54,16 @@ test("Phase 6 dispatcher watchdog is reboot-safe and authority-aware", () => {
   assert.match(watchdog, /flock -n/);
   assert.match(watchdog, /nohup python3/);
   assert.doesNotMatch(watchdog, /Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
+});
+
+test("Phase 6 soak monitor preserves the full gate and checks critical regressions", () => {
+  assert.match(soak, /timedelta\(days=7\)/);
+  assert.match(soak, /completed_jobs_since_watermark/);
+  assert.match(soak, /duplicate_completion_jobs/);
+  assert.match(soak, /publication_drift/);
+  assert.match(soak, /stale_leases/);
+  assert.match(soak, /container_health/);
+  assert.match(soak, /backlog_enabled/);
+  assert.match(soak, /concurrency_exceeded/);
+  assert.doesNotMatch(soak, /Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
 });
