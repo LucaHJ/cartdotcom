@@ -53,6 +53,7 @@ fi
 
 rm -f "$PID_FILE"
 cd "$ROOT"
+exec 9>&-
 nohup python3 "$ROOT/scripts/phase6_dispatcher.py" --generation "$generation" >>"$LOG_FILE" 2>&1 < /dev/null &
 pid=$!
 printf '%s\n' "$pid" > "$PID_FILE"
