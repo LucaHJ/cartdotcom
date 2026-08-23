@@ -1,22 +1,21 @@
 # Instagram Reel Migration State
 
 Status: Phase 4 shadow live intake observation passed independent review.
-Bounded Phase 5 preparation is implemented and deployed. The first live
-controlled-compute pilot was pre-intake captured, locally claimed, renewed,
-and completed for one exact Reel job. A second exact live carousel job was
-captured and completed through the split Ubuntu runtime. Phase 5 cases 1 and 2
-of 3 are accepted; the retrieval case remains.
+Phase 5 controlled compute is complete. The exact Reel and carousel jobs
+completed locally, and a new retrieval command returned the exact carousel
+result through a successful outbound link event. All three required cases
+passed with rollback/recovery evidence and no News regression.
 Phase 5B runner hardening is accepted. Phase 5C has built the inert Ubuntu
 runtime, corrected native-control and control/compute secret isolation, added
 the staged host orchestrator, authenticated control checkpoints, and installed
 a dedicated narrow Worker control token as a control-only mode-0600 server
 file. The runtime completed the exact carousel pilot and is stopped with zero
-active jobs, fences, or arms. The next gate is one new retrieval command.
+active jobs, fences, or arms. The next stage is the Phase 6 processing cutover
+and its required seven-day soak.
 
-Cloudflare remains the only production authority. The local scaffold does not
-receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
-Pages/KV/R2 data, or process backlog except for a future exactly fenced
-one-job Phase 5 pilot after explicit approval.
+Cloudflare remains the only general production authority at this recorded
+gate. The Phase 6 cutover has not yet transferred general processing authority
+to the local serial runner. Historical backlog remains disabled.
 
 Phase 3 is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`. Phase 4 start is
 recorded in `PHASE_4_START_REPORT_2026-08-21.md`; the current timestamp
@@ -307,3 +306,16 @@ checkpoint, narrow-auth, and exact carousel evidence recorded below.
 - Worker health remained live with backlog off; Reel, News, Caddy, and
   PostgreSQL stayed healthy; no Phase 5 container remains active.
 - See `PHASE_5_CAROUSEL_PILOT_REPORT_2026-08-23.md`.
+
+## 2026-08-23 Phase 5 retrieval and completion
+
+- A new command, `Find highest grossing movies adjusted for inflation`,
+  completed in approximately two seconds.
+- It returned exact carousel job
+  `f74f0619-c6a6-46c2-8b97-6d0fc0b62a13` and its source URL with ten resources.
+- Outbound event `8c6ee916-bd2b-4c3a-937c-cb2aaf842caa` sent one `reel_link`
+  response with HTTP 200 and no error to the exact request message.
+- All three Phase 5 cases and rollback/recovery prerequisites now pass. Phase 5
+  is complete; Phase 6 processing cutover and its required seven-day soak are
+  next.
+- See `PHASE_5_RETRIEVAL_AND_COMPLETION_REPORT_2026-08-23.md`.

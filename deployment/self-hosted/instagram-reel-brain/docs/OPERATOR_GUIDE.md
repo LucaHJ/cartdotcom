@@ -32,6 +32,8 @@ Important files:
   handoff proof.
 - `docs/PHASE_5C_CONTROL_AUTH_REPORT_2026-08-23.md`: narrow Worker control
   credential installation and scope proof.
+- `docs/PHASE_5_RETRIEVAL_AND_COMPLETION_REPORT_2026-08-23.md`: final Phase 5
+  retrieval evidence and three-case gate decision.
 
 Services:
 
@@ -161,6 +163,13 @@ completion without repeating Codex, publication, or reactions.
 Stop the bounded Reel stage. Capture `docker stats`, active PostgreSQL queries,
 and News container health. Do not continue cutover work until News returns to
 its prior healthy baseline.
+
+### Retrieval returns the wrong item
+
+Stop before using the result. Compare the normalized query, `result_job_id`,
+source URL, resource count, and outbound event `source_message_id`. A valid
+retrieval must point to one durable completed job and send at most one
+idempotent outbound result for the exact requesting message.
 
 ## Backups and Rollback
 

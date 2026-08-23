@@ -2,6 +2,11 @@
 
 ## 2026-08-23
 
+- Completed the third Phase 5 case: a new retrieval command selected exact
+  carousel job `f74f0619-c6a6-46c2-8b97-6d0fc0b62a13` and sent one successful
+  `reel_link` response. Phase 5 is complete; Phase 6 processing cutover and the
+  required seven-day soak are next.
+
 - Installed and verified the dedicated narrow `PHASE5_CONTROL_TOKEN` in
   commits `956d2a3` and `78110c4`; it authorizes only Phase 5 local-pilot
   routes and is mounted only into `phase5-control`.
