@@ -1,0 +1,18 @@
+[Unit]
+Description=Cartdotcom Instagram Reel Phase 6 serial dispatcher
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=lucaj
+WorkingDirectory=/srv/cartdotcom/instagram-reel-brain
+ExecStart=/usr/bin/python3 /srv/cartdotcom/instagram-reel-brain/scripts/phase6_dispatcher.py --generation 1
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+

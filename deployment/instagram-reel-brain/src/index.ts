@@ -45,6 +45,20 @@ import {
   type Phase5FenceRow,
 } from "./phase5-pilot";
 import {
+  PHASE6_CLAIM_CONFIRMATION,
+  PHASE6_CLOUD_CONFIRMATION,
+  PHASE6_LOCAL_CONFIRMATION,
+  PHASE6_RELEASE_CONFIRMATION,
+  PHASE6_TRANSITION_CONFIRMATION,
+  phase6AuthorityAllowsCloudClaims,
+  phase6AuthorityAllowsLocalClaims,
+  phase6PilotKey,
+  phase6ShouldFenceNewJob,
+  validatePhase6AuthorityRequest,
+  validatePhase6ClaimRequest,
+  type Phase6AuthoritySnapshot,
+} from "./phase6-authority";
+import {
   DEFAULT_STAGE_REACTIONS,
   applyMediaLinkFallbacks,
   canonicalArtifactKey,
@@ -2842,6 +2856,36 @@ async function handleCorrectiveResynthesis(request: Request, env: Env, jobId: st
 
 const PHASE5_ACTIVE_FENCE_SQL = "'armed','local_claimed','local_processing'";
 
+async function phase6Authority(env: Env): Promise<Phase6AuthoritySnapshot> {
+  try {
+    const row = await env.REEL_DB.prepare(
+      `SELECT mode,generation,dispatch_enabled,codex_enabled,outbound_enabled,backlog_enabled,cutover_watermark
+       FROM processing_authority WHERE authority_key='instagram-reel-brain'`,
+    ).first<Phase6AuthoritySnapshot>();
+    if (row) return row;
+  } catch (error) {
+    if (!String((error as Error)?.message || error).includes("processing_authority")) throw error;
+  }
+  return {
+    mode: "cloud",
+    generation: 0,
+    dispatch_enabled: 0,
+    codex_enabled: 0,
+    outbound_enabled: 0,
+    backlog_enabled: 0,
+    cutover_watermark: null,
+  };
+}
+
+async function auditPhase6CloudAuthoritySkip(env: Env, job: JobRow, authority: Phase6AuthoritySnapshot): Promise<void> {
+  const marker = `phase6-authority:${authority.generation}:${job.id}:cloud-skip`;
+  await env.REEL_DB.prepare(
+    `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+     SELECT ?,'phase6_local_authority','queued','🔒',?
+     WHERE NOT EXISTS (SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''), ?) > 0)`,
+  ).bind(job.id, JSON.stringify({ marker, mode: authority.mode, generation: authority.generation, cloud_processing_skipped: true }), job.id, marker).run();
+}
+
 async function activePhase5FenceForJob(env: Env, jobId: string): Promise<Phase5FenceRow | null> {
   try {
     const row = await env.REEL_DB.prepare(
@@ -3864,6 +3908,234 @@ async function capturePhase5PreintakeArmForJob(
   return { captured: true, armKey: arm!.arm_key, expiresAt: arm!.expires_at };
 }
 
+async function capturePhase6AuthorityJob(
+  env: Env,
+  input: {
+    jobId: string;
+    senderId?: string | null;
+    sourceMessageId?: string | null;
+    canonicalUrl: string;
+    dedupeKey: string;
+    createdAt: string;
+  },
+): Promise<{ captured: boolean; pilotKey?: string; expiresAt?: string }> {
+  if (!input.senderId || !input.sourceMessageId) return { captured: false };
+  const authority = await phase6Authority(env);
+  if (!phase6ShouldFenceNewJob(authority, input.createdAt)) return { captured: false };
+  const mediaType = input.canonicalUrl.includes("/reel/") ? "reel" : "carousel";
+  const pilotKey = phase6PilotKey(authority.generation, input.jobId);
+  const expiresAt = new Date(Date.now() + 6 * 60 * 60_000).toISOString();
+  const audit = {
+    pilot_key: pilotKey,
+    job_id: input.jobId,
+    source_message_id: input.sourceMessageId,
+    phase6_authority: true,
+    generation: authority.generation,
+    watermark: authority.cutover_watermark,
+    mode_at_capture: authority.mode,
+    media_type: mediaType,
+  };
+  await env.REEL_DB.batch([
+    env.REEL_DB.prepare(
+      `INSERT OR IGNORE INTO phase5_preintake_arms(
+         arm_key,active_slot,sender_id,media_type,status,armed_at,expires_at,consumed_at,source_message_id,job_id,event_id,audit_json
+       ) VALUES (?,? ,?,?, 'captured',CURRENT_TIMESTAMP,?,CURRENT_TIMESTAMP,?,?,?,?)`,
+    ).bind(pilotKey, pilotKey, input.senderId, mediaType, expiresAt, input.sourceMessageId, input.jobId, input.sourceMessageId, JSON.stringify(audit)),
+    env.REEL_DB.prepare(
+      `INSERT OR IGNORE INTO phase5_local_pilot_fences(
+         pilot_key,job_id,source_message_id,dedupe_key,status,expires_at,audit_json
+       ) VALUES (?,?,?,?,'armed',?,?)`,
+    ).bind(pilotKey, input.jobId, input.sourceMessageId, input.dedupeKey, expiresAt, JSON.stringify(audit)),
+    env.REEL_DB.prepare(
+      `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+       SELECT ?,'phase6_local_fenced','queued','🔒',?
+       WHERE NOT EXISTS (SELECT 1 FROM job_events WHERE job_id=? AND stage='phase6_local_fenced')`,
+    ).bind(input.jobId, JSON.stringify({ ...audit, expires_at: expiresAt }), input.jobId),
+  ]);
+  return { captured: true, pilotKey, expiresAt };
+}
+
+async function handlePhase6AuthorityState(env: Env): Promise<Response> {
+  const authority = await phase6Authority(env);
+  const active = await env.REEL_DB.prepare(
+    `SELECT
+       SUM(CASE WHEN status='armed' THEN 1 ELSE 0 END) AS armed,
+       SUM(CASE WHEN status='local_claimed' THEN 1 ELSE 0 END) AS claimed,
+       SUM(CASE WHEN status='local_processing' THEN 1 ELSE 0 END) AS processing
+     FROM phase5_local_pilot_fences WHERE pilot_key LIKE ?`,
+  ).bind(`phase6:${authority.generation}:%`).first<{ armed: number; claimed: number; processing: number }>();
+  return json({ ok: true, authority, active: active || { armed: 0, claimed: 0, processing: 0 } });
+}
+
+async function handlePhase6AuthorityChange(request: Request, env: Env, target: "transition" | "self_hosted" | "cloud"): Promise<Response> {
+  const input = await readJson<{ expected_generation?: number; confirmation?: string; reason?: string }>(request);
+  const confirmation = target === "transition"
+    ? PHASE6_TRANSITION_CONFIRMATION
+    : target === "self_hosted" ? PHASE6_LOCAL_CONFIRMATION : PHASE6_CLOUD_CONFIRMATION;
+  let validated: ReturnType<typeof validatePhase6AuthorityRequest>;
+  try {
+    validated = validatePhase6AuthorityRequest(input, confirmation);
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const current = await phase6Authority(env);
+  if (current.generation !== validated.expectedGeneration) {
+    return json({ ok: false, error: "Phase 6 authority generation mismatch", authority: current }, { status: 409 });
+  }
+  if (current.mode === target) return json({ ok: true, idempotent: true, authority: current });
+
+  let generation = current.generation;
+  let watermark = current.cutover_watermark;
+  if (target === "transition") {
+    if (current.mode === "cloud") {
+      const unsettled = await env.REEL_DB.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status IN ('queued','running')")
+        .first<{ count: number }>();
+      const activePilot = await env.REEL_DB.prepare(
+        `SELECT COUNT(*) AS count FROM phase5_local_pilot_fences
+         WHERE status IN (${PHASE5_ACTIVE_FENCE_SQL}) AND datetime(expires_at)>datetime('now')`,
+      ).first<{ count: number }>();
+      if (Number(unsettled?.count || 0) !== 0 || Number(activePilot?.count || 0) !== 0) {
+        return json({ ok: false, error: "Cloud jobs and active pilot fences must settle before Phase 6 transition", unsettled_jobs: unsettled?.count || 0, active_fences: activePilot?.count || 0 }, { status: 409 });
+      }
+      generation += 1;
+      watermark = new Date().toISOString();
+    } else if (current.mode !== "self_hosted") {
+      return json({ ok: false, error: "Unsupported Phase 6 transition source", authority: current }, { status: 409 });
+    }
+  } else if (target === "self_hosted") {
+    if (current.mode !== "transition" || !watermark) {
+      return json({ ok: false, error: "Phase 6 local authority requires a transition watermark", authority: current }, { status: 409 });
+    }
+  } else if (current.mode !== "transition") {
+    return json({ ok: false, error: "Phase 6 cloud rollback requires transition mode first", authority: current }, { status: 409 });
+  }
+
+  const generationPrefix = `phase6:${generation}:%`;
+  let rollbackJobs: Array<{ job_id: string }> = [];
+  if (target === "cloud") {
+    const processing = await env.REEL_DB.prepare(
+      "SELECT COUNT(*) AS count FROM phase5_local_pilot_fences WHERE pilot_key LIKE ? AND status='local_processing'",
+    ).bind(generationPrefix).first<{ count: number }>();
+    if (Number(processing?.count || 0) !== 0) {
+      return json({ ok: false, error: "Active local processing must finish before cloud rollback", active_processing: processing?.count || 0 }, { status: 409 });
+    }
+    rollbackJobs = (await env.REEL_DB.prepare(
+      `SELECT f.job_id FROM phase5_local_pilot_fences f JOIN jobs j ON j.id=f.job_id
+       WHERE f.pilot_key LIKE ? AND f.status IN ('armed','local_claimed') AND j.status='queued'`,
+    ).bind(generationPrefix).all<{ job_id: string }>()).results;
+  }
+
+  const flags = target === "self_hosted" ? [1, 1, 1] : [0, 0, 0];
+  const audit = JSON.stringify({ reason: validated.reason, confirmation, previous: current, watermark });
+  const statements = [
+    env.REEL_DB.prepare(
+      `UPDATE processing_authority SET mode=?,generation=?,dispatch_enabled=?,codex_enabled=?,outbound_enabled=?,backlog_enabled=0,
+       cutover_watermark=?,lease_owner=?,updated_at=CURRENT_TIMESTAMP,audit_json=?
+       WHERE authority_key='instagram-reel-brain' AND mode=? AND generation=?`,
+    ).bind(target, generation, flags[0], flags[1], flags[2], watermark, target === "self_hosted" ? "phase6-local-worker-1" : null, audit, current.mode, current.generation),
+    env.REEL_DB.prepare(
+      "INSERT INTO processing_authority_events(authority_key,generation,from_mode,to_mode,watermark,detail) VALUES ('instagram-reel-brain',?,?,?,?,?)",
+    ).bind(generation, current.mode, target, watermark, audit),
+  ];
+  if (target === "cloud") {
+    statements.push(
+      env.REEL_DB.prepare(
+        `UPDATE phase5_local_pilot_fences SET status='rolled_back',rollback_at=CURRENT_TIMESTAMP,
+         rollback_reason='phase6_authority_rollback',updated_at=CURRENT_TIMESTAMP
+         WHERE pilot_key LIKE ? AND status IN ('armed','local_claimed')`,
+      ).bind(generationPrefix),
+      env.REEL_DB.prepare(
+        `UPDATE phase5_preintake_arms SET status='rolled_back',rollback_at=CURRENT_TIMESTAMP,
+         rollback_reason='phase6_authority_rollback',updated_at=CURRENT_TIMESTAMP
+         WHERE arm_key LIKE ? AND status='captured'`,
+      ).bind(generationPrefix),
+    );
+  }
+  const results = await env.REEL_DB.batch(statements);
+  if ((results[0].meta.changes || 0) !== 1) {
+    return json({ ok: false, error: "Phase 6 authority update lost its guarded transition" }, { status: 409 });
+  }
+  if (target === "cloud") {
+    for (const row of rollbackJobs) await env.REEL_QUEUE.send({ jobId: row.job_id });
+  }
+  return json({ ok: true, authority: await phase6Authority(env), requeued_jobs: target === "cloud" ? rollbackJobs.length : 0 });
+}
+
+async function phase6NextCandidate(env: Env, owner: string): Promise<Record<string, unknown> | null> {
+  const authority = await phase6Authority(env);
+  if (!phase6AuthorityAllowsLocalClaims(authority)) return null;
+  return env.REEL_DB.prepare(
+    `SELECT f.pilot_key,f.job_id,f.source_message_id,f.status AS fence_status,f.expires_at,
+            f.local_lease_owner,f.local_lease_expires_at,j.source_url,j.created_at,j.status AS job_status,j.stage AS job_stage
+     FROM phase5_local_pilot_fences f JOIN jobs j ON j.id=f.job_id
+     WHERE f.pilot_key LIKE ? AND datetime(f.expires_at)>datetime('now')
+       AND j.pilot_run_id IS NULL AND datetime(j.created_at)>=datetime(?)
+       AND ((f.status IN ('local_claimed','local_processing') AND f.local_lease_owner=?) OR f.status='armed')
+       AND j.status IN ('queued','running')
+     ORDER BY CASE f.status WHEN 'local_processing' THEN 0 WHEN 'local_claimed' THEN 1 ELSE 2 END, datetime(j.created_at),f.job_id
+     LIMIT 1`,
+  ).bind(`phase6:${authority.generation}:%`, authority.cutover_watermark, owner).first<Record<string, unknown>>();
+}
+
+async function handlePhase6Next(request: Request, env: Env): Promise<Response> {
+  const owner = String(new URL(request.url).searchParams.get("lease_owner") || "phase6-local-worker-1").trim();
+  if (!owner || owner.length > 160) return json({ ok: false, error: "lease_owner is invalid" }, { status: 400 });
+  const authority = await phase6Authority(env);
+  if (!phase6AuthorityAllowsLocalClaims(authority)) return json({ ok: true, candidate: null, authority });
+  return json({ ok: true, candidate: await phase6NextCandidate(env, owner), authority });
+}
+
+async function handlePhase6Claim(request: Request, env: Env, release = false): Promise<Response> {
+  const input = await readJson<Record<string, unknown>>(request);
+  let validated: ReturnType<typeof validatePhase6ClaimRequest>;
+  try {
+    validated = validatePhase6ClaimRequest(input, release ? PHASE6_RELEASE_CONFIRMATION : PHASE6_CLAIM_CONFIRMATION);
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const authority = await phase6Authority(env);
+  if (!phase6AuthorityAllowsLocalClaims(authority) || authority.generation !== validated.expectedGeneration) {
+    return json({ ok: false, error: "Phase 6 local authority is not active for this generation", authority }, { status: 409 });
+  }
+  if (validated.pilotKey !== phase6PilotKey(authority.generation, validated.jobId)) {
+    return json({ ok: false, error: "Phase 6 pilot key does not match generation and job" }, { status: 409 });
+  }
+  if (release) {
+    const result = await env.REEL_DB.prepare(
+      `UPDATE phase5_local_pilot_fences SET status='armed',local_lease_owner=NULL,local_lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP
+       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='local_claimed' AND local_lease_owner=?
+         AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=phase5_local_pilot_fences.job_id AND j.status='queued' AND j.completed_at IS NULL AND j.html_key IS NULL)`,
+    ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
+    return json({ ok: true, released: (result.meta.changes || 0) === 1, pilot_key: validated.pilotKey, job_id: validated.jobId });
+  }
+  const requestedExpiry = new Date(Date.now() + validated.leaseMinutes * 60_000).toISOString();
+  const result = await env.REEL_DB.prepare(
+    `UPDATE phase5_local_pilot_fences SET status='local_claimed',local_lease_owner=?,
+       local_lease_expires_at=CASE WHEN datetime(expires_at)<datetime(?) THEN expires_at ELSE ? END,updated_at=CURRENT_TIMESTAMP
+     WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status IN ('armed','local_claimed')
+       AND datetime(expires_at)>datetime('now')
+       AND (local_lease_owner IS NULL OR local_lease_owner=?)
+       AND NOT EXISTS(
+         SELECT 1 FROM phase5_local_pilot_fences other
+         WHERE other.pilot_key<>phase5_local_pilot_fences.pilot_key AND other.status IN ('local_claimed','local_processing')
+       )
+       AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=phase5_local_pilot_fences.job_id AND j.status='queued' AND j.pilot_run_id IS NULL)`,
+  ).bind(validated.leaseOwner, requestedExpiry, requestedExpiry, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
+  const post = await env.REEL_DB.prepare(
+    `SELECT pilot_key,job_id,source_message_id,status,expires_at,local_lease_owner,local_lease_expires_at
+     FROM phase5_local_pilot_fences WHERE pilot_key=? AND job_id=?`,
+  ).bind(validated.pilotKey, validated.jobId).first<Record<string, unknown>>();
+  if ((result.meta.changes || 0) !== 1 && !(post?.status === "local_claimed" && post.local_lease_owner === validated.leaseOwner)) {
+    return json({ ok: false, error: "Phase 6 exact claim failed closed", fence: post }, { status: 409 });
+  }
+  await env.REEL_DB.prepare(
+    `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+     SELECT ?,'phase6_local_claimed','queued','🔒',?
+     WHERE NOT EXISTS(SELECT 1 FROM job_events WHERE job_id=? AND stage='phase6_local_claimed')`,
+  ).bind(validated.jobId, JSON.stringify({ pilot_key: validated.pilotKey, lease_owner: validated.leaseOwner, generation: authority.generation }), validated.jobId).run();
+  return json({ ok: true, claimed: true, idempotent: (result.meta.changes || 0) === 0, fence: post, authority });
+}
+
 async function handlePilotSummaryDm(request: Request, env: Env): Promise<Response> {
   const input = await readJson<{ pilot_key?: string; confirm_send?: string }>(request);
   const pilotKey = String(input.pilot_key || "").trim();
@@ -4005,7 +4277,7 @@ async function createJob(
     sourceMediaJson?: string | null;
     queueDelayMode?: string;
   },
-): Promise<{ id: string; canonicalUrl: string; shortcode: string; duplicate: boolean; phase5_preintake_captured?: boolean; phase5_arm_key?: string }> {
+): Promise<{ id: string; canonicalUrl: string; shortcode: string; duplicate: boolean; phase5_preintake_captured?: boolean; phase5_arm_key?: string; phase6_authority_captured?: boolean; phase6_pilot_key?: string }> {
   const canonical = canonicalizeInstagramUrl(input.sourceUrl);
   if (!canonical) throw new Error("A supported Instagram Reel or post URL is required");
   const dedupeKey = instagramDedupeKey(canonical.url);
@@ -4060,6 +4332,16 @@ async function createJob(
     canonicalUrl: canonical.url,
     dedupeKey,
   });
+  const insertedJob = await env.REEL_DB.prepare("SELECT created_at FROM jobs WHERE id=?")
+    .bind(id).first<{ created_at: string }>();
+  const phase6Capture = phase5Capture.captured ? { captured: false } : await capturePhase6AuthorityJob(env, {
+    jobId: id,
+    senderId: input.senderId || null,
+    sourceMessageId: input.sourceMessageId || null,
+    canonicalUrl: canonical.url,
+    dedupeKey,
+    createdAt: insertedJob?.created_at || new Date().toISOString(),
+  });
   if (shouldReactToStage("queued")) {
     await reactToSourceMessage(env, { id, source_message_id: input.sourceMessageId || null, sender_id: input.senderId || null }, "queued");
   }
@@ -4077,6 +4359,8 @@ async function createJob(
     duplicate: false,
     phase5_preintake_captured: phase5Capture.captured || undefined,
     phase5_arm_key: phase5Capture.armKey,
+    phase6_authority_captured: phase6Capture.captured || undefined,
+    phase6_pilot_key: phase6Capture.pilotKey,
   };
 }
 
@@ -5190,10 +5474,11 @@ async function handleReelLibraryStatus(request: Request, env: Env): Promise<Resp
     }
   }
   const backlogProcessing = await backlogProcessingActive(env);
+  const authority = await phase6Authority(env);
   return json({
     ok: true,
     generated_at: new Date().toISOString(),
-    service: { name: "Instagram Reel Brain", ingest_mode: env.INGEST_MODE || "disabled", backlog_processing: backlogProcessing, model: env.CODEX_RESEARCH_MODEL || "gpt-5.6-luna", reasoning: env.CODEX_RESEARCH_REASONING_EFFORT || "medium" },
+    service: { name: "Instagram Reel Brain", ingest_mode: env.INGEST_MODE || "disabled", backlog_processing: backlogProcessing, processing_authority: authority.mode, authority_generation: authority.generation, model: env.CODEX_RESEARCH_MODEL || "gpt-5.6-luna", reasoning: env.CODEX_RESEARCH_REASONING_EFFORT || "medium" },
     checks: {
       worker: { ok: true, detail: "Worker request completed" },
       database: { ok: true, detail: "D1 queries completed" },
@@ -5364,6 +5649,11 @@ async function runCodexAuthProbe(env: Env, authJson: string): Promise<{ ok: bool
 async function processJob(env: Env, jobId: string): Promise<void> {
   const job = await env.REEL_DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(jobId).first<JobRow>();
   if (!job || job.status === "complete") return;
+  const authority = await phase6Authority(env);
+  if (!phase6AuthorityAllowsCloudClaims(authority)) {
+    await auditPhase6CloudAuthoritySkip(env, job, authority);
+    return;
+  }
   const phase5Fence = await activePhase5FenceForJob(env, job.id);
   if (phase5Fence) {
     await auditPhase5CloudFenceSkip(env, job, phase5Fence);
@@ -5441,6 +5731,18 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   if (url.pathname.startsWith("/api/phase4/mirror/")) return handlePhase4Mirror(request, env);
   if (url.pathname === "/api/test/jobs" && request.method === "POST") return handleTestCreate(request, env);
   if (url.pathname === "/api/intake" && request.method === "POST") return handleNormalizedIntake(request, env);
+  if (url.pathname.startsWith("/api/admin/phase6/")) {
+    const phase6Unauthorized = requirePhase5Control(request, env);
+    if (phase6Unauthorized) return phase6Unauthorized;
+    if (url.pathname === "/api/admin/phase6/authority" && request.method === "GET") return handlePhase6AuthorityState(env);
+    if (url.pathname === "/api/admin/phase6/authority/transition" && request.method === "POST") return handlePhase6AuthorityChange(request, env, "transition");
+    if (url.pathname === "/api/admin/phase6/authority/local" && request.method === "POST") return handlePhase6AuthorityChange(request, env, "self_hosted");
+    if (url.pathname === "/api/admin/phase6/authority/cloud" && request.method === "POST") return handlePhase6AuthorityChange(request, env, "cloud");
+    if (url.pathname === "/api/admin/phase6/next" && request.method === "GET") return handlePhase6Next(request, env);
+    if (url.pathname === "/api/admin/phase6/claim" && request.method === "POST") return handlePhase6Claim(request, env);
+    if (url.pathname === "/api/admin/phase6/release" && request.method === "POST") return handlePhase6Claim(request, env, true);
+    return json({ error: "Not found" }, { status: 404 });
+  }
   if (url.pathname.startsWith("/api/admin/phase5/local-pilot/")) {
     const phase5Unauthorized = requirePhase5Control(request, env);
     if (phase5Unauthorized) return phase5Unauthorized;

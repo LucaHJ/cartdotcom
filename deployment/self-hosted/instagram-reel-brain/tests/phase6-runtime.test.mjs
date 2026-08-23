@@ -1,0 +1,37 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const control = readFileSync(new URL("../scripts/phase6_dispatch_control.py", import.meta.url), "utf8");
+const dispatcher = readFileSync(new URL("../scripts/phase6_dispatcher.py", import.meta.url), "utf8");
+const dockerfile = readFileSync(new URL("../phase5-runner/Dockerfile", import.meta.url), "utf8");
+const migration = readFileSync(new URL("../migrations/0006_phase6_processing_authority.sql", import.meta.url), "utf8");
+
+test("Phase 6 control keeps credentials inside the control container", () => {
+  assert.match(control, /REEL_PHASE5_ADMIN_TOKEN_FILE/);
+  assert.match(control, /Phase 6 Worker control token file must be mode 0600/);
+  assert.match(control, /phase6-local-worker-1/);
+  assert.match(control, /local_job_ready/);
+  assert.match(control, /insert_local_lease/);
+  assert.match(control, /release_candidate/);
+  assert.match(control, /claim-next/);
+  assert.doesNotMatch(control, /print\(.*token|PGPASSWORD|docker\.sock|privileged/);
+  assert.match(dockerfile, /phase6_dispatch_control\.py/);
+});
+
+test("Phase 6 host dispatcher is serial, credential-free and reuses exact orchestration", () => {
+  assert.match(dispatcher, /fcntl\.LOCK_EX \| fcntl\.LOCK_NB/);
+  assert.match(dispatcher, /phase5_one_job_orchestrator\.py/);
+  assert.match(dispatcher, /claim-next/);
+  assert.match(dispatcher, /--once/);
+  assert.match(dispatcher, /--lease-owner/);
+  assert.doesNotMatch(dispatcher, /read_text|Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
+});
+
+test("Phase 6 local authority migration preserves backlog-off state", () => {
+  assert.match(migration, /processing_authority_events/);
+  assert.match(migration, /cutover_watermark/);
+  assert.match(migration, /generation/);
+  assert.match(migration, /backlog remains disabled/);
+});
+
