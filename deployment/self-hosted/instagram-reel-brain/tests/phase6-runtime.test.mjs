@@ -47,6 +47,7 @@ test("Phase 6 authority wrapper provides one-command transition and rollback wit
 
 test("Phase 6 dispatcher watchdog is reboot-safe and authority-aware", () => {
   assert.match(watchdog, /processing_authority/);
+  assert.match(watchdog, /phase6-generation/);
   assert.match(watchdog, /authority.*!= "self_hosted"/s);
   assert.match(watchdog, /\/proc\/\$pid\/cmdline/);
   assert.match(watchdog, /flock -n/);

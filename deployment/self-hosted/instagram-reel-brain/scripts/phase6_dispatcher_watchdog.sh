@@ -6,7 +6,11 @@ RUN_ROOT="$ROOT/runs"
 PID_FILE="$RUN_ROOT/phase6-dispatcher.pid"
 LOG_FILE="$RUN_ROOT/phase6-dispatcher.log"
 LOCK_FILE="$RUN_ROOT/phase6-dispatcher-watchdog.lock"
-EXPECTED="python3 $ROOT/scripts/phase6_dispatcher.py --generation 1"
+GENERATION_FILE="$RUN_ROOT/phase6-generation"
+
+generation="$(cat "$GENERATION_FILE" 2>/dev/null || true)"
+[[ "$generation" =~ ^[0-9]+$ ]] || exit 0
+EXPECTED="python3 $ROOT/scripts/phase6_dispatcher.py --generation $generation"
 
 mkdir -p "$RUN_ROOT"
 chmod 0700 "$RUN_ROOT"
@@ -17,14 +21,22 @@ authority="$(curl -fsS --max-time 20 https://cartdotcom-instagram-reel-brain.luc
   | python3 -c 'import json,sys; print(json.load(sys.stdin).get("processing_authority", "unknown"))')"
 
 valid_pid=""
+stale_pid=""
 if [[ -f "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
     command_line="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
     if [[ "$command_line" == *"$EXPECTED"* ]]; then
       valid_pid="$pid"
+    elif [[ "$command_line" == *"$ROOT/scripts/phase6_dispatcher.py --generation"* ]]; then
+      stale_pid="$pid"
     fi
   fi
+fi
+
+if [[ -n "$stale_pid" ]]; then
+  kill "$stale_pid"
+  rm -f "$PID_FILE"
 fi
 
 if [[ "$authority" != "self_hosted" ]]; then
@@ -41,10 +53,9 @@ fi
 
 rm -f "$PID_FILE"
 cd "$ROOT"
-nohup python3 "$ROOT/scripts/phase6_dispatcher.py" --generation 1 >>"$LOG_FILE" 2>&1 < /dev/null &
+nohup python3 "$ROOT/scripts/phase6_dispatcher.py" --generation "$generation" >>"$LOG_FILE" 2>&1 < /dev/null &
 pid=$!
 printf '%s\n' "$pid" > "$PID_FILE"
 chmod 0600 "$PID_FILE" "$LOG_FILE"
 sleep 1
 kill -0 "$pid"
-
