@@ -3964,7 +3964,15 @@ async function handlePhase6AuthorityState(env: Env): Promise<Response> {
        SUM(CASE WHEN status='local_processing' THEN 1 ELSE 0 END) AS processing
      FROM phase5_local_pilot_fences WHERE pilot_key LIKE ?`,
   ).bind(`phase6:${authority.generation}:%`).first<{ armed: number; claimed: number; processing: number }>();
-  return json({ ok: true, authority, active: active || { armed: 0, claimed: 0, processing: 0 } });
+  return json({
+    ok: true,
+    authority,
+    active: {
+      armed: Number(active?.armed || 0),
+      claimed: Number(active?.claimed || 0),
+      processing: Number(active?.processing || 0),
+    },
+  });
 }
 
 async function handlePhase6AuthorityChange(request: Request, env: Env, target: "transition" | "self_hosted" | "cloud"): Promise<Response> {
@@ -5840,11 +5848,14 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
+      const authority = await phase6Authority(env);
       return json({
         ok: true,
         service: "cartdotcom-instagram-reel-brain",
         ingest_mode: env.INGEST_MODE || "disabled",
         backlog_processing: await backlogProcessingActive(env),
+        processing_authority: authority.mode,
+        authority_generation: authority.generation,
         model: env.CODEX_RESEARCH_MODEL || "gpt-5.6-luna",
       });
     }
