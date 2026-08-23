@@ -4,6 +4,7 @@ import test from "node:test";
 
 const control = readFileSync(new URL("../scripts/phase6_dispatch_control.py", import.meta.url), "utf8");
 const dispatcher = readFileSync(new URL("../scripts/phase6_dispatcher.py", import.meta.url), "utf8");
+const authority = readFileSync(new URL("../scripts/phase6_authority.py", import.meta.url), "utf8");
 const dockerfile = readFileSync(new URL("../phase5-runner/Dockerfile", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../migrations/0006_phase6_processing_authority.sql", import.meta.url), "utf8");
 
@@ -35,3 +36,10 @@ test("Phase 6 local authority migration preserves backlog-off state", () => {
   assert.match(migration, /backlog remains disabled/);
 });
 
+test("Phase 6 authority wrapper provides one-command transition and rollback without reading secrets", () => {
+  assert.match(authority, /rollback-cloud/);
+  assert.match(authority, /authority-transition/);
+  assert.match(authority, /authority-cloud/);
+  assert.match(authority, /--volume/);
+  assert.doesNotMatch(authority, /read_text|Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
+});
