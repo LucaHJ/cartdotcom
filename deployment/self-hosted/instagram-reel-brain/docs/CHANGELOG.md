@@ -1,5 +1,20 @@
 # Instagram Reel Self-Hosted Changelog
 
+## 2026-08-23
+
+- Installed and verified the dedicated narrow `PHASE5_CONTROL_TOKEN` in
+  commits `956d2a3` and `78110c4`; it authorizes only Phase 5 local-pilot
+  routes and is mounted only into `phase5-control`.
+- Added an exact carousel pre-intake arm and schema migration in commit
+  `20cc589`, preserving one-active-arm enforcement across Reel and carousel
+  cases.
+- Corrected Cloudflare Error 1010 for the Ubuntu control client in commit
+  `592fb49` by adding an explicit service User-Agent.
+- Completed exact carousel pilot job
+  `f74f0619-c6a6-46c2-8b97-6d0fc0b62a13`: four slides, four frames, ten
+  resources, 15 mirrored artifacts, terminal fences, sampled R2 hashes all
+  matching, and zero mirror divergences/errors.
+
 ## 2026-08-22
 
 - Corrected the remaining Phase 5C operational blocker in commit

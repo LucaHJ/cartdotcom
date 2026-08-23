@@ -138,6 +138,14 @@ Do not start compute. Reconcile through `control-start`; it may renew both exact
 execution leases within the overall fence. If the overall fence is too short,
 perform an exact pre-publication abort.
 
+### Worker control returns Cloudflare Error 1010
+
+The control client must send the explicit service User-Agent in
+`phase5_one_job_runner.py`. Do not weaken Cloudflare browser-signature rules.
+Verify the deployed image contains commit `592fb49`, rebuild both stopped
+Phase 5 images, and rerun the same exact command; signed checkpoints make the
+restart idempotent.
+
 ### Crash after processor completion
 
 Rerun the same exact host command. `control-start` checks Worker state. If the

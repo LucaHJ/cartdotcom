@@ -3,13 +3,15 @@
 Status: Phase 4 shadow live intake observation passed independent review.
 Bounded Phase 5 preparation is implemented and deployed. The first live
 controlled-compute pilot was pre-intake captured, locally claimed, renewed,
-and completed for one exact Reel job and accepted as Phase 5 case 1 of 3.
+and completed for one exact Reel job. A second exact live carousel job was
+captured and completed through the split Ubuntu runtime. Phase 5 cases 1 and 2
+of 3 are accepted; the retrieval case remains.
 Phase 5B runner hardening is accepted. Phase 5C has built the inert Ubuntu
 runtime, corrected native-control and control/compute secret isolation, added
 the staged host orchestrator, authenticated control checkpoints, and installed
 a dedicated narrow Worker control token as a control-only mode-0600 server
-file. The runtime is ready for the next exact live carousel pilot. It remains
-stopped until a brand-new carousel is explicitly submitted and fenced.
+file. The runtime completed the exact carousel pilot and is stopped with zero
+active jobs, fences, or arms. The next gate is one new retrieval command.
 
 Cloudflare remains the only production authority. The local scaffold does not
 receive Meta callbacks, claim jobs, call Codex, send Instagram output, publish
@@ -258,17 +260,17 @@ secret canary through shell and Codex boundary, no-network synthetic media/fake
 Codex synthesis, one redacted Codex CLI smoke using the existing server auth
 mount, and the staged synthetic matrix for complete, interrupted, duplicate,
 short-authority, abort, and tampered-checkpoint cases. The processor sanitises
-Codex subprocess environment inheritance. No existing server Phase 5/admin
-Worker token file was created or mounted, so live use remains blocked until an
-approved token-file mount exists. Post-build Cloudflare `/health` remained ok
+Codex subprocess environment inheritance. At that no-live gate, no server
+Phase 5 Worker token file was present; the later narrow-auth gate installed and
+verified it before live use. Post-build Cloudflare `/health` remained ok
 with `backlog_processing=false`; D1 had zero active jobs, active Phase 5 fences,
 and armed captures; Reel/News/Caddy/PostgreSQL were healthy; and no
 `reel_phase5c_staged_%` schemas or Phase 5 control/compute containers remained
 active. See `PHASE_5C_INERT_RUNTIME_REPORT_2026-08-22.md` and
 `PHASE_5C_STAGED_ORCHESTRATION_CORRECTION_REPORT_2026-08-22.md`.
 
-No carousel, retrieval case, second pilot, Phase 6 work, or authority cutover is
-approved before Phase 5C receives independent review.
+That historical Phase 5C review gate is now resolved by the authenticated
+checkpoint, narrow-auth, and exact carousel evidence recorded below.
 ## 2026-08-23 Phase 5C checkpoint integrity correction
 
 - Commit `fa37942` replaced the mutually writable staged checkpoint with a
@@ -287,3 +289,21 @@ approved before Phase 5C receives independent review.
 - Phase 5 services remain stopped. Cloudflare remains sole production
   authority. The next gate is a control-only Worker token file followed by a
   separately fenced live carousel pilot.
+
+## 2026-08-23 Phase 5 carousel pilot
+
+- Commit `20cc589` added exact carousel pre-intake arming and D1 migration
+  `0023_phase5_carousel_arm.sql`; Worker version
+  `f74ed346-05b8-44ce-85ed-bd2f655f520e` deployed without a container rollout.
+- Commit `592fb49` corrected the control client User-Agent after Cloudflare
+  rejected Python urllib before any processing began.
+- Exact job `f74f0619-c6a6-46c2-8b97-6d0fc0b62a13` completed locally for
+  shortcode `DcOWkMakZ2k` with four carousel slides, four analysis frames,
+  ten resources, and terminal cloud/local fences.
+- All four slide objects, the carousel manifest, and synthesis object matched
+  their recorded R2 SHA-256 hashes.
+- The local mirror converged to complete with 15 artifacts, 875 verified
+  object receipts, and zero divergences/errors.
+- Worker health remained live with backlog off; Reel, News, Caddy, and
+  PostgreSQL stayed healthy; no Phase 5 container remains active.
+- See `PHASE_5_CAROUSEL_PILOT_REPORT_2026-08-23.md`.
