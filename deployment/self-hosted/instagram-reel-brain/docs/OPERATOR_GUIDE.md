@@ -6,8 +6,10 @@ credentials, queues, or Cloudflare authority.
 
 ## Current Authority
 
-- Cloudflare Worker/D1/R2/KV remain the production intake and general
-  processing authority.
+- Cloudflare Worker/D1/R2/KV remain the production intake, edge spool, mirror,
+  and recovery authority.
+- Ubuntu generation 2 is the sole new-job processing authority during the
+  Phase 6 soak. Cloudflare Container claims are disabled by the authority row.
 - Local PostgreSQL and object storage are mirrored and available for bounded
   migration work.
 - Phase 5 control and compute services are profile-gated one-shot containers.
@@ -34,6 +36,8 @@ Important files:
   credential installation and scope proof.
 - `docs/PHASE_5_RETRIEVAL_AND_COMPLETION_REPORT_2026-08-23.md`: final Phase 5
   retrieval evidence and three-case gate decision.
+- `docs/PHASE_6_CUTOVER_AND_SOAK_START_REPORT_2026-08-23.md`: current
+  authority, rollback proof, monitoring, and Phase 6 gate.
 
 Services:
 
@@ -80,6 +84,8 @@ Expected while migration is gated:
 - `ok: true`
 - `ingest_mode: live`
 - `backlog_processing: false`
+- `processing_authority: self_hosted`
+- `authority_generation: 2`
 - no running `phase5-control` or `phase5-compute` container
 
 ## Exact One-Shot Flow
@@ -113,6 +119,33 @@ The token file is control-plane material. Never mount it into
 `phase5-compute`, copy it into an image, print it, or use it for ordinary admin
 routes. Its expected metadata is owner `lucaj`, mode `0600`; verify metadata
 with `stat` without reading the value.
+
+## Phase 6 Operations
+
+Inspect authority without reading credentials:
+
+```bash
+python3 scripts/phase6_authority.py state --generation 2
+```
+
+One-command rollback (fails closed if local processing is active):
+
+```bash
+python3 scripts/phase6_authority.py rollback-cloud --generation 2
+```
+
+Dispatcher and soak evidence:
+
+```bash
+cat runs/phase6-generation
+cat runs/phase6-dispatcher.pid
+tail -n 50 runs/phase6-dispatcher.log
+cat runs/phase6-soak/latest.json
+```
+
+Do not manually claim D1 rows or run the one-shot orchestrator for an arbitrary
+job. The Phase 6 dispatcher selects only generation-bound post-watermark fences
+and the PostgreSQL one-active-lease index enforces serial execution.
 
 ## Troubleshooting
 

@@ -2,6 +2,11 @@
 
 ## 2026-08-23
 
+- Cut processing authority to the Ubuntu serial runner on generation 2 at
+  watermark `2026-08-23T01:17:09.133Z`, retained Cloudflare intake/recovery,
+  kept backlog disabled and concurrency one, exercised production rollback and
+  re-cutover, and started the required seven-day monitored soak.
+
 - Completed the third Phase 5 case: a new retrieval command selected exact
   carousel job `f74f0619-c6a6-46c2-8b97-6d0fc0b62a13` and sent one successful
   `reel_link` response. Phase 5 is complete; Phase 6 processing cutover and the

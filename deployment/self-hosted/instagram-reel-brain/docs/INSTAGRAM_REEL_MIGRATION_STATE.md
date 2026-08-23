@@ -9,13 +9,14 @@ Phase 5B runner hardening is accepted. Phase 5C has built the inert Ubuntu
 runtime, corrected native-control and control/compute secret isolation, added
 the staged host orchestrator, authenticated control checkpoints, and installed
 a dedicated narrow Worker control token as a control-only mode-0600 server
-file. The runtime completed the exact carousel pilot and is stopped with zero
-active jobs, fences, or arms. The next stage is the Phase 6 processing cutover
-and its required seven-day soak.
+file. Phase 6 processing authority is now local on generation 2 with a durable
+watermark of `2026-08-23T01:17:09.133Z`. The serial dispatcher is supervised,
+historical backlog remains disabled, and the required seven-day soak is active.
 
-Cloudflare remains the only general production authority at this recorded
-gate. The Phase 6 cutover has not yet transferred general processing authority
-to the local serial runner. Historical backlog remains disabled.
+Cloudflare remains authoritative for intake, edge spool, D1 recovery ledger,
+R2/KV, callbacks, and recovery deployment. The Ubuntu serial runner is the sole
+new-job processing authority. Cloudflare Container claims are disabled by the
+durable authority record. Historical backlog remains disabled.
 
 Phase 3 is recorded in `PHASE_3_GATE_REPORT_2026-08-21.md`. Phase 4 start is
 recorded in `PHASE_4_START_REPORT_2026-08-21.md`; the current timestamp
@@ -29,6 +30,11 @@ one-job local run is recorded in
 recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 ## Enabled
+
+- Phase 6 processing authority generation 2 in `self_hosted` mode.
+- Cloudflare intake and edge spool with post-watermark automatic local fences.
+- Ubuntu serial dispatcher supervised every minute and at reboot.
+- Seven-day soak sampling every five minutes.
 
 - Six container-internal health endpoints.
 - Isolated Docker networks `cartdotcom-reel-runtime` and
@@ -117,42 +123,20 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 ## Disabled
 
-- Intake.
-- Dispatch.
-- Worker execution.
-- Codex.
-- Outbound delivery.
-- Mutations.
-- Backlog.
-- Publisher.
-- Archiver.
+- Cloudflare Container processing claims while authority is `self_hosted`.
+- More than one local synthesis at a time.
+- Historical backlog enumeration, replay, selection, and processing.
+- Local direct Meta intake; Cloudflare remains the intake authority.
+- Phase 7 primary-data authority cutover before the Phase 6 soak passes.
+- Phase 8 retirement or deletion without explicit user approval.
+- Backlog processing.
 - Auth rotation.
-- Local processing authority.
-- Unrestricted local job claims. The only local claim recorded is exact job
-  `b14b79a0-9264-4613-9421-9920cba053c3`.
-- General local Codex execution outside the one completed exact pilot.
-- General local publisher outside the one completed exact pilot.
-- General Instagram outbound actions outside the one completed exact pilot's
-  normal source-message status reactions.
-- Historical backlog enumeration, replay, selection, or processing.
-- Production D1/R2/KV mutation.
-- Phase 5 authority cutover.
 - Temporary historical replay credential `PHASE4_REPLAY_TOKEN`; the corrected
   replay credential was created only for validation, then revoked and removed
   from the Ubuntu server after validation completed.
-- Unrestricted Phase 5 local claims; only the reviewed exact pre-intake pilot
-  job has been processed locally.
-- Additional live Phase 5 execution without a brand-new explicitly submitted
-  exact carousel or retrieval case.
-- General Ubuntu local execution. Dedicated inert control and compute runtimes
-  exist, but they have no selector, scheduler, claim loop, backlog access, or
-  general authority. The staged host wrapper runs only an exact, confirmed,
-  fenced one-job flow. The required control token is installed, but no live
-  Phase 5 container is running and no job is currently armed.
 - Reuse of missed manual-race job `35004cbd-a428-419f-93bf-96c3bcb54598`;
   it completed under cloud authority and is permanently excluded as the first
   local pilot.
-- Phase 6 or general production authority cutover.
 
 ## Limits
 
@@ -221,12 +205,10 @@ within the overall fence, and at least as long as the newly computed effective
 execution expiry; otherwise the route must first return and complete
 `renew_processing_lease`, and failed/insufficient renewal stops before processor
 loading. `/health` is `ok=true`, `ingest_mode=live`, and
-`backlog_processing=false`. Post-deploy production state has zero queued/running
+`backlog_processing=false`. Post-deploy production state had zero queued/running
 jobs, zero active Phase 5 fences, zero armed Phase 5 arms, and zero backlog
-queued/running jobs. The inert Ubuntu runner remains disabled. Ubuntu full live
-execution remains blocked until the dedicated Reel media/Codex runtime receives
-independent review and an approved Worker token-file mount exists; see
-`PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
+queued/running jobs. These were Phase 5B acceptance conditions; subsequent
+Phase 5C runtime and credential work is recorded below.
 
 Phase 5B was accepted by independent supervisor review after commits `08c94a3`
 and `35df777`, Worker version `bb85f370-31bd-4c66-ba13-ce9ff5c12b75`, 96/96
@@ -315,7 +297,7 @@ checkpoint, narrow-auth, and exact carousel evidence recorded below.
   `f74f0619-c6a6-46c2-8b97-6d0fc0b62a13` and its source URL with ten resources.
 - Outbound event `8c6ee916-bd2b-4c3a-937c-cb2aaf842caa` sent one `reel_link`
   response with HTTP 200 and no error to the exact request message.
-- All three Phase 5 cases and rollback/recovery prerequisites now pass. Phase 5
-  is complete; Phase 6 processing cutover and its required seven-day soak are
-  next.
+- All three Phase 5 cases and rollback/recovery prerequisites passed. Phase 5
+  is complete. Phase 6 processing cutover subsequently completed and its
+  required seven-day soak is now active.
 - See `PHASE_5_RETRIEVAL_AND_COMPLETION_REPORT_2026-08-23.md`.
