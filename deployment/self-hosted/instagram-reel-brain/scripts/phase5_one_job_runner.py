@@ -187,6 +187,7 @@ def post_admin_json(
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": "curl/8.5.0 cartdotcom-phase5-control/1.0",
         },
     )
     try:

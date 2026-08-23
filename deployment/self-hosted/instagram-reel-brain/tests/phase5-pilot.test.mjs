@@ -104,6 +104,7 @@ test("Phase 5 one-shot runner uses exact Worker control surface, checkpoints and
   assert.match(runner, /\/api\/admin\/phase5\/local-pilot\/finalize/);
   assert.match(runner, /\/api\/admin\/phase5\/local-pilot\/abort/);
   assert.match(runner, /Authorization/);
+  assert.match(runner, /curl\/8\.5\.0 cartdotcom-phase5-control\/1\.0/);
   assert.match(runner, /callback_token_hash/);
   assert.match(runner, /requires_callback_token/);
   assert.match(runner, /retryable_start/);
