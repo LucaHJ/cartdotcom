@@ -82,6 +82,7 @@ def pg_args(args: argparse.Namespace) -> argparse.Namespace:
         pg_database=os.environ.get("REEL_PHASE5_PGDATABASE", "cartdotcom"),
         pg_user=os.environ.get("REEL_PHASE5_PGUSER", "cartdotcom"),
         pg_password_file=os.environ.get("REEL_PHASE5_PG_PASSWORD_FILE", "/run/control-secrets/postgres_password"),
+        pg_connect_timeout=int(os.environ.get("REEL_PHASE5_PG_CONNECT_TIMEOUT", "10")),
         ssh_target="",
         schema=args.schema,
     )
@@ -238,4 +239,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
