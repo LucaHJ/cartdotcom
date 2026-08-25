@@ -273,6 +273,7 @@ export interface Env {
   REEL_LIBRARY_SHARED_TOKEN?: string;
   PHASE7_ORIGIN_URL?: string;
   PHASE7_ORIGIN_TOKEN?: string;
+  REEL_ORIGIN?: Fetcher;
 }
 
 const ARTIFACT_KINDS = new Set([
@@ -1388,7 +1389,7 @@ async function putPhase7Origin(
   contentSha256: string,
 ): Promise<void> {
   if (!env.PHASE7_ORIGIN_URL || !env.PHASE7_ORIGIN_TOKEN) return;
-  const response = await fetch(phase7OriginPath(env.PHASE7_ORIGIN_URL, kind, path), {
+  const request = new Request(phase7OriginPath(env.PHASE7_ORIGIN_URL, kind, path), {
     method: "PUT",
     headers: {
       authorization: `Bearer ${env.PHASE7_ORIGIN_TOKEN}`,
@@ -1398,6 +1399,7 @@ async function putPhase7Origin(
     },
     body,
   });
+  const response = env.REEL_ORIGIN ? await env.REEL_ORIGIN.fetch(request) : await fetch(request);
   if (!response.ok) throw new Error(`Phase 7 local ${kind} write failed (${response.status})`);
   const receipt = await response.json<{ ok?: boolean; bytes?: number; sha256?: string }>();
   if (receipt.ok !== true || Number(receipt.bytes) !== byteSize || receipt.sha256 !== contentSha256) {
@@ -1423,7 +1425,7 @@ async function putPhase7MirroredObject(
 async function pushPhase7Wake(request: Request, env: Env): Promise<void> {
   if (!env.PHASE7_ORIGIN_URL || !env.PHASE7_ORIGIN_TOKEN) return;
   const url = new URL(request.url);
-  const response = await fetch(`${env.PHASE7_ORIGIN_URL.replace(/\/$/, "")}/v1/wake`, {
+  const wakeRequest = new Request(`${env.PHASE7_ORIGIN_URL.replace(/\/$/, "")}/v1/wake`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${env.PHASE7_ORIGIN_TOKEN}`,
@@ -1431,6 +1433,7 @@ async function pushPhase7Wake(request: Request, env: Env): Promise<void> {
     },
     body: JSON.stringify({ wake_id: crypto.randomUUID(), path: url.pathname, accepted_at: new Date().toISOString() }),
   });
+  const response = env.REEL_ORIGIN ? await env.REEL_ORIGIN.fetch(wakeRequest) : await fetch(wakeRequest);
   if (!response.ok) throw new Error(`Phase 7 wake failed (${response.status})`);
 }
 
@@ -6179,6 +6182,20 @@ async function processJob(env: Env, jobId: string): Promise<void> {
 async function handleApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api/phase4/mirror/")) return handlePhase4Mirror(request, env);
+  if (url.pathname.startsWith("/api/phase7/origin/")) {
+    if (request.method !== "GET") return json({ error: "Method not allowed" }, { status: 405 });
+    if (!env.PHASE7_ORIGIN_TOKEN || !timingSafeEqual(bearer(request), env.PHASE7_ORIGIN_TOKEN)) {
+      return json({ error: "Unauthorised" }, { status: 401 });
+    }
+    if (!env.REEL_ORIGIN) return json({ error: "Private Reel origin unavailable" }, { status: 503 });
+    const suffix = url.pathname.slice("/api/phase7/origin".length);
+    const upstream = new Request(`http://caddy:8080/api/reel-origin${suffix}${url.search}`, request);
+    try {
+      return await env.REEL_ORIGIN.fetch(upstream);
+    } catch {
+      return json({ error: "Private Reel origin unavailable" }, { status: 503 });
+    }
+  }
   if (url.pathname.startsWith("/api/phase7/library/")) {
     if (request.method !== "GET") return json({ error: "Method not allowed" }, { status: 405 });
     if (!env.PHASE7_ORIGIN_TOKEN || !timingSafeEqual(bearer(request), env.PHASE7_ORIGIN_TOKEN)) {

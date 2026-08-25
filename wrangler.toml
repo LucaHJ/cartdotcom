@@ -3,7 +3,7 @@ pages_build_output_dir = "."
 compatibility_date = "2025-03-23"
 
 [vars]
-PHASE7_ORIGIN_URL = "https://cartdotcom.com/api/reel-origin"
+PHASE7_ORIGIN_URL = "https://cartdotcom-instagram-reel-brain.lucajeannin.workers.dev/api/phase7/origin"
 
 [[kv_namespaces]]
 binding = "MOBILE_AUTH_KV"
