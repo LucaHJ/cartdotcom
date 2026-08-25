@@ -13,6 +13,7 @@ import {
 } from "../src/phase6-authority.ts";
 
 const migration = readFileSync(new URL("../migrations/0024_phase6_processing_authority.sql", import.meta.url), "utf8");
+const workerSource = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 
 const cloud = { mode: "cloud", generation: 0, dispatch_enabled: 0, codex_enabled: 0, outbound_enabled: 0, backlog_enabled: 0, cutover_watermark: null };
 const local = { mode: "self_hosted", generation: 1, dispatch_enabled: 1, codex_enabled: 1, outbound_enabled: 1, backlog_enabled: 0, cutover_watermark: "2026-08-23T01:00:00Z" };
@@ -49,3 +50,10 @@ test("Phase 6 schema forbids backlog and simultaneous authority", () => {
   assert.match(migration, /processing_authority_events/);
 });
 
+test("Phase 6 prefetch endpoint is authenticated, read-only and excludes active or non-Reel work", () => {
+  assert.match(workerSource, /\/api\/admin\/phase6\/prefetch-next/);
+  assert.match(workerSource, /request\.method === "GET"\) return handlePhase6PrefetchNext/);
+  assert.match(workerSource, /f\.status='armed'/);
+  assert.match(workerSource, /j\.status='queued'/);
+  assert.match(workerSource, /j\.source_url LIKE '%\/reel\/%'/);
+});

@@ -10,6 +10,7 @@ import os
 import stat
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,19 +42,68 @@ def control(args: argparse.Namespace, command: str) -> dict[str, Any]:
     return parse_json(result.stdout)
 
 
-def orchestrate(args: argparse.Namespace, candidate: dict[str, Any], lock_fd: int) -> dict[str, Any]:
-    cmd = [
+def safe_name(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value)[:180]
+
+
+def prefetch_container_path(candidate: dict[str, Any]) -> str:
+    return f"/runs/compute/phase6-prefetch/{safe_name(str(candidate['job_id']))}"
+
+
+def orchestrator_command(args: argparse.Namespace, candidate: dict[str, Any]) -> list[str]:
+    return [
         "python3", "scripts/phase5_one_job_orchestrator.py", "--project-dir", args.project_dir,
         "--pilot-key", str(candidate["pilot_key"]), "--job-id", str(candidate["job_id"]),
         "--source-message-id", str(candidate["source_message_id"]), "--lease-owner", args.lease_owner,
         "--schema", args.schema, "--admin-token-host-file", args.admin_token_host_file,
         "--timeout-seconds", str(args.job_timeout), "--container-timeout", str(args.job_timeout),
+        "--prefetch-container-path", prefetch_container_path(candidate),
         "--abort-on-compute-failure",
     ]
+
+
+def eligible_prefetch(response: dict[str, Any], current_job_id: str) -> dict[str, Any] | None:
+    active = response.get("active") if isinstance(response.get("active"), dict) else {}
+    candidate = response.get("candidate") if isinstance(response.get("candidate"), dict) else None
+    if (
+        response.get("ok") is not True
+        or active.get("job_id") != current_job_id
+        or active.get("job_status") != "running"
+        or active.get("job_stage") != "synthesizing"
+        or not candidate
+        or candidate.get("job_id") == current_job_id
+        or candidate.get("job_status") != "queued"
+        or candidate.get("job_stage") != "queued"
+        or not str(candidate.get("source_url") or "").startswith("https://www.instagram.com/reel/")
+    ):
+        return None
+    return candidate
+
+
+def prefetch(args: argparse.Namespace, candidate: dict[str, Any]) -> dict[str, Any]:
+    command = [
+        "docker", "compose", "-f", args.compose_file, "--profile", "phase5-runner", "run", "--rm", "--no-deps",
+        "--entrypoint", "python3", "phase6-prefetch", "/opt/reel/processor/app.py", "--prefetch",
+        str(candidate["source_url"]), str(candidate["job_id"]), str(candidate["source_message_id"]),
+        prefetch_container_path(candidate),
+    ]
+    started = time.monotonic()
+    result = subprocess.run(
+        command, cwd=args.project_dir, text=True, encoding="utf-8", errors="replace",
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=args.prefetch_timeout, check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Phase 6 prefetch failed rc={result.returncode}: {(result.stderr or result.stdout)[-1200:]}")
+    payload = parse_json(result.stdout)
+    return {"job_id": candidate["job_id"], "seconds": round(time.monotonic() - started, 3), **payload}
+
+
+def orchestrate(args: argparse.Namespace, candidate: dict[str, Any], lock_fd: int) -> dict[str, Any]:
+    cmd = orchestrator_command(args, candidate)
     # Keep the dispatcher flock inherited by the exact orchestrator. If the
     # dispatcher is killed, the in-flight child still owns serial authority and
     # a watchdog replacement cannot launch a duplicate compute container.
-    result = subprocess.run(
+    process = subprocess.Popen(
         cmd,
         cwd=args.project_dir,
         text=True,
@@ -61,13 +111,61 @@ def orchestrate(args: argparse.Namespace, candidate: dict[str, Any], lock_fd: in
         errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=args.job_timeout + 120,
-        check=False,
         pass_fds=(lock_fd,),
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"Phase 6 exact orchestrator failed rc={result.returncode}: {(result.stderr or result.stdout)[-3000:]}")
-    return parse_json(result.stdout)
+    deadline = time.monotonic() + args.job_timeout + 120
+    prefetch_outcome: dict[str, Any] | None = None
+    prefetch_attempted = False
+    while process.poll() is None:
+        if time.monotonic() >= deadline:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise RuntimeError(f"Phase 6 exact orchestrator timed out: {(stderr or stdout)[-3000:]}")
+        if not prefetch_attempted:
+            try:
+                next_response = control(args, "prefetch-next")
+                next_candidate = eligible_prefetch(next_response, str(candidate["job_id"]))
+                if next_candidate:
+                    prefetch_attempted = True
+                    prefetch_outcome = prefetch(args, next_candidate)
+            except Exception as error:  # Prefetch is an optimisation; exact processing remains authoritative.
+                prefetch_attempted = True
+                prefetch_outcome = {"ok": False, "error": str(error)[-1000:]}
+        if process.poll() is None:
+            time.sleep(max(1, args.prefetch_poll_seconds))
+    stdout, stderr = process.communicate()
+    if process.returncode != 0:
+        raise RuntimeError(f"Phase 6 exact orchestrator failed rc={process.returncode}: {(stderr or stdout)[-3000:]}")
+    outcome = parse_json(stdout)
+    if prefetch_outcome is not None:
+        outcome["prefetch"] = prefetch_outcome
+    return outcome
+
+
+def append_performance(args: argparse.Namespace, candidate: dict[str, Any], outcome: dict[str, Any], elapsed: float) -> None:
+    result_summary: dict[str, Any] = {}
+    result_path = outcome.get("result_host_path")
+    if isinstance(result_path, str) and result_path:
+        try:
+            parsed = json.loads(Path(result_path).read_text(encoding="utf-8"))
+            if isinstance(parsed.get("processor_result"), dict):
+                result_summary = parsed["processor_result"]
+        except Exception:
+            result_summary = {}
+    record = {
+        "recorded_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "generation": args.generation,
+        "job_id": candidate.get("job_id"),
+        "created_at": candidate.get("created_at"),
+        "orchestration_seconds": round(elapsed, 3),
+        "processor_timings": result_summary.get("timings"),
+        "prefetch": outcome.get("prefetch"),
+    }
+    path = Path(args.performance_log)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n")
 
 
 def run_once(args: argparse.Namespace, lock_fd: int) -> dict[str, Any]:
@@ -77,7 +175,9 @@ def run_once(args: argparse.Namespace, lock_fd: int) -> dict[str, Any]:
     candidate = claimed.get("candidate")
     if not isinstance(candidate, dict):
         raise RuntimeError("Phase 6 claim response omitted exact candidate")
+    started = time.monotonic()
     outcome = orchestrate(args, candidate, lock_fd)
+    append_performance(args, candidate, outcome, time.monotonic() - started)
     if outcome.get("aborted_after_compute_failure") is True:
         return {"ok": False, "idle": False, "aborted_job_id": candidate.get("job_id"), "pilot_key": candidate.get("pilot_key"), "recovery": "prepublication_abort"}
     return {"ok": True, "idle": False, "completed_job_id": candidate.get("job_id"), "pilot_key": candidate.get("pilot_key")}
@@ -94,6 +194,9 @@ def main() -> int:
     parser.add_argument("--poll-seconds", type=int, default=20)
     parser.add_argument("--job-timeout", type=int, default=900)
     parser.add_argument("--control-timeout", type=int, default=120)
+    parser.add_argument("--prefetch-timeout", type=int, default=300)
+    parser.add_argument("--prefetch-poll-seconds", type=int, default=5)
+    parser.add_argument("--performance-log", default="/srv/cartdotcom/instagram-reel-brain/runs/phase6-performance.jsonl")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     args.project_dir = str(Path(args.project_dir).resolve())

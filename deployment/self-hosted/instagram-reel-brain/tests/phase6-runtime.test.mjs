@@ -9,6 +9,9 @@ const watchdog = readFileSync(new URL("../scripts/phase6_dispatcher_watchdog.sh"
 const soak = readFileSync(new URL("../scripts/phase6_soak_monitor.py", import.meta.url), "utf8");
 const dockerfile = readFileSync(new URL("../phase5-runner/Dockerfile", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../migrations/0006_phase6_processing_authority.sql", import.meta.url), "utf8");
+const compose = readFileSync(new URL("../compose.yaml", import.meta.url), "utf8");
+const processor = readFileSync(new URL("../phase5-runner/container/app.py", import.meta.url), "utf8");
+const worker = readFileSync(new URL("../../../instagram-reel-brain/src/index.ts", import.meta.url), "utf8");
 
 test("Phase 6 control keeps credentials inside the control container", () => {
   assert.match(control, /REEL_PHASE5_ADMIN_TOKEN_FILE/);
@@ -34,7 +37,27 @@ test("Phase 6 host dispatcher is serial, credential-free and reuses exact orches
   assert.match(dispatcher, /--abort-on-compute-failure/);
   assert.match(dispatcher, /aborted_after_compute_failure/);
   assert.match(dispatcher, /pass_fds=\(lock_fd,\)/);
-  assert.doesNotMatch(dispatcher, /read_text|Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
+  assert.match(dispatcher, /prefetch-next/);
+  assert.match(dispatcher, /job_stage.*synthesizing/s);
+  assert.match(dispatcher, /phase6-performance\.jsonl/);
+  assert.doesNotMatch(dispatcher, /admin_token_host_file\).*read_text|Bearer |PGPASSWORD|sk-[A-Za-z0-9]/s);
+});
+
+test("Phase 6 prefetch overlaps only read-only Reel acquisition with synthesis", () => {
+  assert.match(worker, /handlePhase6PrefetchNext/);
+  assert.match(worker, /f\.status='armed'/);
+  assert.match(worker, /j\.status='queued'/);
+  assert.match(worker, /j\.source_url LIKE '%\/reel\/%'/);
+  assert.match(worker, /active\.job_stage !== "synthesizing"/);
+  assert.match(processor, /PREFETCH_MANIFEST_VERSION/);
+  assert.match(processor, /file_sha256/);
+  assert.match(processor, /load_prefetched_media/);
+  assert.match(processor, /prefetch_hit/);
+  assert.match(compose, /phase5-compute:[\s\S]*?cpus: 0\.50/);
+  assert.match(compose, /phase6-prefetch:[\s\S]*?cpus: 0\.25/);
+  const cpuLimits = [...compose.matchAll(/cpus:\s*([0-9.]+)/g)].map((match) => Number(match[1]));
+  assert.ok(cpuLimits.reduce((sum, value) => sum + value, 0) <= 2, "declared Reel CPU limits must stay within two cores");
+  assert.doesNotMatch(compose.match(/phase6-prefetch:[\s\S]*?(?=\nnetworks:)/)?.[0] || "", /codex-auth|control-secrets|platform-data/);
 });
 
 test("Phase 6 local authority migration preserves backlog-off state", () => {

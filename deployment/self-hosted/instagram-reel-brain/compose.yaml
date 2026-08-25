@@ -43,8 +43,8 @@ services:
       - reel-runtime
     expose:
       - "3100"
-    mem_limit: 256m
-    cpus: 0.25
+    mem_limit: 128m
+    cpus: 0.10
 
   reel-dispatcher:
     <<: *reel-service
@@ -56,8 +56,8 @@ services:
       - reel-runtime
     expose:
       - "3101"
-    mem_limit: 160m
-    cpus: 0.15
+    mem_limit: 96m
+    cpus: 0.05
 
   reel-worker:
     <<: *reel-service
@@ -74,8 +74,8 @@ services:
       - reel-egress
     expose:
       - "3102"
-    mem_limit: 768m
-    cpus: 0.80
+    mem_limit: 256m
+    cpus: 0.20
 
   reel-publisher:
     <<: *reel-service
@@ -87,8 +87,8 @@ services:
       - reel-runtime
     expose:
       - "3103"
-    mem_limit: 160m
-    cpus: 0.20
+    mem_limit: 96m
+    cpus: 0.05
 
   reel-archiver:
     <<: *reel-service
@@ -107,8 +107,8 @@ services:
       - reel-runtime
     expose:
       - "3104"
-    mem_limit: 160m
-    cpus: 0.20
+    mem_limit: 96m
+    cpus: 0.05
 
   reel-auth-rotator:
     <<: *reel-service
@@ -121,8 +121,8 @@ services:
       - reel-egress
     expose:
       - "3105"
-    mem_limit: 256m
-    cpus: 0.25
+    mem_limit: 96m
+    cpus: 0.05
 
   phase5-control:
     profiles: ["phase5-runner"]
@@ -226,8 +226,48 @@ services:
       - reel-egress
     read_only: true
     mem_limit: 640m
-    cpus: 0.10
+    cpus: 0.50
     pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+
+  phase6-prefetch:
+    profiles: ["phase5-runner"]
+    build:
+      context: .
+      dockerfile: phase5-runner/Dockerfile
+    restart: "no"
+    environment:
+      <<: *reel-env
+      REEL_SERVICE_NAME: phase6-prefetch
+      REEL_PHASE5_ROLE: prefetch
+      REEL_PHASE5_RUNNER_ENABLED: "false"
+      REEL_PHASE5_PROCESSOR_PATH: /opt/reel/processor/app.py
+      CODEX_HOME: /tmp/no-codex-home
+      CODEX_AUTH_SOURCE: ""
+    volumes:
+      - type: bind
+        source: ${REEL_PHASE5_COMPUTE_ROOT:-/srv/cartdotcom/reel-brain-runs/phase5-compute}
+        target: /runs/compute
+      - type: tmpfs
+        target: /work
+        tmpfs:
+          mode: 511
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          mode: 511
+      - type: tmpfs
+        target: /home/node
+        tmpfs:
+          mode: 511
+    networks:
+      - reel-runtime
+      - reel-egress
+    read_only: true
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 128
     security_opt:
       - no-new-privileges:true
 

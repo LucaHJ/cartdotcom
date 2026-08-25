@@ -248,7 +248,7 @@ def authority_action(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Phase 6 control-container adapter")
-    parser.add_argument("command", choices=("state", "claim-next", "authority-transition", "authority-local", "authority-cloud"))
+    parser.add_argument("command", choices=("state", "claim-next", "prefetch-next", "authority-transition", "authority-local", "authority-cloud"))
     parser.add_argument("--schema", default=DEFAULT_SCHEMA)
     parser.add_argument("--generation", type=int, required=True)
     parser.add_argument("--lease-owner", default="phase6-local-worker-1")
@@ -261,6 +261,8 @@ def main() -> int:
         payload = worker_json("GET", "/api/admin/phase6/authority")
     elif args.command == "claim-next":
         payload = claim_next(args)
+    elif args.command == "prefetch-next":
+        payload = worker_json("GET", f"/api/admin/phase6/prefetch-next?{urlencode({'lease_owner': args.lease_owner})}")
     else:
         payload = authority_action(args)
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))

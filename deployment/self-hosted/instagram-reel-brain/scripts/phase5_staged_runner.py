@@ -63,6 +63,7 @@ RESULT_ALLOWED_KEYS = {
     "recovered_after_cloud_completion",
     "recovery_status",
     "tokens",
+    "timings",
 }
 
 
@@ -478,6 +479,17 @@ def validate_processor_result(result: Any, *, expected_job_id: str) -> dict[str,
             raise SystemExit(f"processor result {key} is invalid")
     if sanitized.get("job_id") not in (None, "", expected_job_id):
         raise SystemExit("processor result job_id mismatch")
+    timings = sanitized.get("timings")
+    if timings is not None:
+        if not isinstance(timings, dict) or set(timings) - {
+            "prefetch_hit", "download_seconds", "media_preparation_seconds", "codex_seconds", "completion_seconds", "total_seconds"
+        }:
+            raise SystemExit("processor result timings are invalid")
+        if not isinstance(timings.get("prefetch_hit"), bool):
+            raise SystemExit("processor result prefetch timing flag is invalid")
+        for key, value in timings.items():
+            if key != "prefetch_hit" and (not isinstance(value, (int, float)) or value < 0 or value > 7200):
+                raise SystemExit(f"processor result timing {key} is outside allowed bounds")
     return sanitized
 
 
@@ -515,6 +527,7 @@ def compute_run(args: argparse.Namespace) -> int:
             "instagram_cookies_json": "",
             "instagram_media_json": str(job.get("source_media_json") or ""),
             "timeout_seconds": args.timeout_seconds,
+            "prefetch_dir": args.prefetch_dir,
         }
         resume_artifacts = args.resume_artifacts_json or checkpoint.get("resume_artifacts")
         if resume_artifacts:
@@ -698,6 +711,7 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout-seconds", type=int, default=900)
     parser.add_argument("--rollback-reason", default="phase5c_staged_prepublication_abort")
     parser.add_argument("--resume-artifacts-json", default="")
+    parser.add_argument("--prefetch-dir", default="")
     parser.add_argument("--synthetic-processor", action="store_true")
 
 

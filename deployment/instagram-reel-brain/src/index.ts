@@ -4104,6 +4104,34 @@ async function handlePhase6Next(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, candidate: await phase6NextCandidate(env, owner), authority });
 }
 
+async function handlePhase6PrefetchNext(request: Request, env: Env): Promise<Response> {
+  const owner = String(new URL(request.url).searchParams.get("lease_owner") || "phase6-local-worker-1").trim();
+  if (!owner || owner.length > 160) return json({ ok: false, error: "lease_owner is invalid" }, { status: 400 });
+  const authority = await phase6Authority(env);
+  if (!phase6AuthorityAllowsLocalClaims(authority)) return json({ ok: true, active: null, candidate: null, authority });
+  const active = await env.REEL_DB.prepare(
+    `SELECT f.pilot_key,f.job_id,f.source_message_id,f.status AS fence_status,
+            j.status AS job_status,j.stage AS job_stage,j.started_at
+     FROM phase5_local_pilot_fences f JOIN jobs j ON j.id=f.job_id
+     WHERE f.pilot_key LIKE ? AND f.status='local_processing' AND f.local_lease_owner=?
+       AND datetime(f.expires_at)>datetime('now') AND j.status='running'
+     ORDER BY datetime(j.started_at),f.job_id LIMIT 1`,
+  ).bind(`phase6:${authority.generation}:%`, owner).first<Record<string, unknown>>();
+  if (!active || active.job_stage !== "synthesizing") {
+    return json({ ok: true, active: active || null, candidate: null, authority });
+  }
+  const candidate = await env.REEL_DB.prepare(
+    `SELECT f.pilot_key,f.job_id,f.source_message_id,f.expires_at,
+            j.source_url,j.created_at,j.status AS job_status,j.stage AS job_stage
+     FROM phase5_local_pilot_fences f JOIN jobs j ON j.id=f.job_id
+     WHERE f.pilot_key LIKE ? AND f.status='armed' AND datetime(f.expires_at)>datetime('now')
+       AND j.pilot_run_id IS NULL AND datetime(j.created_at)>=datetime(?)
+       AND j.status='queued' AND j.stage='queued' AND j.source_url LIKE '%/reel/%'
+     ORDER BY datetime(j.created_at),f.job_id LIMIT 1`,
+  ).bind(`phase6:${authority.generation}:%`, authority.cutover_watermark).first<Record<string, unknown>>();
+  return json({ ok: true, active, candidate: candidate || null, authority });
+}
+
 async function handlePhase6Claim(request: Request, env: Env, release = false): Promise<Response> {
   const input = await readJson<Record<string, unknown>>(request);
   let validated: ReturnType<typeof validatePhase6ClaimRequest>;
@@ -5934,6 +5962,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/api/admin/phase6/authority/local" && request.method === "POST") return handlePhase6AuthorityChange(request, env, "self_hosted");
     if (url.pathname === "/api/admin/phase6/authority/cloud" && request.method === "POST") return handlePhase6AuthorityChange(request, env, "cloud");
     if (url.pathname === "/api/admin/phase6/next" && request.method === "GET") return handlePhase6Next(request, env);
+    if (url.pathname === "/api/admin/phase6/prefetch-next" && request.method === "GET") return handlePhase6PrefetchNext(request, env);
     if (url.pathname === "/api/admin/phase6/claim" && request.method === "POST") return handlePhase6Claim(request, env);
     if (url.pathname === "/api/admin/phase6/release" && request.method === "POST") return handlePhase6Claim(request, env, true);
     return json({ error: "Not found" }, { status: 404 });

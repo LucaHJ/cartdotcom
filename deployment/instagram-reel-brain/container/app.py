@@ -10,7 +10,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,7 @@ SCHEMA_PATH = Path(__file__).with_name("synthesis-output.schema.json")
 MAX_ARCHIVED_COMMENTS = 200
 MAX_RESEARCH_COMMENTS = 40
 MAX_FRAMES = 8
+PREFETCH_MANIFEST_VERSION = 1
 
 
 class PipelineError(RuntimeError):
@@ -1152,6 +1155,7 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
     auth_json = str(payload.get("codex_auth_json") or "").strip()
     instagram_cookies_json = str(payload.get("instagram_cookies_json") or "").strip()
     instagram_media_json = str(payload.get("instagram_media_json") or "").strip()
+    prefetch_dir_value = str(payload.get("prefetch_dir") or "").strip()
     archive_only = bool(payload.get("archive_only"))
     resume_only = bool(payload.get("resume_research"))
     resume_artifacts = payload.get("resume_artifacts") if isinstance(payload.get("resume_artifacts"), list) else []
@@ -1159,6 +1163,8 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
     if not all([job_id, source_url, callback_base, callback_token]):
         raise PipelineError("error_unknown", "job_id, source_url, callback_base_url and callback_token are required")
 
+    pipeline_started = time.perf_counter()
+    timings: dict[str, Any] = {"prefetch_hit": False}
     workdir = Path(tempfile.mkdtemp(prefix=f"reel-{job_id[:8]}-", dir="/work" if Path("/work").exists() else None))
     try:
         carousel_items: list[Path] = []
@@ -1167,18 +1173,37 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
                 callback_base, callback_token, job_id, resume_artifacts, workdir,
             )
         else:
-            cookie_path = write_instagram_cookies(instagram_cookies_json, workdir)
-            video, metadata, carousel_items, carousel_manifest, carousel_frames = download_instagram_media(
-                source_url, workdir, cookie_path, instagram_media_json,
-            )
+            download_started = time.perf_counter()
+            prefetched = None
+            if prefetch_dir_value:
+                try:
+                    prefetched = load_prefetched_media(
+                        Path(prefetch_dir_value), workdir, job_id=job_id, source_url=source_url,
+                    )
+                except Exception:
+                    prefetched = None
+            if prefetched:
+                video, metadata, carousel_items, carousel_manifest, carousel_frames = prefetched
+                timings["prefetch_hit"] = True
+            else:
+                cookie_path = write_instagram_cookies(instagram_cookies_json, workdir)
+                video, metadata, carousel_items, carousel_manifest, carousel_frames = download_instagram_media(
+                    source_url, workdir, cookie_path, instagram_media_json,
+                )
+            timings["download_seconds"] = round(time.perf_counter() - download_started, 3)
+            media_started = time.perf_counter()
             duplicate = pre_codex_duplicate_check(callback_base, callback_token, job_id, metadata)
             if duplicate.get("duplicate"):
+                timings["total_seconds"] = round(time.perf_counter() - pipeline_started, 3)
+                if timings["prefetch_hit"] and prefetch_dir_value:
+                    shutil.rmtree(prefetch_dir_value, ignore_errors=True)
                 return {
                     "ok": True,
                     "job_id": job_id,
                     "duplicate": True,
                     "existing_job_id": duplicate.get("existing_job_id"),
                     "stopped_before_codex": True,
+                    "timings": timings,
                     "auth_json": auth_json or None,
                 }
             (workdir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1214,9 +1239,12 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
             (workdir / "transcript.json").write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
             upload_artifact(callback_base, callback_token, job_id, "transcript", workdir / "transcript.json")
             report_stage(callback_base, callback_token, job_id, "synthesizing", "Media capture and transcription completed; research started")
+            timings["media_preparation_seconds"] = round(time.perf_counter() - media_started, 3)
 
         prompt = build_prompt(metadata, transcript, instructions)
+        codex_started = time.perf_counter()
         synthesis, refreshed_auth = run_codex(workdir, prompt, analysis_frames, timeout_seconds, auth_json)
+        timings["codex_seconds"] = round(time.perf_counter() - codex_started, 3)
         synthesis["metadata"]["canonical_url"] = metadata["canonical_url"]
         synthesis["metadata"]["shortcode"] = metadata["id"]
         synthesis["metadata"]["title"] = metadata["title"]
@@ -1246,6 +1274,7 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
         synthesis["reported_comment_count"] = metadata.get("comment_count")
         synthesis_path = workdir / "synthesis.json"
         synthesis_path.write_text(json.dumps(synthesis, ensure_ascii=False, indent=2), encoding="utf-8")
+        completion_started = time.perf_counter()
         upload_artifact(callback_base, callback_token, job_id, "synthesis", synthesis_path)
 
         response = requests.post(
@@ -1256,6 +1285,10 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
         )
         response.raise_for_status()
         completed = response.json()
+        timings["completion_seconds"] = round(time.perf_counter() - completion_started, 3)
+        timings["total_seconds"] = round(time.perf_counter() - pipeline_started, 3)
+        if timings["prefetch_hit"] and prefetch_dir_value:
+            shutil.rmtree(prefetch_dir_value, ignore_errors=True)
         return {
             "ok": True,
             "job_id": job_id,
@@ -1264,10 +1297,100 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
             "carousel_items": len(carousel_items) or int(metadata.get("carousel_item_count") or 0),
             "resources": completed.get("resource_count", len(synthesis.get("resources") or [])),
             "resumed_research": resume_only,
+            "timings": timings,
             "auth_json": refreshed_auth,
         }
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def prefetch_media(source_url: str, job_id: str, source_message_id: str, output_dir: Path) -> dict[str, Any]:
+    if not source_url.startswith("https://www.instagram.com/reel/"):
+        raise PipelineError("error_download", "Phase 6 prefetch accepts Reel URLs only")
+    if not job_id or len(job_id) > 120 or not source_message_id or len(source_message_id) > 500:
+        raise PipelineError("error_download", "Phase 6 prefetch identity is invalid")
+    output_dir = output_dir.resolve()
+    if output_dir.exists():
+        try:
+            manifest = json.loads((output_dir / "prefetch.json").read_text(encoding="utf-8"))
+            if manifest.get("job_id") == job_id and manifest.get("source_message_id") == source_message_id and manifest.get("source_url") == source_url:
+                return {"ok": True, "idempotent": True, "job_id": job_id, "bytes": sum(int(row.get("size") or 0) for row in manifest.get("files") or [])}
+        except Exception:
+            pass
+        raise PipelineError("error_download", "Existing Phase 6 prefetch cache failed exact identity validation")
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.tmp-", dir=output_dir.parent))
+    try:
+        video, metadata, carousel_items, carousel_manifest, carousel_frames = download_instagram_media(source_url, temp_dir)
+        metadata_path = temp_dir / "metadata.json"
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        files = []
+        for path in sorted(row for row in temp_dir.rglob("*") if row.is_file()):
+            relative = path.relative_to(temp_dir).as_posix()
+            files.append({"path": relative, "size": path.stat().st_size, "sha256": file_sha256(path)})
+        roles = {
+            "video": video.relative_to(temp_dir).as_posix(),
+            "metadata": metadata_path.relative_to(temp_dir).as_posix(),
+            "carousel_items": [path.relative_to(temp_dir).as_posix() for path in carousel_items],
+            "carousel_manifest": carousel_manifest.relative_to(temp_dir).as_posix() if carousel_manifest else None,
+            "carousel_frames": [path.relative_to(temp_dir).as_posix() for path in carousel_frames],
+        }
+        manifest = {
+            "version": PREFETCH_MANIFEST_VERSION,
+            "job_id": job_id,
+            "source_message_id": source_message_id,
+            "source_url": source_url,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "roles": roles,
+            "files": files,
+        }
+        (temp_dir / "prefetch.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_dir.replace(output_dir)
+        return {"ok": True, "idempotent": False, "job_id": job_id, "files": len(files), "bytes": sum(row["size"] for row in files)}
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
+def load_prefetched_media(
+    prefetch_dir: Path,
+    workdir: Path,
+    *,
+    job_id: str,
+    source_url: str,
+) -> tuple[Path, dict[str, Any], list[Path], Path | None, list[Path]]:
+    root = prefetch_dir.resolve(strict=True)
+    manifest = json.loads((root / "prefetch.json").read_text(encoding="utf-8"))
+    if manifest.get("version") != PREFETCH_MANIFEST_VERSION or manifest.get("job_id") != job_id or manifest.get("source_url") != source_url:
+        raise PipelineError("error_download", "Phase 6 prefetch manifest binding mismatch")
+    for row in manifest.get("files") or []:
+        relative = Path(str(row.get("path") or ""))
+        source = (root / relative).resolve(strict=True)
+        if root not in source.parents or source.stat().st_size != int(row.get("size") or -1) or file_sha256(source) != row.get("sha256"):
+            raise PipelineError("error_download", "Phase 6 prefetch cache integrity check failed")
+    for source in sorted(root.rglob("*")):
+        if source.is_file() and source.name != "prefetch.json":
+            relative = source.relative_to(root)
+            target = workdir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    roles = manifest.get("roles") if isinstance(manifest.get("roles"), dict) else {}
+    video = workdir / str(roles.get("video") or "")
+    metadata = json.loads((workdir / str(roles.get("metadata") or "metadata.json")).read_text(encoding="utf-8"))
+    carousel_items = [workdir / str(path) for path in roles.get("carousel_items") or []]
+    carousel_manifest = workdir / str(roles["carousel_manifest"]) if roles.get("carousel_manifest") else None
+    carousel_frames = [workdir / str(path) for path in roles.get("carousel_frames") or []]
+    if not video.is_file() or not isinstance(metadata, dict):
+        raise PipelineError("error_download", "Phase 6 prefetch cache is incomplete")
+    return video, metadata, carousel_items, carousel_manifest, carousel_frames
 
 
 def local_smoke(source_url: str, output_dir: Path) -> None:
@@ -1374,7 +1497,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 4 and sys.argv[1] == "--local-smoke":
+    if len(sys.argv) >= 6 and sys.argv[1] == "--prefetch":
+        print(json.dumps(prefetch_media(sys.argv[2], sys.argv[3], sys.argv[4], Path(sys.argv[5]))))
+    elif len(sys.argv) >= 4 and sys.argv[1] == "--local-smoke":
         local_smoke(sys.argv[2], Path(sys.argv[3]).resolve())
     elif len(sys.argv) >= 3 and sys.argv[1] == "--local-synthesize":
         local_synthesize(Path(sys.argv[2]).resolve())

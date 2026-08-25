@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -7,12 +8,21 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL_PATH = ROOT / "scripts" / "phase6_dispatch_control.py"
+DISPATCHER_PATH = ROOT / "scripts" / "phase6_dispatcher.py"
 
 
 def load_control():
     spec = importlib.util.spec_from_file_location("phase6_dispatch_control_test", CONTROL_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def load_dispatcher():
+    spec = importlib.util.spec_from_file_location("phase6_dispatcher_test", DISPATCHER_PATH)
+    module = importlib.util.module_from_spec(spec)
+    with mock.patch.dict(sys.modules, {"fcntl": mock.MagicMock()}):
+        spec.loader.exec_module(module)
     return module
 
 
@@ -34,6 +44,23 @@ class FakeRunner:
 
 
 class Phase6RuntimeTests(unittest.TestCase):
+    def test_prefetch_requires_exact_active_synthesis_and_distinct_queued_reel(self):
+        module = load_dispatcher()
+        response = {
+            "ok": True,
+            "active": {"job_id": "current", "job_status": "running", "job_stage": "synthesizing"},
+            "candidate": {
+                "job_id": "next", "job_status": "queued", "job_stage": "queued",
+                "source_url": "https://www.instagram.com/reel/next/",
+            },
+        }
+        self.assertEqual(module.eligible_prefetch(response, "current")["job_id"], "next")
+        response["active"]["job_stage"] = "downloading"
+        self.assertIsNone(module.eligible_prefetch(response, "current"))
+        response["active"]["job_stage"] = "synthesizing"
+        response["candidate"]["job_id"] = "current"
+        self.assertIsNone(module.eligible_prefetch(response, "current"))
+
     def test_new_local_lease_accepts_insert_and_event_in_same_statement(self):
         module = load_control()
         candidate = {

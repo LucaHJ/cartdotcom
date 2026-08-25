@@ -54,9 +54,9 @@ test("compose resource ceilings remain under phase one limits", () => {
 
 test("all services have pid and no-new-privileges constraints", () => {
   const serviceCount = (compose.match(/REEL_SERVICE_NAME:/g) || []).length;
-  assert.equal(serviceCount, 8);
+  assert.equal(serviceCount, 9);
   assert.match(compose, /profiles: \["phase5-runner"\]/);
-  assert.equal((compose.match(/pids_limit: 128/g) || []).length, 2);
+  assert.equal((compose.match(/pids_limit: 128/g) || []).length, 3);
   assert.match(compose, /pids_limit: 256/);
   assert.match(compose, /no-new-privileges:true/);
 });

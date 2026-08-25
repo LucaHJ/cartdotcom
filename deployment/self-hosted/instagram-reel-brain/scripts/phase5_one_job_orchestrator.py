@@ -203,6 +203,8 @@ def compute_args(args: argparse.Namespace, checkpoint_container_path: str, resul
         command.append("--synthetic-processor")
     if resume_artifacts_json:
         command.extend(["--resume-artifacts-json", resume_artifacts_json])
+    if args.prefetch_container_path:
+        command.extend(["--prefetch-dir", args.prefetch_container_path])
     return command
 
 
@@ -537,6 +539,7 @@ def main() -> int:
     parser.add_argument("--container-timeout", type=int, default=900)
     parser.add_argument("--synthetic-worker-host", default=os.environ.get("REEL_PHASE5_SYNTHETIC_WORKER_HOST", ""))
     parser.add_argument("--resume-artifacts-json", default="")
+    parser.add_argument("--prefetch-container-path", default="")
     parser.add_argument("--synthetic-processor", action="store_true")
     parser.add_argument("--use-fake-codex", action="store_true")
     parser.add_argument("--fault-at", default="", choices=("", "after-start", "before-processor", "after-compute", "after-processor-before-checkpoint", "after-cloud-finalize-before-local-complete", "attempt-control-state-write"))
