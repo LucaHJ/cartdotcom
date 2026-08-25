@@ -172,6 +172,19 @@ Do not manually claim D1 rows or run the one-shot orchestrator for an arbitrary
 job. The Phase 6 dispatcher selects only generation-bound post-watermark fences
 and the PostgreSQL one-active-lease index enforces serial execution.
 
+Performance evidence is appended as mode-0600 JSON Lines at:
+
+```bash
+tail -n 10 runs/phase6-performance.jsonl
+```
+
+`processor_timings.prefetch_hit=true` proves that the exact job consumed a
+verified cache. Prefetch begins only after the active job reports
+`synthesizing`. A prefetch error is non-authoritative: it does not claim,
+fail, or alter the queued job, and the later exact processor uses its normal
+download path. At most one `phase5-compute` and one secret-free
+`phase6-prefetch` container may overlap.
+
 ## Troubleshooting
 
 ### Control checkpoint signature mismatch

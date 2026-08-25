@@ -2,6 +2,19 @@
 
 ## 2026-08-25
 
+- Increased the Phase 6 synthesis container from `0.10` to `0.50` CPU and
+  added a secret-free `0.25` CPU Reel-only prefetch service in commit
+  `c1e3765` / Worker version `4ff08465-a579-4b4e-b1aa-c1a39d6ede86`.
+  The authenticated read-only endpoint exposes only the next armed,
+  post-watermark Reel while the exact active job is already synthesising; it
+  never claims or mutates the next job. Downloads are written atomically to an
+  exact job/URL-bound SHA-256 manifest and consumed only after verification.
+  Three production jobs averaged `208.5` D1 processing seconds versus the
+  prior non-stalled Ubuntu average of `238.1` seconds, a `12.4%` reduction.
+  Two prefetched jobs loaded their media in `0.009` and `0.006` seconds. The
+  inert service limits were reduced so the full declared project remains at
+  `1.30` CPU and `1,792 MiB` even when synthesis and prefetch overlap.
+
 - Recovered a Phase 6 serial-queue stall in commits `14c31d9` and `2a856f1`.
   Reel job `328ca9d8-7b14-4ab9-bd97-5fba1070bd44` timed out while extracting
   frames and remained `local_processing`; the exact stale lease then blocked

@@ -13,6 +13,19 @@ file. Phase 6 processing authority is now local on generation 2 with a durable
 watermark of `2026-08-23T01:17:09.133Z`. The serial dispatcher is supervised,
 historical backlog remains disabled, and the required seven-day soak is active.
 
+Phase 6 performance was tuned on `2026-08-25` in commit `c1e3765` and Worker
+version `4ff08465-a579-4b4e-b1aa-c1a39d6ede86`. Exact synthesis remains
+serial, but its compute limit is now `0.50` CPU. A separate secret-free
+`phase6-prefetch` service may download only the next armed Reel while the
+current exact job is already in `synthesizing`; the read-only Worker route does
+not claim or mutate that job. Cache manifests bind the job, source message and
+URL and verify every file by size and SHA-256 before handoff. The first three
+production jobs after deployment averaged `208.5` D1 processing seconds,
+`12.4%` below the prior non-stalled Ubuntu average of `238.1` seconds. The two
+cache hits reduced the in-job download stage to `0.009` and `0.006` seconds.
+The full declared Reel project remains bounded to `1.30` CPU and `1,792 MiB`.
+Detailed evidence is in `PHASE_6_PERFORMANCE_PREFETCH_2026-08-25.md`.
+
 On `2026-08-25`, Phase 6 encountered and recovered its first valid soak
 failure. Exact Reel job `328ca9d8-7b14-4ab9-bd97-5fba1070bd44` timed out in
 the original sequential FFmpeg frame filter, leaving one stale
@@ -70,6 +83,8 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 - Cloudflare intake and edge spool with post-watermark automatic local fences.
 - Ubuntu serial dispatcher supervised every minute and at reboot.
 - Seven-day soak sampling every five minutes.
+- Serial `0.50` CPU synthesis plus one read-only `0.25` CPU Reel media
+  prefetch during the active job's synthesis stage.
 
 - Six container-internal health endpoints.
 - Isolated Docker networks `cartdotcom-reel-runtime` and
