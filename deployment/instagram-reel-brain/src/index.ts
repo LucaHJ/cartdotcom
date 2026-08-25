@@ -5954,6 +5954,9 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/api/admin/retrieval/status" && request.method === "GET") {
       return handleRetrievalIndexStatus(env);
     }
+    if (url.pathname === "/api/admin/retrieval/search" && request.method === "GET") {
+      return handleSearchQuery(env, url.searchParams.get("q") || "", Number(url.searchParams.get("limit") || 10));
+    }
     return json({ error: "Not found" }, { status: 404 });
   }
   const unauthorized = requireAdmin(request, env);
