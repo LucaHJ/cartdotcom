@@ -40,6 +40,8 @@ test("Phase 6 host dispatcher is serial, credential-free and reuses exact orches
   assert.match(dispatcher, /--abort-on-compute-failure/);
   assert.match(dispatcher, /aborted_after_compute_failure/);
   assert.match(dispatcher, /terminal_failure_after_prepublication_abort/);
+  assert.match(dispatcher, /--attempt-key/);
+  assert.match(dispatcher, /candidate\.get\('attempts'\)/);
   assert.match(dispatcher, /pass_fds=\(lock_fd,\)/);
   assert.match(dispatcher, /prefetch-next/);
   assert.match(dispatcher, /job_stage.*synthesizing/s);

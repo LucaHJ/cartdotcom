@@ -4087,7 +4087,8 @@ async function phase6NextCandidate(env: Env, owner: string): Promise<Record<stri
   if (!phase6AuthorityAllowsLocalClaims(authority)) return null;
   return env.REEL_DB.prepare(
     `SELECT f.pilot_key,f.job_id,f.source_message_id,f.status AS fence_status,f.expires_at,
-            f.local_lease_owner,f.local_lease_expires_at,j.source_url,j.created_at,j.status AS job_status,j.stage AS job_stage
+            f.local_lease_owner,f.local_lease_expires_at,j.source_url,j.created_at,j.attempts,
+            j.status AS job_status,j.stage AS job_stage
      FROM phase5_local_pilot_fences f JOIN jobs j ON j.id=f.job_id
      WHERE f.pilot_key LIKE ? AND datetime(f.expires_at)>datetime('now')
        AND j.pilot_run_id IS NULL AND datetime(j.created_at)>=datetime(?)

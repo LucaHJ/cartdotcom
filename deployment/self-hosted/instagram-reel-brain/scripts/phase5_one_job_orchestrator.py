@@ -61,7 +61,8 @@ def chmod_private(path: Path, *, directory: bool = False) -> None:
 
 def handoff_paths(args: argparse.Namespace) -> tuple[Path, str, Path, str]:
     run_root = Path(args.runs_root)
-    job_name = safe_name(f"{args.pilot_key}_{args.job_id}")
+    attempt_suffix = f"_{safe_name(args.attempt_key)}" if args.attempt_key else ""
+    job_name = safe_name(f"{args.pilot_key}_{args.job_id}{attempt_suffix}")
     if args.checkpoint_host_path:
         host_path = Path(args.checkpoint_host_path)
     else:
@@ -551,6 +552,7 @@ def main() -> int:
     parser.add_argument("--pilot-key", required=True)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--source-message-id", required=True)
+    parser.add_argument("--attempt-key", default="")
     parser.add_argument("--lease-owner", default=DEFAULT_WORKER)
     parser.add_argument("--schema", default="reel_phase4_shadow_20260821_014246")
     parser.add_argument("--checkpoint-host-path", default="")
@@ -577,6 +579,8 @@ def main() -> int:
     args.pilot_key = require_exact(args.pilot_key, "--pilot-key", 120)
     args.job_id = require_exact(args.job_id, "--job-id", 120)
     args.source_message_id = require_exact(args.source_message_id, "--source-message-id", 500)
+    if args.attempt_key:
+        args.attempt_key = require_exact(args.attempt_key, "--attempt-key", 80)
     args.lease_owner = require_exact(args.lease_owner, "--lease-owner", 120)
     if args.synthetic_case:
         if not args.schema.startswith("reel_phase5c_staged_"):

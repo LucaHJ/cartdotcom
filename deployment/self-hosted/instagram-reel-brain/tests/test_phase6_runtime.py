@@ -77,6 +77,25 @@ class Phase6RuntimeTests(unittest.TestCase):
         response["candidate"]["job_id"] = "current"
         self.assertIsNone(module.eligible_prefetch(response, "current"))
 
+    def test_retry_attempt_uses_fresh_checkpoint_and_prefetch_paths(self):
+        module = load_dispatcher()
+        candidate = {
+            "pilot_key": "phase6:2:job-1",
+            "job_id": "job-1",
+            "source_message_id": "message-1",
+            "attempts": 1,
+        }
+        self.assertEqual(module.attempt_key(candidate), "attempt-2")
+        self.assertTrue(module.prefetch_container_path(candidate).endswith("/job-1/attempt-2"))
+        command = module.orchestrator_command(argparse.Namespace(
+            project_dir="/srv/project",
+            schema="shadow",
+            admin_token_host_file="/secret",
+            job_timeout=900,
+            lease_owner="phase6-local-worker-1",
+        ), candidate)
+        self.assertEqual(command[command.index("--attempt-key") + 1], "attempt-2")
+
     def test_new_local_lease_accepts_insert_and_event_in_same_statement(self):
         module = load_control()
         candidate = {

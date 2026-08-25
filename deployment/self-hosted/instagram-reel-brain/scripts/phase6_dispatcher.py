@@ -47,8 +47,12 @@ def safe_name(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value)[:180]
 
 
+def attempt_key(candidate: dict[str, Any]) -> str:
+    return f"attempt-{max(0, int(candidate.get('attempts') or 0)) + 1}"
+
+
 def prefetch_container_path(candidate: dict[str, Any]) -> str:
-    return f"/runs/compute/phase6-prefetch/{safe_name(str(candidate['job_id']))}"
+    return f"/runs/compute/phase6-prefetch/{safe_name(str(candidate['job_id']))}/{attempt_key(candidate)}"
 
 
 def orchestrator_command(args: argparse.Namespace, candidate: dict[str, Any]) -> list[str]:
@@ -56,6 +60,7 @@ def orchestrator_command(args: argparse.Namespace, candidate: dict[str, Any]) ->
         "python3", "scripts/phase5_one_job_orchestrator.py", "--project-dir", args.project_dir,
         "--pilot-key", str(candidate["pilot_key"]), "--job-id", str(candidate["job_id"]),
         "--source-message-id", str(candidate["source_message_id"]), "--lease-owner", args.lease_owner,
+        "--attempt-key", attempt_key(candidate),
         "--schema", args.schema, "--admin-token-host-file", args.admin_token_host_file,
         "--timeout-seconds", str(args.job_timeout), "--container-timeout", str(args.job_timeout),
         "--prefetch-container-path", prefetch_container_path(candidate),
