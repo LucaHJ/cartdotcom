@@ -81,9 +81,11 @@ authoritative processing store and remove it from the primary handover path.
 The production loops were restarted only after both in-flight Reels reached a
 terminal state. Observed mirror completion timestamps after restart were
 `13:12:41.310Z`, `13:12:57.018Z`, `13:13:14.326Z`, and `13:13:29.857Z`, a
-15.5-17.3 second completion cadence including query time. A natural new Reel
-was mirrored and selected during this verification; its final performance row
-will provide the first end-to-end post-change queue-wait measurement.
+15.5-17.3 second completion cadence including query time. Natural Reel job
+`5ed65d02-49f3-4766-a935-53891f332507` was created at `13:12:35Z` and locally
+dispatched at `13:12:44Z`: a measured `9.000 s` queue wait versus the previous
+`274.478 s`. It then completed normally. This is the first end-to-end
+post-change sample; later natural Reels remain automatically tracked.
 
 ## Verification
 
