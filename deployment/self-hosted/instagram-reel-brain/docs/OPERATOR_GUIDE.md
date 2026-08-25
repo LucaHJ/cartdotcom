@@ -254,6 +254,21 @@ If a deployment must restart the dispatcher, first prove that no
 `phase5_one_job_orchestrator.py` or Phase 5 compute container remains. The
 watchdog will otherwise wait on the inherited lock until that exact job exits.
 
+During the Phase 6 migration bridge, the supervised incremental mirror sleeps
+15 seconds between its ten-surface D1 cycles and both dispatcher slots use a
+10-second poll. Verify the effective mirror command rather than only the
+source file:
+
+```bash
+ps -eo pid,args | grep 'phase4_shadow_mirror.py loop' | grep -v grep
+cat runs/phase6-dispatcher-1.pid runs/phase6-dispatcher-2.pid
+```
+
+The mirror command must contain `--interval-seconds 15`. Do not shorten it
+further without measuring request volume and Worker allowance. Phase 7 should
+remove this mirror from the primary handover path rather than tuning it toward
+continuous polling.
+
 ### News health changes during Reel work
 
 Stop the bounded Reel stage. Capture `docker stats`, active PostgreSQL queries,

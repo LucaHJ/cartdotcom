@@ -2,6 +2,14 @@
 
 ## 2026-08-25
 
+- Reduced the temporary cloud-to-Ubuntu handover bridge in commit `302eaba`:
+  the ten-surface incremental mirror now sleeps 15 seconds between cycles and
+  each of the two dispatchers polls every 10 seconds. The previous five-minute
+  Phase 4 observation interval caused a measured 274.478-second queue wait.
+  Live mirror completions now occur about 15.5-17.3 seconds apart. Backlog and
+  authority settings were unchanged, and the old scripts are backed up under
+  `/srv/cartdotcom/backups/reel/handover-poll-20260825T130701Z`.
+
 - Raised Phase 6 processing concurrency from one to two in commit `4e4c86f`
   and Worker version `b20c3661-ea53-4622-8f92-e7604d9a1309`. Two exact worker
   identities are fenced in D1 and PostgreSQL, each dispatcher has an inherited

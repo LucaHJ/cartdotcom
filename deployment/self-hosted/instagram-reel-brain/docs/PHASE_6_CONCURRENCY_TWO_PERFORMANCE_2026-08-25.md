@@ -2,7 +2,7 @@
 
 Date: 2026-08-25
 
-Source commit: `4e4c86f`
+Source commits: `4e4c86f`, `302eaba`
 
 Worker version: `b20c3661-ea53-4622-8f92-e7604d9a1309`
 
@@ -68,6 +68,23 @@ backlog or synthetic production item was created. The report measures stage
 averages, prefetch hit rate, peak overlap and jobs per hour against the frozen
 baseline.
 
+## Handover polling correction
+
+Commit `302eaba` replaced the Phase 4 observation-era five-minute mirror sleep
+with a 15-second sleep and reduced each dispatcher slot's default poll from 20
+seconds to 10 seconds. The mirror is an incremental ten-surface D1 pull, so 15
+seconds is the lowest prudent steady-state interval: it removes most visible
+handover delay without turning the migration bridge into a continuous request
+loop. This bridge is temporary; Phase 7 is expected to make PostgreSQL the
+authoritative processing store and remove it from the primary handover path.
+
+The production loops were restarted only after both in-flight Reels reached a
+terminal state. Observed mirror completion timestamps after restart were
+`13:12:41.310Z`, `13:12:57.018Z`, `13:13:14.326Z`, and `13:13:29.857Z`, a
+15.5-17.3 second completion cadence including query time. A natural new Reel
+was mirrored and selected during this verification; its final performance row
+will provide the first end-to-end post-change queue-wait measurement.
+
 ## Verification
 
 - Cloud typecheck passed; cloud Node tests passed `113/113`.
@@ -79,11 +96,19 @@ baseline.
   backlog off, two matching dispatcher PIDs, zero mirror divergences/errors,
   and a clean soak sample.
 - Reel, News, Caddy and PostgreSQL containers were healthy after deployment.
+- Focused polling tests passed: Node `9/9`, Python mirror/runtime `18/18`, and
+  the mirror mutation-surface static check passed.
+- The live mirror command contains `--interval-seconds 15`; both dispatcher
+  slots restarted with the 10-second source default. Authority remained
+  generation 2 and historical backlog processing remained disabled.
 
 ## Backups and rollback
 
 Pre-change scripts, Compose config and a PostgreSQL schema dump are in
 `/srv/cartdotcom/backups/reel/concurrency2-20260825T124645Z`.
+
+The pre-polling-change mirror watchdog and dispatcher are preserved in
+`/srv/cartdotcom/backups/reel/handover-poll-20260825T130701Z`.
 
 To roll back, first prove neither slot is processing. Restore the backed-up
 scripts and Compose file, restore the former single-active lease index only
