@@ -69,6 +69,7 @@ import {
   type RetrievalCandidate,
   type RetrievalDocument,
 } from "./retrieval";
+import { postInstagramMessageReply } from "./instagram-messaging";
 import {
   DEFAULT_STAGE_REACTIONS,
   applyMediaLinkFallbacks,
@@ -2237,6 +2238,59 @@ async function sendInstagramText(
   const error = response.ok ? "" : (await response.text()).slice(0, 500);
   await recordOutboundEvent(env, { recipientId: senderId, sourceMessageId, kind, status: response.ok ? "sent" : "failed", httpStatus: response.status, error });
   return response.ok;
+}
+
+async function sendInstagramReplyToMessage(
+  env: Env,
+  senderId: string,
+  targetMessageId: string,
+  jobId: string,
+  text = ".",
+): Promise<boolean> {
+  if (!env.INSTAGRAM_ACCESS_TOKEN || !env.INSTAGRAM_USER_ID) {
+    await recordOutboundEvent(env, {
+      recipientId: senderId,
+      sourceMessageId: targetMessageId,
+      jobId,
+      kind: "retrieval_reply",
+      status: "not_configured",
+      error: "Instagram credentials are unavailable",
+    });
+    return false;
+  }
+  try {
+    const result = await postInstagramMessageReply({
+      apiVersion: env.INSTAGRAM_GRAPH_VERSION || "v24.0",
+      instagramUserId: env.INSTAGRAM_USER_ID,
+      accessToken: env.INSTAGRAM_ACCESS_TOKEN,
+      recipientId: senderId,
+      targetMessageId,
+      text,
+    });
+    if (!result.ok) console.error("Instagram retrieval reply failed", result.status, result.error.slice(0, 300));
+    await recordOutboundEvent(env, {
+      recipientId: senderId,
+      sourceMessageId: targetMessageId,
+      jobId,
+      kind: "retrieval_reply",
+      status: result.ok ? "sent" : "failed",
+      httpStatus: result.status,
+      error: result.error,
+    });
+    return result.ok;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error("Instagram retrieval reply failed", detail.slice(0, 300));
+    await recordOutboundEvent(env, {
+      recipientId: senderId,
+      sourceMessageId: targetMessageId,
+      jobId,
+      kind: "retrieval_reply",
+      status: "failed",
+      error: detail,
+    });
+    return false;
+  }
 }
 
 type InstagramConversation = { id?: string; updated_time?: string };
@@ -4693,6 +4747,7 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
       decision?: "match" | "ambiguous" | "no_match";
       matches?: Array<{ id?: string; title?: string | null; canonical_url?: string | null; author_username?: string | null; description?: string | null; original_video_key?: string | null; score?: number }>;
       reel_sent?: boolean;
+      reply_sent?: boolean;
       video_sent?: boolean;
       delivery?: string;
     } & Record<string, unknown> = await response
@@ -4700,6 +4755,7 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
         decision?: "match" | "ambiguous" | "no_match";
         matches?: Array<{ id?: string; title?: string | null; canonical_url?: string | null; author_username?: string | null; description?: string | null; original_video_key?: string | null; score?: number }>;
         reel_sent?: boolean;
+        reply_sent?: boolean;
         video_sent?: boolean;
         delivery?: string;
       } & Record<string, unknown>>()
@@ -4709,8 +4765,7 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
     const firstJobId = firstMatch?.id || (typeof result.id === "string" && sourceUrl ? result.id : undefined);
     if (!sourceUrl && event.senderId && command?.intent === "retrieval") {
       if (firstJobId && firstMatch) {
-        const useArchivedFile = command.delivery === "video_file" || !firstMatch.canonical_url;
-        if (useArchivedFile) {
+        if (command.delivery === "video_file") {
           result.delivery = "video_file";
           result.video_sent = await sendInstagramArchivedVideoWithContext(
             env,
@@ -4720,9 +4775,36 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
           );
           outboundOk = Boolean(result.video_sent);
         } else {
-          result.delivery = "original_reel";
-          result.reel_sent = await sendInstagramText(env, event.senderId, firstMatch.canonical_url!, event.messageId, "reel_link");
-          outboundOk = Boolean(result.reel_sent);
+          outboundOk = false;
+          const replyTarget = await env.REEL_DB.prepare(
+            "SELECT source_message_id FROM jobs WHERE id=? AND status='complete' LIMIT 1",
+          ).bind(firstJobId).first<{ source_message_id: string | null }>();
+          if (replyTarget?.source_message_id) {
+            result.delivery = "reply_to_original_share";
+            result.reply_sent = await sendInstagramReplyToMessage(
+              env,
+              event.senderId,
+              replyTarget.source_message_id,
+              firstJobId,
+              ".",
+            );
+            outboundOk = Boolean(result.reply_sent);
+          }
+          if (!outboundOk && firstMatch.canonical_url) {
+            result.delivery = "original_reel_link_fallback";
+            result.reel_sent = await sendInstagramText(env, event.senderId, firstMatch.canonical_url, event.messageId, "reel_link_fallback");
+            outboundOk = Boolean(result.reel_sent);
+          }
+          if (!outboundOk && !firstMatch.canonical_url && firstMatch.original_video_key) {
+            result.delivery = "video_file_fallback";
+            result.video_sent = await sendInstagramArchivedVideoWithContext(
+              env,
+              event.senderId,
+              { id: firstJobId, author_username: firstMatch.author_username, description: firstMatch.description },
+              event.messageId,
+            );
+            outboundOk = Boolean(result.video_sent);
+          }
         }
       } else if (result.decision === "ambiguous" && result.matches?.length) {
         result.delivery = "candidate_list";
