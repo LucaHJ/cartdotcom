@@ -2,6 +2,19 @@
 
 ## 2026-08-25
 
+- Recovered a Phase 6 serial-queue stall in commits `14c31d9` and `2a856f1`.
+  Reel job `328ca9d8-7b14-4ab9-bd97-5fba1070bd44` timed out while extracting
+  frames and remained `local_processing`; the exact stale lease then blocked
+  all later work. Frame sampling now uses bounded input seeks, optional
+  frame/audio timeouts no longer fail the whole media probe, claim conflicts
+  for the same exact processing fence reconcile into restart, compute failure
+  invokes the existing guarded pre-publication abort, and a newly inserted
+  PostgreSQL lease is verified correctly. The dispatcher flock is inherited by
+  its orchestrator child so a dispatcher restart cannot duplicate an orphaned
+  compute process. The affected Reel completed with six frames and three
+  resources, and the next queued job started automatically. Backlog mode and
+  processing authority were not changed.
+
 - Corrected the unsupported native-reply attempt in commit `fa489d4` and
   Worker version `7dbf5ffb-c80d-4b73-b803-0c18e1b3b2b8`. Two live retrievals
   selected the correct jobs but Meta rejected both `reply_to.mid` calls with

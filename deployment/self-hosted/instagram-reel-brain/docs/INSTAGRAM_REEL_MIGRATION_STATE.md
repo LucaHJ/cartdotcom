@@ -13,6 +13,19 @@ file. Phase 6 processing authority is now local on generation 2 with a durable
 watermark of `2026-08-23T01:17:09.133Z`. The serial dispatcher is supervised,
 historical backlog remains disabled, and the required seven-day soak is active.
 
+On `2026-08-25`, Phase 6 encountered and recovered its first valid soak
+failure. Exact Reel job `328ca9d8-7b14-4ab9-bd97-5fba1070bd44` timed out in
+the original sequential FFmpeg frame filter, leaving one stale
+`local_processing` fence/lease and preventing later serial claims. Commits
+`14c31d9` and `2a856f1` add bounded seek-based sampling, optional media timeout
+handling, exact active-fence restart reconciliation, guarded pre-publication
+abort on compute failure, correct new-lease verification, and inherited
+dispatcher locking across the orchestrator child. The exact stalled job
+completed at `2026-08-25T10:42:29Z` with six frames and three resources, after
+which the next queued job started automatically. The incident did not enable
+historical backlog work, change authority generation 2, or deploy a Worker.
+The Phase 6 soak must account for this valid failure before any later gate.
+
 On `2026-08-25`, the user-visible retrieval defect was repaired without changing
 processing authority. Cloudflare now maintains derived `retrieval_documents`
 and `retrieval_terms` tables populated from completed synthesis JSON. All 302
