@@ -244,6 +244,16 @@ test("routes Instagram text into retrieval, note, status, help, and emoji comman
     query: "robot arms that mentions MoveIt",
     delivery: "reel",
   });
+  assert.deepEqual(domain.parseMessageCommand("Find me the video of the swordsman playing with his cat"), {
+    intent: "retrieval",
+    query: "swordsman playing with his cat",
+    delivery: "reel",
+  });
+  assert.deepEqual(domain.parseMessageCommand("Send me the video of the war movie titled Cherry"), {
+    intent: "retrieval",
+    query: "war movie titled Cherry",
+    delivery: "reel",
+  });
   assert.deepEqual(domain.parseMessageCommand("note: compare this with the Blender workflow"), {
     intent: "note",
     body: "compare this with the Blender workflow",

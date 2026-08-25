@@ -59,6 +59,15 @@ import {
   type Phase6AuthoritySnapshot,
 } from "./phase6-authority";
 import {
+  buildRetrievalDocument,
+  rankRetrievalCandidates,
+  retrievalDocumentTerms,
+  retrievalExpandedTerms,
+  selectRetrievalMatch,
+  type RetrievalCandidate,
+  type RetrievalDocument,
+} from "./retrieval";
+import {
   DEFAULT_STAGE_REACTIONS,
   applyMediaLinkFallbacks,
   canonicalArtifactKey,
@@ -4679,20 +4688,22 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
     });
     const response = await handleNormalizedIntake(normalizedRequest, env);
     const result: {
-      matches?: Array<{ id?: string; canonical_url?: string | null; author_username?: string | null; description?: string | null; original_video_key?: string | null }>;
+      decision?: "match" | "ambiguous" | "no_match";
+      matches?: Array<{ id?: string; title?: string | null; canonical_url?: string | null; author_username?: string | null; description?: string | null; original_video_key?: string | null; score?: number }>;
       reel_sent?: boolean;
       video_sent?: boolean;
       delivery?: string;
     } & Record<string, unknown> = await response
       .json<{
-        matches?: Array<{ id?: string; canonical_url?: string | null; author_username?: string | null; description?: string | null; original_video_key?: string | null }>;
+        decision?: "match" | "ambiguous" | "no_match";
+        matches?: Array<{ id?: string; title?: string | null; canonical_url?: string | null; author_username?: string | null; description?: string | null; original_video_key?: string | null; score?: number }>;
         reel_sent?: boolean;
         video_sent?: boolean;
         delivery?: string;
       } & Record<string, unknown>>()
       .catch(() => ({ error: `HTTP ${response.status}` }));
     let outboundOk = true;
-    const firstMatch = result.matches?.[0];
+    const firstMatch = selectRetrievalMatch(result.decision, result.matches);
     const firstJobId = firstMatch?.id || (typeof result.id === "string" && sourceUrl ? result.id : undefined);
     if (!sourceUrl && event.senderId && command?.intent === "retrieval") {
       if (firstJobId && firstMatch) {
@@ -4711,6 +4722,19 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
           result.reel_sent = await sendInstagramText(env, event.senderId, firstMatch.canonical_url!, event.messageId, "reel_link");
           outboundOk = Boolean(result.reel_sent);
         }
+      } else if (result.decision === "ambiguous" && result.matches?.length) {
+        result.delivery = "candidate_list";
+        const candidates = result.matches.slice(0, 3).map((match, index) => {
+          const author = match.author_username ? `@${String(match.author_username).replace(/^@/, "")}` : "Unknown creator";
+          const title = String(match.title || match.description || "Untitled Reel").replace(/\s+/g, " ").trim().slice(0, 100);
+          return `${index + 1}. ${author} — ${title}${match.canonical_url ? `\n${match.canonical_url}` : ""}`;
+        });
+        outboundOk = await sendInstagramText(
+          env,
+          event.senderId,
+          `I found several possible matches. Here are the three strongest results:\n\n${candidates.join("\n\n")}\n\nAdd another distinctive detail if none is correct.`,
+          event.messageId,
+        );
       } else {
         outboundOk = await sendInstagramText(env, event.senderId, "I could not find a completed Reel matching that description.", event.messageId);
       }
@@ -4748,22 +4772,173 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
   return json({ ok: true, received: results.length, results });
 }
 
+async function retrievalDocumentForJob(env: Env, job: JobRow, payload: SynthesisPayload): Promise<RetrievalDocument> {
+  const comments = (await loadCapturedCommentBundle(env, job, payload)).comments;
+  return buildRetrievalDocument({
+    jobId: job.id,
+    title: payload.metadata.title || job.title,
+    author: payload.metadata.author_username || job.author_username,
+    description: payload.metadata.description || job.description,
+    instructions: job.instructions,
+    summary: payload.summary,
+    visualSummary: payload.visual_summary,
+    transcript: payload.transcript,
+    comments,
+    resources: payload.resources,
+    claims: payload.claims,
+  });
+}
+
+async function replaceRetrievalIndex(
+  env: Env,
+  document: RetrievalDocument,
+  sourceUpdatedAt: string | null,
+): Promise<{ contentHash: string; termCount: number }> {
+  const contentHash = await sha256(JSON.stringify(document));
+  const terms = retrievalDocumentTerms(document);
+  const statements: D1PreparedStatement[] = [
+    env.REEL_DB.prepare(
+      `INSERT INTO retrieval_documents(
+        job_id,document_version,title_text,author_text,description_text,instructions_text,
+        summary_text,visual_text,transcript_text,comments_text,resource_names_text,
+        resource_details_text,claims_text,content_hash,source_updated_at,indexed_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(job_id) DO UPDATE SET
+        document_version=excluded.document_version,title_text=excluded.title_text,
+        author_text=excluded.author_text,description_text=excluded.description_text,
+        instructions_text=excluded.instructions_text,summary_text=excluded.summary_text,
+        visual_text=excluded.visual_text,transcript_text=excluded.transcript_text,
+        comments_text=excluded.comments_text,resource_names_text=excluded.resource_names_text,
+        resource_details_text=excluded.resource_details_text,claims_text=excluded.claims_text,
+        content_hash=excluded.content_hash,source_updated_at=excluded.source_updated_at,
+        indexed_at=CURRENT_TIMESTAMP`,
+    ).bind(
+      document.job_id, document.document_version, document.title_text, document.author_text,
+      document.description_text, document.instructions_text, document.summary_text,
+      document.visual_text, document.transcript_text, document.comments_text,
+      document.resource_names_text, document.resource_details_text, document.claims_text,
+      contentHash, sourceUpdatedAt,
+    ),
+    env.REEL_DB.prepare("DELETE FROM retrieval_terms WHERE job_id=?").bind(document.job_id),
+  ];
+  for (let offset = 0; offset < terms.length; offset += 40) {
+    const chunk = terms.slice(offset, offset + 40);
+    const values = chunk.map(() => "(?,?,CURRENT_TIMESTAMP)").join(",");
+    statements.push(
+      env.REEL_DB.prepare(`INSERT INTO retrieval_terms(job_id,term,indexed_at) VALUES ${values}`)
+        .bind(...chunk.flatMap((term) => [document.job_id, term])),
+    );
+  }
+  await env.REEL_DB.batch(statements);
+  return { contentHash, termCount: terms.length };
+}
+
+type RetrievalReindexCursor = { completed_at: string; id: string };
+
+function decodeRetrievalReindexCursor(value: unknown): RetrievalReindexCursor | null {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = JSON.parse(fromBase64Url(value)) as Partial<RetrievalReindexCursor>;
+    return typeof parsed.completed_at === "string" && typeof parsed.id === "string"
+      ? { completed_at: parsed.completed_at, id: parsed.id }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleRetrievalReindex(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{ limit?: number; cursor?: string; job_id?: string }>(request);
+  const limit = Math.min(Math.max(Math.trunc(Number(input.limit || 10)), 1), 20);
+  const jobId = String(input.job_id || "").trim();
+  const cursor = decodeRetrievalReindexCursor(input.cursor);
+  if (input.cursor && !cursor) return json({ error: "Invalid retrieval reindex cursor" }, { status: 400 });
+  const rows = jobId
+    ? await env.REEL_DB.prepare("SELECT * FROM jobs WHERE id=? AND status='complete' AND synthesis_json_key IS NOT NULL LIMIT 1")
+      .bind(jobId).all<JobRow>()
+    : cursor
+      ? await env.REEL_DB.prepare(
+        `SELECT * FROM jobs
+         WHERE status='complete' AND synthesis_json_key IS NOT NULL
+           AND (datetime(completed_at)>datetime(?) OR (datetime(completed_at)=datetime(?) AND id>?))
+         ORDER BY datetime(completed_at),id LIMIT ?`,
+      ).bind(cursor.completed_at, cursor.completed_at, cursor.id, limit).all<JobRow>()
+      : await env.REEL_DB.prepare(
+        "SELECT * FROM jobs WHERE status='complete' AND synthesis_json_key IS NOT NULL ORDER BY datetime(completed_at),id LIMIT ?",
+      ).bind(limit).all<JobRow>();
+  const indexed: Array<{ job_id: string; content_hash: string; term_count: number }> = [];
+  const failures: Array<{ job_id: string; error: string }> = [];
+  let lastCursor: RetrievalReindexCursor | null = cursor;
+  for (const job of rows.results) {
+    try {
+      const object = job.synthesis_json_key ? await env.REEL_ARCHIVE.get(job.synthesis_json_key) : null;
+      if (!object) throw new Error("Stored synthesis object is missing");
+      const payload = await object.json<SynthesisPayload>();
+      if (!payload?.metadata?.title || !Array.isArray(payload.resources)) throw new Error("Stored synthesis payload is invalid");
+      const indexedResult = await replaceRetrievalIndex(env, await retrievalDocumentForJob(env, job, payload), job.updated_at);
+      indexed.push({ job_id: job.id, content_hash: indexedResult.contentHash, term_count: indexedResult.termCount });
+      lastCursor = { completed_at: job.completed_at || job.updated_at, id: job.id };
+    } catch (error) {
+      failures.push({ job_id: job.id, error: (error instanceof Error ? error.message : String(error)).slice(0, 300) });
+      break;
+    }
+  }
+  const nextCursor = !jobId && !failures.length && rows.results.length === limit && lastCursor
+    ? toBase64Url(JSON.stringify(lastCursor))
+    : null;
+  const counts = await env.REEL_DB.prepare(
+    `SELECT
+      (SELECT COUNT(*) FROM jobs WHERE status='complete') AS complete_jobs,
+      (SELECT COUNT(*) FROM retrieval_documents) AS indexed_jobs,
+      (SELECT COUNT(*) FROM retrieval_terms) AS indexed_terms`,
+  ).first<{ complete_jobs: number; indexed_jobs: number; indexed_terms: number }>();
+  return json({
+    ok: failures.length === 0,
+    indexed,
+    failures,
+    next_cursor: nextCursor,
+    counts,
+  }, failures.length ? { status: 500 } : undefined);
+}
+
+async function handleRetrievalIndexStatus(env: Env): Promise<Response> {
+  const counts = await env.REEL_DB.prepare(
+    `SELECT
+      (SELECT COUNT(*) FROM jobs WHERE status='complete') AS complete_jobs,
+      (SELECT COUNT(*) FROM jobs WHERE status='complete' AND synthesis_json_key IS NOT NULL) AS indexable_jobs,
+      (SELECT COUNT(*) FROM retrieval_documents) AS indexed_jobs,
+      (SELECT COUNT(*) FROM retrieval_terms) AS indexed_terms,
+      (SELECT MAX(indexed_at) FROM retrieval_documents) AS last_indexed_at`,
+  ).first();
+  return json({ ok: true, ...counts });
+}
+
 async function handleSearchQuery(env: Env, query: string, limit: number): Promise<Response> {
-  const terms = query
-    .toLowerCase()
-    .replace(/[^a-z0-9\s_-]+/g, " ")
-    .split(/\s+/)
-    .filter((term) => term.length > 2 && !["send", "video", "reel", "about", "that", "mentions", "with", "please"].includes(term))
-    .slice(0, 8);
-  if (!terms.length) return json({ ok: true, command: "retrieval", query, matches: [] });
-  const clauses = terms.map(() => "LOWER(COALESCE(j.title,'') || ' ' || COALESCE(j.description,'') || ' ' || COALESCE(j.instructions,'') || ' ' || COALESCE(r.name,'') || ' ' || COALESCE(r.summary,'')) LIKE ?");
+  const expandedTerms = retrievalExpandedTerms(query);
+  if (!expandedTerms.length) {
+    return json({ ok: true, command: "retrieval", query, decision: "no_match", reason: "no_distinctive_terms", terms: [], matches: [] });
+  }
+  const placeholders = expandedTerms.map(() => "?").join(",");
   const rows = await env.REEL_DB.prepare(
-    `SELECT j.id, j.title, j.author_username, j.description, j.canonical_url, j.status, j.status_emoji, j.original_video_key, j.markdown_key, COUNT(DISTINCT r.id) AS resource_count
-     FROM jobs j LEFT JOIN resources r ON r.job_id = j.id
-     WHERE j.status = 'complete' AND (${clauses.join(" OR ")})
-     GROUP BY j.id ORDER BY j.completed_at DESC LIMIT ?`,
-  ).bind(...terms.map((term) => `%${term}%`), Math.min(Math.max(limit, 1), 25)).all();
-  return json({ ok: true, command: "retrieval", query, terms, matches: rows.results });
+    `SELECT d.*,j.id,j.title,j.author_username,j.description,j.canonical_url,j.status,j.status_emoji,
+            j.original_video_key,j.markdown_key,j.completed_at,
+            (SELECT COUNT(*) FROM resources r WHERE r.job_id=j.id) AS resource_count
+     FROM retrieval_documents d
+     INNER JOIN jobs j ON j.id=d.job_id
+     WHERE j.status='complete'
+       AND EXISTS (
+         SELECT 1 FROM retrieval_terms t
+         WHERE t.job_id=d.job_id AND t.term IN (${placeholders})
+       )
+     ORDER BY datetime(j.completed_at) DESC,j.id
+     LIMIT 250`,
+  ).bind(...expandedTerms).all<RetrievalCandidate>();
+  const candidates = rows.results.map((candidate) => ({
+    ...candidate,
+    resource_count: Number(candidate.resource_count || 0),
+  }));
+  const ranked = rankRetrievalCandidates(query, candidates, Math.min(Math.max(limit, 1), 25));
+  return json({ ok: true, command: "retrieval", query, ...ranked });
 }
 
 async function handleArtifactUpload(request: Request, env: Env, jobId: string, kind: string): Promise<Response> {
@@ -4940,6 +5115,7 @@ async function handleComplete(request: Request, env: Env, jobId: string): Promis
     );
   }
   await env.REEL_DB.batch(statements);
+  await replaceRetrievalIndex(env, await retrievalDocumentForJob(env, job, payload), job.updated_at);
   const refreshedJob = await env.REEL_DB.prepare("SELECT * FROM jobs WHERE id=?").bind(job.id).first<JobRow>();
   if (!refreshedJob) return json({ error: "Job disappeared during HTML publication" }, { status: 500 });
   const published = await publishSynthesisHtml(env, refreshedJob, payload);
@@ -5768,6 +5944,12 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   const unauthorized = requireAdmin(request, env);
   if (unauthorized) return unauthorized;
 
+  if (url.pathname === "/api/admin/retrieval/reindex" && request.method === "POST") {
+    return handleRetrievalReindex(request, env);
+  }
+  if (url.pathname === "/api/admin/retrieval/status" && request.method === "GET") {
+    return handleRetrievalIndexStatus(env);
+  }
   if (url.pathname === "/api/search" && request.method === "GET") {
     return handleSearchQuery(env, url.searchParams.get("q") || "", Number(url.searchParams.get("limit") || 10));
   }

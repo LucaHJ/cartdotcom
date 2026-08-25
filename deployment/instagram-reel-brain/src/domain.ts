@@ -698,7 +698,7 @@ export function parseMessageCommand(value: string): MessageCommand {
   if (/^(?:help|commands|what can (?:you|this) do)\s*[?.!]*$/i.test(text)) return { intent: "help" };
   const note = text.match(/^(?:note|remember|save\s+(?:a\s+)?note|add\s+(?:a\s+)?note)\s*:?\s+([\s\S]+)$/i);
   if (note?.[1]?.trim()) return { intent: "note", body: note[1].trim() };
-  const retrieval = text.match(/^(?:please\s+)?(?:send(?:\s+me)?|find|show(?:\s+me)?|get(?:\s+me)?|retrieve)\s+(?:the\s+|a\s+)?(?:video|reel)?\s*(?:about|where|that|with|mentioning)?\s*([\s\S]+)$/i);
+  const retrieval = text.match(/^(?:please\s+)?(?:send(?:\s+me)?|find(?:\s+me)?|show(?:\s+me)?|get(?:\s+me)?|retrieve)\s+(?:the\s+|a\s+)?(?:video|reel)?\s*(?:about|of|where|that|with|mentioning)?\s*(?:the\s+|a\s+)?([\s\S]+)$/i);
   const delivery = /\b(?:video\s+file|mp4|archive(?:d)?\s+(?:video|copy|file)|backup\s+(?:video|copy|file)|download(?:ed)?\s+(?:video|file)|taken\s+down|made\s+private|deleted|removed|unavailable)\b/i.test(text)
     ? "video_file" as const
     : "reel" as const;
