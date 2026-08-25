@@ -41,7 +41,7 @@ def control(args: argparse.Namespace, command: str) -> dict[str, Any]:
     return parse_json(result.stdout)
 
 
-def orchestrate(args: argparse.Namespace, candidate: dict[str, Any]) -> dict[str, Any]:
+def orchestrate(args: argparse.Namespace, candidate: dict[str, Any], lock_fd: int) -> dict[str, Any]:
     cmd = [
         "python3", "scripts/phase5_one_job_orchestrator.py", "--project-dir", args.project_dir,
         "--pilot-key", str(candidate["pilot_key"]), "--job-id", str(candidate["job_id"]),
@@ -50,20 +50,34 @@ def orchestrate(args: argparse.Namespace, candidate: dict[str, Any]) -> dict[str
         "--timeout-seconds", str(args.job_timeout), "--container-timeout", str(args.job_timeout),
         "--abort-on-compute-failure",
     ]
-    result = subprocess.run(cmd, cwd=args.project_dir, text=True, encoding="utf-8", errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=args.job_timeout + 120, check=False)
+    # Keep the dispatcher flock inherited by the exact orchestrator. If the
+    # dispatcher is killed, the in-flight child still owns serial authority and
+    # a watchdog replacement cannot launch a duplicate compute container.
+    result = subprocess.run(
+        cmd,
+        cwd=args.project_dir,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=args.job_timeout + 120,
+        check=False,
+        pass_fds=(lock_fd,),
+    )
     if result.returncode != 0:
         raise RuntimeError(f"Phase 6 exact orchestrator failed rc={result.returncode}: {(result.stderr or result.stdout)[-3000:]}")
     return parse_json(result.stdout)
 
 
-def run_once(args: argparse.Namespace) -> dict[str, Any]:
+def run_once(args: argparse.Namespace, lock_fd: int) -> dict[str, Any]:
     claimed = control(args, "claim-next")
     if claimed.get("idle") is True:
         return claimed
     candidate = claimed.get("candidate")
     if not isinstance(candidate, dict):
         raise RuntimeError("Phase 6 claim response omitted exact candidate")
-    outcome = orchestrate(args, candidate)
+    outcome = orchestrate(args, candidate, lock_fd)
     if outcome.get("aborted_after_compute_failure") is True:
         return {"ok": False, "idle": False, "aborted_job_id": candidate.get("job_id"), "pilot_key": candidate.get("pilot_key"), "recovery": "prepublication_abort"}
     return {"ok": True, "idle": False, "completed_job_id": candidate.get("job_id"), "pilot_key": candidate.get("pilot_key")}
@@ -93,7 +107,7 @@ def main() -> int:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         while True:
             try:
-                result = run_once(args)
+                result = run_once(args, lock.fileno())
                 print(json.dumps(result, sort_keys=True), flush=True)
             except Exception as error:  # noqa: BLE001
                 print(json.dumps({"ok": False, "error": str(error)[-2000:]}, sort_keys=True), flush=True)

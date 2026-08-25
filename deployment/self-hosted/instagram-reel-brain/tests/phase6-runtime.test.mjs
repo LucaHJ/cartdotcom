@@ -33,6 +33,7 @@ test("Phase 6 host dispatcher is serial, credential-free and reuses exact orches
   assert.match(dispatcher, /--lease-owner/);
   assert.match(dispatcher, /--abort-on-compute-failure/);
   assert.match(dispatcher, /aborted_after_compute_failure/);
+  assert.match(dispatcher, /pass_fds=\(lock_fd,\)/);
   assert.doesNotMatch(dispatcher, /read_text|Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
 });
 
