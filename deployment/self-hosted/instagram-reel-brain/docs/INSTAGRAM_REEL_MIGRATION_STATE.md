@@ -23,6 +23,15 @@ automatic link. Worker version is
 `282c170a-cafb-48c8-9317-e0cd878e774a`. The Phase 6 soak remains active and
 generation 2 remains the sole new-job processor.
 
+Confident retrieval delivery was changed on `2026-08-25` in commit `10f8727`
+and Worker version `090a0e9f-ea88-4831-914a-1468c5606ea7`. Instead of relying
+on inconsistent Instagram URL previews, the Worker replies with `.` to the
+matched completed job's original DM share using its durable
+`source_message_id`. A bare canonical URL is now failure-only fallback, while
+explicit archive requests retain username, description, and MP4 delivery.
+This is an edge-delivery change only; the Phase 6 generation, dispatcher,
+backlog fence, database schema, and processing authority are unchanged.
+
 Cloudflare remains authoritative for intake, edge spool, D1 recovery ledger,
 R2/KV, callbacks, and recovery deployment. The Ubuntu serial runner is the sole
 new-job processing authority. Cloudflare Container claims are disabled by the

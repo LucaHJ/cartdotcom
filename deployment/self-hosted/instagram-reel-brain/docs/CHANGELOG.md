@@ -2,6 +2,15 @@
 
 ## 2026-08-25
 
+- Changed confident Instagram retrieval delivery in commit `10f8727` and
+  Worker version `090a0e9f-ea88-4831-914a-1468c5606ea7`. The Worker now looks
+  up the matched completed job's original `source_message_id` and sends `.` as
+  a native `reply_to` message to that share. Bare Reel URLs are retained only
+  as a failed-reply or missing-message fallback; explicit archive requests keep
+  the contextual MP4 flow. The prior Daigo result used the same bare-link path
+  as other retrievals and only rendered differently because Instagram unfurled
+  that URL. No schema, backlog, processor, or authority setting changed.
+
 - Replaced newest-first substring retrieval with a deterministic ranked search
   index in commits `8992658`, `43e50b0`, `c1f0c03`, and `b7a6364` and Worker
   version `282c170a-cafb-48c8-9317-e0cd878e774a`. Migration

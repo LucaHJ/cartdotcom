@@ -79,6 +79,28 @@ Worker health:
 curl -fsS https://cartdotcom-instagram-reel-brain.lucajeannin.workers.dev/health
 ```
 
+## Retrieval Delivery
+
+- A confident normal retrieval should create one outbound event with
+  `kind='retrieval_reply'` and reply `.` to the matched job's original
+  `source_message_id`.
+- `kind='reel_link_fallback'` means Meta rejected the native reply or the
+  original message could not be targeted; the canonical URL was sent instead.
+- Explicit archive/file requests intentionally retain the username,
+  description, and archived MP4 sequence.
+- Ambiguous searches do not reply to a guessed Reel. They return candidate
+  information and require a more distinctive query.
+
+Read-only delivery audit:
+
+```sql
+SELECT source_message_id,job_id,kind,status,http_status,error,created_at
+FROM outbound_events
+WHERE kind IN ('retrieval_reply','reel_link_fallback')
+ORDER BY datetime(created_at) DESC
+LIMIT 20;
+```
+
 Expected while migration is gated:
 
 - `ok: true`
