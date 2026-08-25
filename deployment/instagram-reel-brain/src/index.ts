@@ -49,6 +49,7 @@ import {
   PHASE6_CLOUD_CONFIRMATION,
   PHASE6_LOCAL_CONFIRMATION,
   PHASE6_RELEASE_CONFIRMATION,
+  PHASE6_RETRY_CONFIRMATION,
   PHASE6_TRANSITION_CONFIRMATION,
   phase6AuthorityAllowsCloudClaims,
   phase6AuthorityAllowsLocalClaims,
@@ -56,6 +57,7 @@ import {
   phase6ShouldFenceNewJob,
   validatePhase6AuthorityRequest,
   validatePhase6ClaimRequest,
+  validatePhase6FailureRequest,
   type Phase6AuthoritySnapshot,
 } from "./phase6-authority";
 import {
@@ -4183,6 +4185,129 @@ async function handlePhase6Claim(request: Request, env: Env, release = false): P
   return json({ ok: true, claimed: true, idempotent: (result.meta.changes || 0) === 0, fence: post, authority });
 }
 
+async function handlePhase6Retry(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<Record<string, unknown>>(request);
+  let validated: ReturnType<typeof validatePhase6ClaimRequest>;
+  try {
+    validated = validatePhase6ClaimRequest(input, PHASE6_RETRY_CONFIRMATION);
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const authority = await phase6Authority(env);
+  if (!phase6AuthorityAllowsLocalClaims(authority) || authority.generation !== validated.expectedGeneration) {
+    return json({ ok: false, error: "Phase 6 local authority is not active for this generation", authority }, { status: 409 });
+  }
+  if (validated.pilotKey !== phase6PilotKey(authority.generation, validated.jobId)) {
+    return json({ ok: false, error: "Phase 6 retry identity does not match generation and job" }, { status: 409 });
+  }
+  const existing = await env.REEL_DB.prepare(
+    `SELECT f.status AS fence_status,f.rollback_reason,f.source_message_id,f.local_lease_owner,
+            j.status AS job_status,j.stage AS job_stage,j.attempts,j.created_at,j.completed_at,j.html_key,j.library_path
+     FROM phase5_local_pilot_fences f JOIN jobs j ON j.id=f.job_id
+     WHERE f.pilot_key=? AND f.job_id=? AND f.source_message_id=?`,
+  ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId).first<Record<string, unknown>>();
+  if (existing?.fence_status === "armed" && existing.job_status === "queued") {
+    return json({ ok: true, retry_armed: true, idempotent: true, job_id: validated.jobId, pilot_key: validated.pilotKey });
+  }
+  const createdTime = Date.parse(String(existing?.created_at || ""));
+  const watermarkTime = Date.parse(String(authority.cutover_watermark || ""));
+  if (
+    !existing
+    || existing.fence_status !== "rolled_back"
+    || !["queued", "failed"].includes(String(existing.job_status || ""))
+    || Number(existing.attempts || 0) >= 3
+    || existing.completed_at || existing.html_key || existing.library_path
+    || !Number.isFinite(createdTime) || !Number.isFinite(watermarkTime) || createdTime < watermarkTime
+  ) {
+    return json({ ok: false, error: "Phase 6 exact retry is not eligible", state: existing || null }, { status: 409 });
+  }
+  const expiresAt = new Date(Date.now() + 6 * 60 * 60_000).toISOString();
+  const queuedEmoji = await getEmoji(env, "queued");
+  const marker = `phase6-retry:${authority.generation}:${validated.jobId}:${Number(existing.attempts || 0) + 1}`;
+  const detail = JSON.stringify({ marker, reason: validated.reason, lease_owner: validated.leaseOwner, previous: existing });
+  const results = await env.REEL_DB.batch([
+    env.REEL_DB.prepare(
+      `UPDATE phase5_local_pilot_fences
+       SET status='armed',expires_at=?,local_lease_owner=NULL,local_lease_expires_at=NULL,
+           rollback_at=NULL,rollback_reason=NULL,updated_at=CURRENT_TIMESTAMP
+       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='rolled_back'`,
+    ).bind(expiresAt, validated.pilotKey, validated.jobId, validated.sourceMessageId),
+    env.REEL_DB.prepare(
+      `UPDATE jobs SET status='queued',stage='queued',status_emoji=?,error_code=NULL,error_message=NULL,
+       upload_token_hash=NULL,upload_token_expires_at=NULL,started_at=NULL,completed_at=NULL,processing_seconds=NULL,updated_at=CURRENT_TIMESTAMP
+       WHERE id=? AND status IN ('queued','failed') AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL AND attempts<3`,
+    ).bind(queuedEmoji.display, validated.jobId),
+    env.REEL_DB.prepare(
+      `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+       SELECT ?,'phase6_retry_armed','queued',?,?
+       WHERE NOT EXISTS(SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''),?)>0)`,
+    ).bind(validated.jobId, queuedEmoji.display, detail, validated.jobId, marker),
+  ]);
+  if ((results[0].meta.changes || 0) !== 1 || (results[1].meta.changes || 0) !== 1 || (results[2].meta.changes || 0) !== 1) {
+    return json({ ok: false, error: "Phase 6 exact retry lost its guarded transition" }, { status: 409 });
+  }
+  const job = await env.REEL_DB.prepare("SELECT id,source_message_id,sender_id FROM jobs WHERE id=?")
+    .bind(validated.jobId).first<JobRow>();
+  if (job) await reactToSourceMessage(env, job, "queued");
+  return json({ ok: true, retry_armed: true, idempotent: false, job_id: validated.jobId, pilot_key: validated.pilotKey, expires_at: expiresAt });
+}
+
+async function handlePhase6TerminalFailure(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<Record<string, unknown>>(request);
+  let validated: ReturnType<typeof validatePhase6FailureRequest>;
+  try {
+    validated = validatePhase6FailureRequest(input);
+  } catch (error) {
+    return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
+  }
+  const authority = await phase6Authority(env);
+  if (!phase6AuthorityAllowsLocalClaims(authority) || authority.generation !== validated.expectedGeneration) {
+    return json({ ok: false, error: "Phase 6 local authority is not active for this generation", authority }, { status: 409 });
+  }
+  if (validated.pilotKey !== phase6PilotKey(authority.generation, validated.jobId)) {
+    return json({ ok: false, error: "Phase 6 failure identity does not match generation and job" }, { status: 409 });
+  }
+  const job = await env.REEL_DB.prepare("SELECT * FROM jobs WHERE id=?").bind(validated.jobId).first<JobRow>();
+  const fence = await env.REEL_DB.prepare(
+    `SELECT pilot_key,job_id,source_message_id,status,local_lease_owner,rollback_reason
+     FROM phase5_local_pilot_fences WHERE pilot_key=? AND job_id=? AND source_message_id=?`,
+  ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId).first<Record<string, unknown>>();
+  if (job?.status === "failed" && job.error_code === validated.errorCode && fence?.status === "rolled_back") {
+    return json({ ok: true, failed: true, idempotent: true, job_id: validated.jobId, stage: validated.errorCode });
+  }
+  if (
+    !job || !fence || fence.status !== "rolled_back"
+    || fence.local_lease_owner !== validated.leaseOwner
+    || job.status !== "queued" || job.completed_at || job.html_key || job.library_path
+  ) {
+    return json({ ok: false, error: "Phase 6 terminal failure is not eligible", job_status: job?.status || null, fence: fence || null }, { status: 409 });
+  }
+  const emoji = await getEmoji(env, validated.errorCode);
+  const marker = `phase6-terminal-failure:${authority.generation}:${validated.jobId}:${validated.errorCode}`;
+  const detail = JSON.stringify({ marker, reason: validated.reason, error: validated.errorMessage });
+  const results = await env.REEL_DB.batch([
+    env.REEL_DB.prepare(
+      `UPDATE jobs SET status='failed',stage=?,status_emoji=?,error_code=?,error_message=?,
+       upload_token_hash=NULL,upload_token_expires_at=NULL,updated_at=CURRENT_TIMESTAMP
+       WHERE id=? AND status='queued' AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL`,
+    ).bind(validated.errorCode, emoji.display, validated.errorCode, validated.errorMessage, validated.jobId),
+    env.REEL_DB.prepare(
+      `UPDATE phase5_local_pilot_fences SET rollback_reason=?,updated_at=CURRENT_TIMESTAMP
+       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='rolled_back' AND local_lease_owner=?`,
+    ).bind(`phase6_terminal_failure:${validated.errorCode}`, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner),
+    env.REEL_DB.prepare(
+      `INSERT INTO job_events(job_id,stage,status,emoji,detail)
+       SELECT ?,?,'failed',?,?
+       WHERE NOT EXISTS(SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''),?)>0)`,
+    ).bind(validated.jobId, validated.errorCode, emoji.display, detail, validated.jobId, marker),
+  ]);
+  if ((results[0].meta.changes || 0) !== 1 || (results[1].meta.changes || 0) !== 1 || (results[2].meta.changes || 0) !== 1) {
+    return json({ ok: false, error: "Phase 6 terminal failure lost its guarded transition" }, { status: 409 });
+  }
+  await reactToSourceMessage(env, job, validated.errorCode);
+  return json({ ok: true, failed: true, idempotent: false, job_id: validated.jobId, stage: validated.errorCode });
+}
+
 async function handlePilotSummaryDm(request: Request, env: Env): Promise<Response> {
   const input = await readJson<{ pilot_key?: string; confirm_send?: string }>(request);
   const pilotKey = String(input.pilot_key || "").trim();
@@ -4772,8 +4897,12 @@ async function handleInstagramWebhook(request: Request, env: Env): Promise<Respo
       if (result.ignored || result.silent) {
         outboundOk = true;
       } else if (result.command === "emoji_display_changed") {
-        // Dashboard display icons are configurable, but they are never sent as chat messages.
-        outboundOk = true;
+        // Confirm configuration as a reaction on the command itself; never add an emoji chat message.
+        outboundOk = await reactToSourceMessage(
+          env,
+          { source_message_id: event.messageId, sender_id: event.senderId, id: commandId },
+          String(result.stage || "error_unknown"),
+        );
       } else {
         const reply = result.command === "note_saved"
         ? `Note saved: ${String(result.preview || "").slice(0, 180)}`
@@ -5965,6 +6094,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/api/admin/phase6/prefetch-next" && request.method === "GET") return handlePhase6PrefetchNext(request, env);
     if (url.pathname === "/api/admin/phase6/claim" && request.method === "POST") return handlePhase6Claim(request, env);
     if (url.pathname === "/api/admin/phase6/release" && request.method === "POST") return handlePhase6Claim(request, env, true);
+    if (url.pathname === "/api/admin/phase6/retry" && request.method === "POST") return handlePhase6Retry(request, env);
+    if (url.pathname === "/api/admin/phase6/fail" && request.method === "POST") return handlePhase6TerminalFailure(request, env);
     return json({ error: "Not found" }, { status: 404 });
   }
   if (url.pathname.startsWith("/api/admin/phase5/local-pilot/")) {

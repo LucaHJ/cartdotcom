@@ -123,6 +123,7 @@ export const DEFAULT_STAGE_REACTIONS: Record<string, EmojiSetting> = {
   synthesizing: { display: "💬", reaction: "💬" },
   complete: { display: "✅", reaction: "✅" },
   error_auth: { display: "🔐", reaction: "🔐" },
+  error_restricted: { display: "🔞", reaction: "🔞" },
   error_download: { display: "⛔", reaction: "⛔" },
   error_media: { display: "🎞️", reaction: "🎞️" },
   error_transcript: { display: "🎙️", reaction: "🎙️" },
@@ -685,9 +686,21 @@ export function canonicalArtifactKey(artifactType: ArtifactType, name: string): 
 }
 
 export function parseEmojiCommand(value: string): { stage: string; display: string } | null {
-  const match = value.trim().match(/^change\s+(?:the\s+)?emoji\s+for\s+([a-z0-9_-]+)\s+to\s+(.+)$/i);
+  const text = value.trim();
+  const match = text.match(/^change\s+(?:the\s+)?(?:emoji|icon)\s+for\s+([a-z0-9 _-]+?)\s+to\s+(.+)$/i)
+    || text.match(/^change\s+([a-z0-9 _-]+?)\s+(?:emoji|icon)\s+to\s+(.+)$/i);
   if (!match) return null;
-  return { stage: match[1].toLowerCase(), display: match[2].trim() };
+  const compact = match[1].trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const aliases: Record<string, string> = {
+    queue: "queued", queued: "queued",
+    download: "downloading", downloading: "downloading",
+    synthesis: "synthesizing", synthesise: "synthesizing", synthesising: "synthesizing",
+    synthesize: "synthesizing", synthesizing: "synthesizing",
+    complete: "complete", completed: "complete", done: "complete",
+    restricted: "error_restricted", restrictedaudience: "error_restricted", adult: "error_restricted", "18plus": "error_restricted",
+  };
+  const stage = aliases[compact] || match[1].trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return { stage, display: match[2].trim() };
 }
 
 export function parseMessageCommand(value: string): MessageCommand {

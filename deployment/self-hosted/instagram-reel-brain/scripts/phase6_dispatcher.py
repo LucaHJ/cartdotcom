@@ -29,13 +29,14 @@ def parse_json(text: str) -> dict[str, Any]:
     return parsed
 
 
-def control(args: argparse.Namespace, command: str) -> dict[str, Any]:
+def control(args: argparse.Namespace, command: str, extra_args: list[str] | None = None) -> dict[str, Any]:
     cmd = [
         "docker", "compose", "-f", args.compose_file, "--profile", "phase5-runner", "run", "--rm", "--no-deps",
         "--entrypoint", "python3", "--volume", f"{args.admin_token_host_file}:{TOKEN_CONTAINER_PATH}:ro",
         "phase5-control", CONTROL_SCRIPT, command, "--schema", args.schema,
         "--generation", str(args.generation), "--lease-owner", args.lease_owner,
     ]
+    cmd.extend(extra_args or [])
     result = subprocess.run(cmd, cwd=args.project_dir, text=True, encoding="utf-8", errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=args.control_timeout, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"Phase 6 control command failed rc={result.returncode}: {(result.stderr or result.stdout)[-2000:]}")
@@ -179,7 +180,20 @@ def run_once(args: argparse.Namespace, lock_fd: int) -> dict[str, Any]:
     outcome = orchestrate(args, candidate, lock_fd)
     append_performance(args, candidate, outcome, time.monotonic() - started)
     if outcome.get("aborted_after_compute_failure") is True:
-        return {"ok": False, "idle": False, "aborted_job_id": candidate.get("job_id"), "pilot_key": candidate.get("pilot_key"), "recovery": "prepublication_abort"}
+        failure = outcome.get("compute_failure") if isinstance(outcome.get("compute_failure"), dict) else {}
+        error_code = str(failure.get("error_code") or "error_unknown")
+        error_message = str(failure.get("error_message") or "Local compute failed before publication")[-1000:]
+        terminal = control(args, "fail-job", [
+            "--pilot-key", str(candidate["pilot_key"]),
+            "--job-id", str(candidate["job_id"]),
+            "--source-message-id", str(candidate["source_message_id"]),
+            "--error-code", error_code,
+            "--error-message", error_message,
+            "--reason", "phase6_compute_failed_after_safe_abort",
+        ])
+        if terminal.get("ok") is not True or terminal.get("failed") is not True:
+            raise RuntimeError(f"Phase 6 terminal failure reconciliation failed: {json.dumps(terminal, sort_keys=True)}")
+        return {"ok": False, "idle": False, "failed_job_id": candidate.get("job_id"), "pilot_key": candidate.get("pilot_key"), "stage": error_code, "recovery": "terminal_failure_after_prepublication_abort"}
     return {"ok": True, "idle": False, "completed_job_id": candidate.get("job_id"), "pilot_key": candidate.get("pilot_key")}
 
 

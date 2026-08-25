@@ -25,6 +25,8 @@ CONFIRMATIONS = {
     "cloud": "ROLL BACK PHASE 6 AUTHORITY TO CLOUD",
     "claim": "CLAIM EXACT PHASE 6 JOB",
     "release": "RELEASE EXACT PHASE 6 JOB",
+    "retry": "RETRY EXACT PHASE 6 JOB",
+    "fail": "FAIL EXACT PHASE 6 JOB",
 }
 
 
@@ -128,7 +130,14 @@ def insert_local_lease(runner: Any, args: argparse.Namespace, candidate: dict[st
           {sql_literal(pilot_key)},{sql_literal(job_id)},{sql_literal(source_message_id)},
           {sql_literal(pilot_key)},'leased',{sql_literal(args.lease_owner)},now(),now(),
           {sql_literal(lease_expiry)}::timestamptz,{sql_literal(overall_expiry)}::timestamptz,{sql_literal(detail)}::jsonb
-        ) ON CONFLICT (pilot_key) DO NOTHING RETURNING pilot_key,exact_job_id
+        ) ON CONFLICT (pilot_key) DO UPDATE SET
+          status='leased',lease_owner=excluded.lease_owner,lease_acquired_at=now(),lease_heartbeat_at=now(),
+          lease_expires_at=excluded.lease_expires_at,expires_at=excluded.expires_at,
+          rollback_at=NULL,rollback_reason=NULL,updated_at=now(),audit_json=excluded.audit_json
+        WHERE phase5_pilot_leases.exact_job_id=excluded.exact_job_id
+          AND phase5_pilot_leases.source_message_id=excluded.source_message_id
+          AND phase5_pilot_leases.status='rolled_back'
+        RETURNING pilot_key,exact_job_id
       ), event_insert AS (
         INSERT INTO {args.schema}.phase5_pilot_events(pilot_key,job_id,stage,status,detail)
         SELECT pilot_key,exact_job_id,'phase6_claimed','leased',{sql_literal(detail)}::jsonb FROM inserted RETURNING 1
@@ -246,14 +255,47 @@ def authority_action(args: argparse.Namespace) -> dict[str, Any]:
     return response
 
 
+def retry_job(args: argparse.Namespace) -> dict[str, Any]:
+    return worker_json("POST", "/api/admin/phase6/retry", payload={
+        "expected_generation": args.generation,
+        "confirmation": CONFIRMATIONS["retry"],
+        "pilot_key": args.pilot_key,
+        "job_id": args.job_id,
+        "source_message_id": args.source_message_id,
+        "lease_owner": args.lease_owner,
+        "lease_minutes": args.lease_minutes,
+        "reason": args.reason or "phase6_exact_operator_retry",
+    })
+
+
+def fail_job(args: argparse.Namespace) -> dict[str, Any]:
+    return worker_json("POST", "/api/admin/phase6/fail", payload={
+        "expected_generation": args.generation,
+        "confirmation": CONFIRMATIONS["fail"],
+        "pilot_key": args.pilot_key,
+        "job_id": args.job_id,
+        "source_message_id": args.source_message_id,
+        "lease_owner": args.lease_owner,
+        "lease_minutes": args.lease_minutes,
+        "error_code": args.error_code,
+        "error_message": args.error_message,
+        "reason": args.reason or "phase6_local_terminal_failure",
+    })
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Phase 6 control-container adapter")
-    parser.add_argument("command", choices=("state", "claim-next", "prefetch-next", "authority-transition", "authority-local", "authority-cloud"))
+    parser.add_argument("command", choices=("state", "claim-next", "prefetch-next", "retry-job", "fail-job", "authority-transition", "authority-local", "authority-cloud"))
     parser.add_argument("--schema", default=DEFAULT_SCHEMA)
     parser.add_argument("--generation", type=int, required=True)
     parser.add_argument("--lease-owner", default="phase6-local-worker-1")
     parser.add_argument("--lease-minutes", type=int, default=60)
     parser.add_argument("--reason", default="")
+    parser.add_argument("--pilot-key", default="")
+    parser.add_argument("--job-id", default="")
+    parser.add_argument("--source-message-id", default="")
+    parser.add_argument("--error-code", default="")
+    parser.add_argument("--error-message", default="")
     args = parser.parse_args()
     if not args.schema.replace("_", "").isalnum():
         raise SystemExit("invalid schema")
@@ -263,6 +305,10 @@ def main() -> int:
         payload = claim_next(args)
     elif args.command == "prefetch-next":
         payload = worker_json("GET", f"/api/admin/phase6/prefetch-next?{urlencode({'lease_owner': args.lease_owner})}")
+    elif args.command == "retry-job":
+        payload = retry_job(args)
+    elif args.command == "fail-job":
+        payload = fail_job(args)
     else:
         payload = authority_action(args)
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))

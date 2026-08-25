@@ -24,6 +24,9 @@ test("Phase 6 control keeps credentials inside the control container", () => {
   assert.match(control, /recoverable_active/);
   assert.match(control, /inserted == 1 and events == 1/);
   assert.match(control, /claim-next/);
+  assert.match(control, /retry-job/);
+  assert.match(control, /fail-job/);
+  assert.match(control, /phase5_pilot_leases\.status='rolled_back'/);
   assert.doesNotMatch(control, /print\(.*token|PGPASSWORD|docker\.sock|privileged/);
   assert.match(dockerfile, /phase6_dispatch_control\.py/);
 });
@@ -36,6 +39,7 @@ test("Phase 6 host dispatcher is serial, credential-free and reuses exact orches
   assert.match(dispatcher, /--lease-owner/);
   assert.match(dispatcher, /--abort-on-compute-failure/);
   assert.match(dispatcher, /aborted_after_compute_failure/);
+  assert.match(dispatcher, /terminal_failure_after_prepublication_abort/);
   assert.match(dispatcher, /pass_fds=\(lock_fd,\)/);
   assert.match(dispatcher, /prefetch-next/);
   assert.match(dispatcher, /job_stage.*synthesizing/s);
@@ -45,6 +49,9 @@ test("Phase 6 host dispatcher is serial, credential-free and reuses exact orches
 
 test("Phase 6 prefetch overlaps only read-only Reel acquisition with synthesis", () => {
   assert.match(worker, /handlePhase6PrefetchNext/);
+  assert.match(worker, /handlePhase6Retry/);
+  assert.match(worker, /handlePhase6TerminalFailure/);
+  assert.match(worker, /phase6_terminal_failure/);
   assert.match(worker, /f\.status='armed'/);
   assert.match(worker, /j\.status='queued'/);
   assert.match(worker, /j\.source_url LIKE '%\/reel\/%'/);

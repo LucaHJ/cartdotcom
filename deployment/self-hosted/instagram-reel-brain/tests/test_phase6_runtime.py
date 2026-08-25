@@ -9,6 +9,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL_PATH = ROOT / "scripts" / "phase6_dispatch_control.py"
 DISPATCHER_PATH = ROOT / "scripts" / "phase6_dispatcher.py"
+ORCHESTRATOR_PATH = ROOT / "scripts" / "phase5_one_job_orchestrator.py"
 
 
 def load_control():
@@ -23,6 +24,13 @@ def load_dispatcher():
     module = importlib.util.module_from_spec(spec)
     with mock.patch.dict(sys.modules, {"fcntl": mock.MagicMock()}):
         spec.loader.exec_module(module)
+    return module
+
+
+def load_orchestrator():
+    spec = importlib.util.spec_from_file_location("phase5_one_job_orchestrator_test", ORCHESTRATOR_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     return module
 
 
@@ -44,6 +52,14 @@ class FakeRunner:
 
 
 class Phase6RuntimeTests(unittest.TestCase):
+    def test_restricted_audience_compute_failure_is_classified_explicitly(self):
+        module = load_orchestrator()
+        result = module.compute_failure_summary(RuntimeError(
+            "yt-dlp exited 1: This content isn't available to everyone: It can't be seen by certain audiences."
+        ))
+        self.assertEqual(result["error_code"], "error_restricted")
+        self.assertIn("certain audiences", result["error_message"])
+
     def test_prefetch_requires_exact_active_synthesis_and_distinct_queued_reel(self):
         module = load_dispatcher()
         response = {
@@ -121,6 +137,29 @@ class Phase6RuntimeTests(unittest.TestCase):
         ), mock.patch.object(module, "worker_json", side_effect=responses):
             with self.assertRaisesRegex(RuntimeError, "cloud exact claim failed"):
                 module.claim_next(args())
+
+    def test_aborted_compute_is_reconciled_to_terminal_failure(self):
+        module = load_dispatcher()
+        candidate = {
+            "pilot_key": "phase6:2:job-1",
+            "job_id": "job-1",
+            "source_message_id": "message-1",
+            "created_at": "2026-08-25 10:00:00",
+        }
+        runtime_args = argparse.Namespace(generation=2)
+        with mock.patch.object(module, "control", side_effect=[
+            {"ok": True, "idle": False, "candidate": candidate},
+            {"ok": True, "failed": True, "stage": "error_restricted"},
+        ]) as control_call, mock.patch.object(module, "orchestrate", return_value={
+            "ok": True,
+            "aborted_after_compute_failure": True,
+            "compute_failure": {"error_code": "error_restricted", "error_message": "restricted audience"},
+        }), mock.patch.object(module, "append_performance"):
+            result = module.run_once(runtime_args, 7)
+        self.assertEqual(result["stage"], "error_restricted")
+        self.assertEqual(result["recovery"], "terminal_failure_after_prepublication_abort")
+        self.assertEqual(control_call.call_args_list[1].args[1], "fail-job")
+
 
 
 if __name__ == "__main__":

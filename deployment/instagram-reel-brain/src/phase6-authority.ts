@@ -3,6 +3,8 @@ export const PHASE6_LOCAL_CONFIRMATION = "SET PHASE 6 AUTHORITY SELF HOSTED";
 export const PHASE6_CLOUD_CONFIRMATION = "ROLL BACK PHASE 6 AUTHORITY TO CLOUD";
 export const PHASE6_CLAIM_CONFIRMATION = "CLAIM EXACT PHASE 6 JOB";
 export const PHASE6_RELEASE_CONFIRMATION = "RELEASE EXACT PHASE 6 JOB";
+export const PHASE6_RETRY_CONFIRMATION = "RETRY EXACT PHASE 6 JOB";
+export const PHASE6_FAIL_CONFIRMATION = "FAIL EXACT PHASE 6 JOB";
 
 export type Phase6AuthorityMode = "cloud" | "transition" | "self_hosted";
 
@@ -28,6 +30,11 @@ type ExactClaimRequest = AuthorityRequest & {
   source_message_id?: string;
   lease_owner?: string;
   lease_minutes?: number;
+};
+
+type ExactFailureRequest = ExactClaimRequest & {
+  error_code?: string;
+  error_message?: string;
 };
 
 function required(value: unknown, name: string, max = 500): string {
@@ -62,6 +69,18 @@ export function validatePhase6ClaimRequest(input: ExactClaimRequest, confirmatio
   };
 }
 
+export function validatePhase6FailureRequest(input: ExactFailureRequest) {
+  const exact = validatePhase6ClaimRequest(input, PHASE6_FAIL_CONFIRMATION);
+  const allowed = new Set(["error_restricted", "error_auth", "error_download", "error_media", "error_transcript", "error_research", "error_archive", "error_unknown"]);
+  const errorCode = required(input.error_code, "error_code", 80);
+  if (!allowed.has(errorCode)) throw new Error("error_code is not an allowed Phase 6 terminal failure");
+  return {
+    ...exact,
+    errorCode,
+    errorMessage: required(input.error_message, "error_message", 1000),
+  };
+}
+
 export function phase6AuthorityAllowsCloudClaims(snapshot: Phase6AuthoritySnapshot): boolean {
   return snapshot.mode === "cloud";
 }
@@ -85,4 +104,3 @@ export function phase6ShouldFenceNewJob(snapshot: Phase6AuthoritySnapshot, creat
 export function phase6PilotKey(generationValue: number, jobId: string): string {
   return `phase6:${generationValue}:${jobId}`;
 }
-

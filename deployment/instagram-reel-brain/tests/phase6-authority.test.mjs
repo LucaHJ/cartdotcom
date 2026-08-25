@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   PHASE6_CLAIM_CONFIRMATION,
+  PHASE6_FAIL_CONFIRMATION,
   PHASE6_LOCAL_CONFIRMATION,
   phase6AuthorityAllowsCloudClaims,
   phase6AuthorityAllowsLocalClaims,
@@ -10,6 +11,7 @@ import {
   phase6ShouldFenceNewJob,
   validatePhase6AuthorityRequest,
   validatePhase6ClaimRequest,
+  validatePhase6FailureRequest,
 } from "../src/phase6-authority.ts";
 
 const migration = readFileSync(new URL("../migrations/0024_phase6_processing_authority.sql", import.meta.url), "utf8");
@@ -41,6 +43,27 @@ test("Phase 6 validators require exact confirmation, generation and identity", (
     lease_minutes: 999,
   }, PHASE6_CLAIM_CONFIRMATION);
   assert.equal(claim.leaseMinutes, 360);
+  const failure = validatePhase6FailureRequest({
+    expected_generation: 1,
+    confirmation: PHASE6_FAIL_CONFIRMATION,
+    pilot_key: "phase6:1:job-1",
+    job_id: "job-1",
+    source_message_id: "message-1",
+    lease_owner: "phase6-local-worker-1",
+    error_code: "error_restricted",
+    error_message: "This content cannot be seen by certain audiences",
+  });
+  assert.equal(failure.errorCode, "error_restricted");
+  assert.throws(() => validatePhase6FailureRequest({
+    expected_generation: 1,
+    confirmation: PHASE6_FAIL_CONFIRMATION,
+    pilot_key: "phase6:1:job-1",
+    job_id: "job-1",
+    source_message_id: "message-1",
+    lease_owner: "phase6-local-worker-1",
+    error_code: "arbitrary",
+    error_message: "bad",
+  }), /allowed/);
 });
 
 test("Phase 6 schema forbids backlog and simultaneous authority", () => {
@@ -56,4 +79,14 @@ test("Phase 6 prefetch endpoint is authenticated, read-only and excludes active 
   assert.match(workerSource, /f\.status='armed'/);
   assert.match(workerSource, /j\.status='queued'/);
   assert.match(workerSource, /j\.source_url LIKE '%\/reel\/%'/);
+});
+
+test("Phase 6 exact retry and terminal failure routes stay authenticated and job-scoped", () => {
+  assert.match(workerSource, /\/api\/admin\/phase6\/retry/);
+  assert.match(workerSource, /\/api\/admin\/phase6\/fail/);
+  assert.match(workerSource, /PHASE6_RETRY_CONFIRMATION/);
+  assert.match(workerSource, /validatePhase6FailureRequest/);
+  assert.match(workerSource, /status='rolled_back'/);
+  assert.match(workerSource, /status='failed',stage=\?/);
+  assert.match(workerSource, /attempts<3/);
 });

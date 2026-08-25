@@ -265,6 +265,25 @@ test("routes Instagram text into retrieval, note, status, help, and emoji comman
     stage: "complete",
     display: "✅",
   });
+  assert.deepEqual(domain.parseMessageCommand("Change queue icon to 📥"), {
+    intent: "emoji",
+    stage: "queued",
+    display: "📥",
+  });
+  assert.deepEqual(domain.parseMessageCommand("Change downloading icon to ⬇️"), {
+    intent: "emoji",
+    stage: "downloading",
+    display: "⬇️",
+  });
+  assert.deepEqual(domain.parseMessageCommand("change restricted audience emoji to 🔞"), {
+    intent: "emoji",
+    stage: "error_restricted",
+    display: "🔞",
+  });
+  assert.equal(domain.shouldStoreLiveInstructionCandidate({
+    mode: "live", hasShare: false, emptyMessage: false,
+    commandIntent: domain.parseMessageCommand("Change queued icon to 📥").intent,
+  }), false);
 });
 
 test("requests archived files only when explicitly asked or the original is unavailable", () => {

@@ -123,6 +123,32 @@ def redact_output(text: str, secrets_to_redact: list[str]) -> str:
     return redacted[-4000:]
 
 
+def compute_failure_summary(error: Exception) -> dict[str, str]:
+    raw = " ".join(str(error).replace("\r", "\n").split())
+    lowered = raw.lower()
+    if any(marker in lowered for marker in (
+        "isn't available to everyone", "isn’t available to everyone",
+        "can't be seen by certain audiences", "cannot be seen by certain audiences",
+        "restricted audience", "age-restricted",
+    )):
+        code = "error_restricted"
+    elif "error_auth" in lowered or "authentication" in lowered or "login required" in lowered:
+        code = "error_auth"
+    elif "error_download" in lowered or "yt-dlp" in lowered or "gallery-dl" in lowered:
+        code = "error_download"
+    elif "error_media" in lowered or "ffmpeg" in lowered or "ffprobe" in lowered:
+        code = "error_media"
+    elif "error_transcript" in lowered or "transcri" in lowered or "whisper" in lowered:
+        code = "error_transcript"
+    elif "error_research" in lowered or "codex" in lowered:
+        code = "error_research"
+    elif "error_archive" in lowered or "artifact" in lowered or "publication" in lowered:
+        code = "error_archive"
+    else:
+        code = "error_unknown"
+    return {"error_code": code, "error_message": raw[-1000:] or type(error).__name__}
+
+
 def run_compose(args: argparse.Namespace, service: str, staged_args: list[str], *, token_host_file: Path | None = None, env: dict[str, str] | None = None) -> dict[str, Any]:
     command = [*compose_base(args), "run", "--rm", "--no-deps"]
     command.extend(["--entrypoint", "python3"])
@@ -384,8 +410,9 @@ def run_exact_flow(args: argparse.Namespace, *, worker_url: str, token_host_file
         if args.fault_at in ("after-processor-before-checkpoint", "attempt-control-state-write"):
             return {"ok": True, "stopped_at": args.fault_at, "compute_error": type(error).__name__, "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
         if args.abort_on_compute_failure:
+            failure = compute_failure_summary(error)
             events.append({"step": "control-abort", "result": run_compose(args, "phase5-control", ["control-abort", *control_common], token_host_file=token_host_file)})
-            return {"ok": True, "aborted_after_compute_failure": True, "compute_error": type(error).__name__, "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
+            return {"ok": True, "aborted_after_compute_failure": True, "compute_error": type(error).__name__, "compute_failure": failure, "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
         raise
     if args.fault_at == "after-compute":
         return {"ok": True, "stopped_at": "after-compute", "events": events, "checkpoint_host_path": str(checkpoint_host_path)}
