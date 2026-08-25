@@ -2,6 +2,16 @@
 
 ## 2026-08-25
 
+- Corrected the unsupported native-reply attempt in commit `fa489d4` and
+  Worker version `7dbf5ffb-c80d-4b73-b803-0c18e1b3b2b8`. Two live retrievals
+  selected the correct jobs but Meta rejected both `reply_to.mid` calls with
+  HTTP 400, code `100`, subcode `2534002`, "Invalid message ID". The same fresh
+  webhook message IDs remain valid reaction targets. Meta's Instagram-login
+  Send API documents outbound text/media and inbound inline-reply webhooks, but
+  no outbound inline-reply operation; media shares are restricted to media
+  owned by the professional account. The Worker no longer makes the doomed
+  call and has returned to one bare canonical URL per confident result.
+
 - Changed confident Instagram retrieval delivery in commit `10f8727` and
   Worker version `090a0e9f-ea88-4831-914a-1468c5606ea7`. The Worker now looks
   up the matched completed job's original `source_message_id` and sends `.` as
@@ -9,7 +19,8 @@
   as a failed-reply or missing-message fallback; explicit archive requests keep
   the contextual MP4 flow. The prior Daigo result used the same bare-link path
   as other retrievals and only rendered differently because Instagram unfurled
-  that URL. No schema, backlog, processor, or authority setting changed.
+  that URL. This attempted behaviour was subsequently disproved and removed as
+  recorded above. No schema, backlog, processor, or authority setting changed.
 
 - Replaced newest-first substring retrieval with a deterministic ranked search
   index in commits `8992658`, `43e50b0`, `c1f0c03`, and `b7a6364` and Worker

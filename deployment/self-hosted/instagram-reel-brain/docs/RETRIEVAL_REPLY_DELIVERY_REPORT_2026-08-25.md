@@ -1,5 +1,25 @@
 # Retrieval Reply Delivery Report — 2026-08-25
 
+Status: failed live acceptance and superseded by commit `fa489d4` / Worker
+version `7dbf5ffb-c80d-4b73-b803-0c18e1b3b2b8`.
+
+## Corrective finding
+
+Two live retrievals selected the correct Reel jobs but Meta rejected both
+native reply attempts with HTTP 400, OAuth code `100`, subcode `2534002`, and
+"Invalid message ID". Both targets were fresh webhook `message.mid` values and
+remained valid for the reaction endpoint. The Meta Instagram-login Send API
+documents inbound `reply_to` webhook fields, not an outbound inline-reply
+operation. Its native media-share operation is restricted to content owned by
+the professional account, so it cannot forward arbitrary saved Reels.
+
+The implementation described below is retained as failed-gate evidence. The
+production Worker no longer attempts `reply_to`; normal retrieval sends one
+canonical URL, and explicit archive requests retain contextual MP4 delivery.
+A native reply would require a separate logged-in Instagram-web automation
+service with materially different reliability, session, and account-risk
+characteristics.
+
 ## Outcome
 
 Confident Instagram retrievals now reply `.` to the matched completed job's

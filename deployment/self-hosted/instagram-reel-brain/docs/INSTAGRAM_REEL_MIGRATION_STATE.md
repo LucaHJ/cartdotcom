@@ -23,14 +23,17 @@ automatic link. Worker version is
 `282c170a-cafb-48c8-9317-e0cd878e774a`. The Phase 6 soak remains active and
 generation 2 remains the sole new-job processor.
 
-Confident retrieval delivery was changed on `2026-08-25` in commit `10f8727`
-and Worker version `090a0e9f-ea88-4831-914a-1468c5606ea7`. Instead of relying
-on inconsistent Instagram URL previews, the Worker replies with `.` to the
-matched completed job's original DM share using its durable
-`source_message_id`. A bare canonical URL is now failure-only fallback, while
-explicit archive requests retain username, description, and MP4 delivery.
-This is an edge-delivery change only; the Phase 6 generation, dispatcher,
-backlog fence, database schema, and processing authority are unchanged.
+An attempted native retrieval reply in commit `10f8727` was disproved by two
+live tests: Meta rejected both exact fresh webhook message IDs with HTTP 400,
+code `100`, subcode `2534002`, while the same IDs remained valid for reactions.
+The Instagram-login Send API does not document an outbound inline-reply
+operation, and its native media-share operation is limited to media owned by
+the professional account. Commit `fa489d4` removed the failed call; Worker
+version `7dbf5ffb-c80d-4b73-b803-0c18e1b3b2b8` sends the canonical URL once for
+normal retrieval and retains contextual MP4 delivery for explicit archive
+requests. A true reply-to-original-share experience would require a separate
+authenticated Instagram-web automation boundary and is not part of the
+supported Meta API pipeline. Phase 6 authority and backlog state are unchanged.
 
 Cloudflare remains authoritative for intake, edge spool, D1 recovery ledger,
 R2/KV, callbacks, and recovery deployment. The Ubuntu serial runner is the sole

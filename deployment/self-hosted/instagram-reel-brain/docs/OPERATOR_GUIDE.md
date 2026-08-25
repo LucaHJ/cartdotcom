@@ -81,11 +81,14 @@ curl -fsS https://cartdotcom-instagram-reel-brain.lucajeannin.workers.dev/health
 
 ## Retrieval Delivery
 
-- A confident normal retrieval should create one outbound event with
-  `kind='retrieval_reply'` and reply `.` to the matched job's original
-  `source_message_id`.
-- `kind='reel_link_fallback'` means Meta rejected the native reply or the
-  original message could not be targeted; the canonical URL was sent instead.
+- A confident normal retrieval creates one `reel_link` event containing the
+  matched job's bare canonical Instagram URL. Whether Instagram renders it as
+  a native Reel card or an in-app browser link is controlled by Instagram.
+- Do not use Messenger-style `reply_to.mid` with the Instagram-login Send API.
+  Live tests returned HTTP 400 / `100` / `2534002` for fresh share message IDs
+  that remained valid for reactions.
+- Do not use `MEDIA_SHARE` for third-party Reels. The documented Instagram
+  Send API restricts media/post attachments to content owned by the app user.
 - Explicit archive/file requests intentionally retain the username,
   description, and archived MP4 sequence.
 - Ambiguous searches do not reply to a guessed Reel. They return candidate
@@ -96,7 +99,7 @@ Read-only delivery audit:
 ```sql
 SELECT source_message_id,job_id,kind,status,http_status,error,created_at
 FROM outbound_events
-WHERE kind IN ('retrieval_reply','reel_link_fallback')
+WHERE kind IN ('reel_link','retrieval_reply','reel_link_fallback')
 ORDER BY datetime(created_at) DESC
 LIMIT 20;
 ```
