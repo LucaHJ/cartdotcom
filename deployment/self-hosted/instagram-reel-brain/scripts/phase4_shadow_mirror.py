@@ -48,6 +48,8 @@ MIRROR_TABLES = [
     "pending_dm_parts",
     "instagram_carousel_resolutions",
     "inbound_webhook_events",
+    "retrieval_documents",
+    "retrieval_terms",
 ]
 
 TABLE_KEY_COLUMNS = {
@@ -61,6 +63,8 @@ TABLE_KEY_COLUMNS = {
     "pending_dm_parts": "id",
     "instagram_carousel_resolutions": "source_message_id",
     "inbound_webhook_events": "source_message_id",
+    "retrieval_documents": "job_id",
+    "retrieval_terms": "mirror_key",
 }
 
 TYPED_TARGET_KEYS = {
@@ -74,6 +78,8 @@ TYPED_TARGET_KEYS = {
     "pending_dm_parts": ("pending_dm_parts", "id", "id"),
     "instagram_carousel_resolutions": ("instagram_carousel_resolutions", "source_message_id", "source_message_id"),
     "inbound_webhook_events": ("inbound_webhook_events", "source_message_id", "source_message_id"),
+    "retrieval_documents": ("retrieval_documents", "job_id", "job_id"),
+    "retrieval_terms": ("retrieval_terms", "job_id || ':' || term", "mirror_key"),
 }
 
 BOOL_COLUMNS = {
@@ -128,7 +134,7 @@ def stable_json(value: Any) -> str:
 
 
 def row_sha256(row: dict[str, Any]) -> str:
-    cleaned = {key: value for key, value in row.items() if key != "mirror_updated_at"}
+    cleaned = {key: value for key, value in row.items() if key not in {"mirror_updated_at", "mirror_key"}}
     return sha256_bytes(stable_json(cleaned).encode("utf-8"))
 
 
@@ -375,7 +381,7 @@ def download_object(base_url: str, token: str, watermark: str, object_root: Path
 
 
 def row_key(table: str, row: dict[str, Any]) -> str:
-    key = row.get(TABLE_KEY_COLUMNS[table])
+    key = row.get("mirror_key") or row.get(TABLE_KEY_COLUMNS[table])
     if key is None:
         raise ValueError(f"missing source key for {table}")
     return str(key)
@@ -432,6 +438,20 @@ def upsert_typed_sql(schema: str, table: str, row: dict[str, Any]) -> str:
         return insert_statement(schema, "instagram_carousel_resolutions", mapping, "ON CONFLICT (source_message_id) DO UPDATE SET " + ", ".join(
             f"{column}=excluded.{column}" for column in mapping if column not in {"id", "source_message_id"}
         ))
+    if table == "retrieval_documents":
+        columns = [
+            "job_id", "document_version", "title_text", "author_text", "description_text",
+            "instructions_text", "summary_text", "visual_text", "transcript_text", "comments_text",
+            "resource_names_text", "resource_details_text", "claims_text", "content_hash",
+            "source_updated_at", "indexed_at",
+        ]
+        mapping = {column: sql_literal(row.get(column)) for column in columns}
+        return insert_statement(schema, table, mapping, "ON CONFLICT (job_id) DO UPDATE SET " + ", ".join(
+            f"{column}=excluded.{column}" for column in columns if column != "job_id"
+        ))
+    if table == "retrieval_terms":
+        mapping = {column: sql_literal(row.get(column)) for column in ["job_id", "term", "indexed_at"]}
+        return insert_statement(schema, table, mapping, "ON CONFLICT (job_id,term) DO UPDATE SET indexed_at=excluded.indexed_at")
     generic_columns = {
         "resources": ["id", "job_id", "name", "slug", "kind", "canonical_url", "summary", "why_useful", "guide_markdown_key", "evidence_json", "created_at", "guide_html_key", "library_path", "artifact_type", "canonical_key", "guide_text", "media_json"],
         "notes": ["id", "sender_id", "body", "source_message_id", "created_at"],

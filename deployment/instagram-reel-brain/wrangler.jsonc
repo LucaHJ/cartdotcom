@@ -10,7 +10,8 @@
     "PUBLIC_BASE_URL": "https://cartdotcom-instagram-reel-brain.lucajeannin.workers.dev",
     "CODEX_RESEARCH_MODEL": "gpt-5.6-luna",
     "CODEX_RESEARCH_REASONING_EFFORT": "medium",
-    "INSTAGRAM_GRAPH_VERSION": "v24.0"
+    "INSTAGRAM_GRAPH_VERSION": "v24.0",
+    "PHASE7_ORIGIN_URL": "https://cartdotcom.com/api/reel-origin"
   },
   "ai": { "binding": "AI" },
   "browser": { "binding": "BROWSER" },

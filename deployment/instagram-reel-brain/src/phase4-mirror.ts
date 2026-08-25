@@ -8,7 +8,9 @@ export type Phase4MirrorTable =
   | "outbound_events"
   | "pending_dm_parts"
   | "instagram_carousel_resolutions"
-  | "inbound_webhook_events";
+  | "inbound_webhook_events"
+  | "retrieval_documents"
+  | "retrieval_terms";
 
 export type Phase4Cursor = {
   created_at: string;
@@ -20,6 +22,7 @@ export type Phase4TableSpec = {
   keyColumn: string;
   cursorExpression: string;
   columns: string[];
+  keyExpression?: string;
   extraWhere?: string;
 };
 
@@ -134,6 +137,26 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
     ],
     extraWhere: "datetime(created_at) >= datetime(?)",
   },
+  retrieval_documents: {
+    table: "retrieval_documents",
+    keyColumn: "job_id",
+    cursorExpression: "indexed_at",
+    columns: [
+      "job_id", "document_version", "title_text", "author_text", "description_text",
+      "instructions_text", "summary_text", "visual_text", "transcript_text", "comments_text",
+      "resource_names_text", "resource_details_text", "claims_text", "content_hash",
+      "source_updated_at", "indexed_at",
+    ],
+    extraWhere: "job_id IN (SELECT id FROM jobs WHERE datetime(created_at) >= datetime(?))",
+  },
+  retrieval_terms: {
+    table: "retrieval_terms",
+    keyColumn: "term",
+    keyExpression: "job_id || ':' || term",
+    cursorExpression: "indexed_at",
+    columns: ["job_id", "term", "indexed_at"],
+    extraWhere: "job_id IN (SELECT id FROM jobs WHERE datetime(created_at) >= datetime(?))",
+  },
 };
 
 export function isPhase4MirrorTable(value: string): value is Phase4MirrorTable {
@@ -231,7 +254,7 @@ function phase4ReplayLinkedJobScope(table: Phase4MirrorTable, scope: Phase4Mirro
   const jobScope = phase4ReplayJobScope(scope);
   if (!jobScope) return null;
   if (table === "jobs") return jobScope;
-  if (["job_events", "artifacts", "resources", "outbound_events"].includes(table)) {
+  if (["job_events", "artifacts", "resources", "outbound_events", "retrieval_documents", "retrieval_terms"].includes(table)) {
     return { sql: `job_id IN (SELECT id FROM jobs WHERE ${jobScope.sql})`, binds: jobScope.binds };
   }
   return { sql: "0 = 1", binds: [] };
@@ -239,7 +262,7 @@ function phase4ReplayLinkedJobScope(table: Phase4MirrorTable, scope: Phase4Mirro
 
 export function phase4DeltaQuery(table: Phase4MirrorTable, watermark: string, cursor: Phase4Cursor, limit: number, scope?: Phase4MirrorScope): { sql: string; binds: Array<string | number> } {
   const spec = PHASE4_MIRROR_TABLES[table];
-  const keyExpression = `CAST(${spec.keyColumn} AS TEXT)`;
+  const keyExpression = `CAST(${spec.keyExpression || spec.keyColumn} AS TEXT)`;
   const cursorExpression = spec.cursorExpression;
   const normalizedCursorExpression = phase4NormalizedTimestampExpression(cursorExpression);
   const mirrorTimestampExpression = phase4MirrorTimestampExpression(cursorExpression);
@@ -259,7 +282,7 @@ export function phase4DeltaQuery(table: Phase4MirrorTable, watermark: string, cu
   }
   binds.push(limit);
   return {
-    sql: `SELECT ${spec.columns.join(", ")}, ${mirrorTimestampExpression} AS mirror_updated_at FROM ${spec.table} WHERE ${where.join(" AND ")} ORDER BY ${normalizedCursorExpression} ASC, ${keyExpression} ASC LIMIT ?`,
+    sql: `SELECT ${spec.columns.join(", ")}, ${mirrorTimestampExpression} AS mirror_updated_at, ${keyExpression} AS mirror_key FROM ${spec.table} WHERE ${where.join(" AND ")} ORDER BY ${normalizedCursorExpression} ASC, ${keyExpression} ASC LIMIT ?`,
     binds,
   };
 }
@@ -269,7 +292,7 @@ export function phase4NextCursor(table: Phase4MirrorTable, rows: Array<Record<st
   const spec = PHASE4_MIRROR_TABLES[table];
   const last = rows[rows.length - 1];
   const createdAt = String(last.mirror_updated_at || last.created_at || "");
-  const key = String(last[spec.keyColumn] || "");
+  const key = String(last.mirror_key || last[spec.keyColumn] || "");
   return createdAt && key ? encodePhase4Cursor({ created_at: createdAt, key }) : null;
 }
 

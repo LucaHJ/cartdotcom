@@ -271,6 +271,8 @@ export interface Env {
   META_APP_SECRET?: string;
   META_WEBHOOK_VERIFY_TOKEN?: string;
   REEL_LIBRARY_SHARED_TOKEN?: string;
+  PHASE7_ORIGIN_URL?: string;
+  PHASE7_ORIGIN_TOKEN?: string;
 }
 
 const ARTIFACT_KINDS = new Set([
@@ -1371,6 +1373,67 @@ async function refreshSecondBrainManifest(env: Env): Promise<void> {
 const REEL_LIBRARY_FILE_PREFIX = "reel-library:file:";
 const REEL_LIBRARY_MANIFEST_KEY = "reel-library:manifest";
 
+function phase7OriginPath(base: string, kind: "object" | "library", path: string): string {
+  const encoded = path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  return `${base.replace(/\/$/, "")}/v1/${kind === "object" ? "object" : "library/file"}/${encoded}`;
+}
+
+async function putPhase7Origin(
+  env: Env,
+  kind: "object" | "library",
+  path: string,
+  body: BodyInit,
+  contentType: string,
+  byteSize: number,
+  contentSha256: string,
+): Promise<void> {
+  if (!env.PHASE7_ORIGIN_URL || !env.PHASE7_ORIGIN_TOKEN) return;
+  const response = await fetch(phase7OriginPath(env.PHASE7_ORIGIN_URL, kind, path), {
+    method: "PUT",
+    headers: {
+      authorization: `Bearer ${env.PHASE7_ORIGIN_TOKEN}`,
+      "content-type": contentType,
+      "content-length": String(byteSize),
+      "x-content-sha256": contentSha256,
+    },
+    body,
+  });
+  if (!response.ok) throw new Error(`Phase 7 local ${kind} write failed (${response.status})`);
+  const receipt = await response.json<{ ok?: boolean; bytes?: number; sha256?: string }>();
+  if (receipt.ok !== true || Number(receipt.bytes) !== byteSize || receipt.sha256 !== contentSha256) {
+    throw new Error(`Phase 7 local ${kind} receipt mismatch`);
+  }
+}
+
+async function putPhase7MirroredObject(
+  env: Env,
+  key: string,
+  value: string | ArrayBuffer,
+  options: R2PutOptions,
+): Promise<void> {
+  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
+  const digest = await sha256(value);
+  const contentType = options.httpMetadata && "contentType" in options.httpMetadata
+    ? options.httpMetadata.contentType || "application/octet-stream"
+    : "application/octet-stream";
+  await putPhase7Origin(env, "object", key, value, contentType, bytes.byteLength, digest);
+  await env.REEL_ARCHIVE.put(key, value, options);
+}
+
+async function pushPhase7Wake(request: Request, env: Env): Promise<void> {
+  if (!env.PHASE7_ORIGIN_URL || !env.PHASE7_ORIGIN_TOKEN) return;
+  const url = new URL(request.url);
+  const response = await fetch(`${env.PHASE7_ORIGIN_URL.replace(/\/$/, "")}/v1/wake`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.PHASE7_ORIGIN_TOKEN}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ wake_id: crypto.randomUUID(), path: url.pathname, accepted_at: new Date().toISOString() }),
+  });
+  if (!response.ok) throw new Error(`Phase 7 wake failed (${response.status})`);
+}
+
 function reelLibraryPaths(job: JobRow, payload: SynthesisPayload): { root: string; directory: string } {
   const author = slugify(payload.metadata.author_username || job.author_username || "unknown-creator");
   const reel = slugify(payload.metadata.shortcode || job.shortcode || job.id);
@@ -1384,14 +1447,16 @@ async function putReelLibraryHtml(
   html: string,
   metadata: Record<string, unknown>,
 ): Promise<void> {
-  if (!env.REEL_LIBRARY_KV) return;
   const encoded = new TextEncoder().encode(html);
+  const digest = await sha256(html);
+  await putPhase7Origin(env, "library", path, html, "text/html; charset=utf-8", encoded.byteLength, digest);
+  if (!env.REEL_LIBRARY_KV) return;
   await env.REEL_LIBRARY_KV.put(`${REEL_LIBRARY_FILE_PREFIX}${toBase64Url(path)}`, html, {
     metadata: {
       path,
       content_type: "text/html; charset=utf-8",
       bytes: encoded.byteLength,
-      sha256: await sha256(html),
+      sha256: digest,
       updated_at: new Date().toISOString(),
       source: "instagram-reel-brain",
       ...metadata,
@@ -5145,7 +5210,13 @@ async function handleArtifactUpload(request: Request, env: Env, jobId: string, k
   const objectKey = `reels/${job.shortcode || job.id}/${job.id}/${kind}/attempt-${Math.max(job.attempts, 1)}/${filename}`;
   const contentType = request.headers.get("content-type") || "application/octet-stream";
   const sha = request.headers.get("x-artifact-sha256");
-  await env.REEL_ARCHIVE.put(objectKey, request.body, {
+  const byteSize = Number(request.headers.get("content-length") || 0);
+  if (env.PHASE7_ORIGIN_URL && (!sha || !Number.isSafeInteger(byteSize) || byteSize <= 0)) {
+    return json({ error: "Phase 7 artifact upload requires content length and SHA-256" }, { status: 400 });
+  }
+  const [localBody, r2Body] = request.body.tee();
+  await putPhase7Origin(env, "object", objectKey, localBody, contentType, byteSize, sha || "");
+  await env.REEL_ARCHIVE.put(objectKey, r2Body, {
     httpMetadata: { contentType },
     customMetadata: { job_id: job.id, kind, source_url: job.canonical_url || job.source_url, ...(sha ? { sha256: sha } : {}) },
   });
@@ -5278,7 +5349,7 @@ async function handleComplete(request: Request, env: Env, jobId: string): Promis
   payload.audio = audio;
   const processingSeconds = processingSecondsSince(job.started_at || job.created_at);
   const synthesisKey = `reels/${job.shortcode || job.id}/${job.id}/synthesis/result.json`;
-  await env.REEL_ARCHIVE.put(synthesisKey, JSON.stringify(payload, null, 2), { httpMetadata: { contentType: "application/json" } });
+  await putPhase7MirroredObject(env, synthesisKey, JSON.stringify(payload, null, 2), { httpMetadata: { contentType: "application/json" } });
 
   const statements: D1PreparedStatement[] = [
     env.REEL_DB.prepare(
@@ -6232,8 +6303,7 @@ export class ReelBrainContainer extends Container {
   envVars = { CODEX_HOME: "/home/codex/.codex" };
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+async function handleFetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
       const authority = await phase6Authority(env);
@@ -6268,6 +6338,15 @@ export default {
     if (url.pathname.startsWith("/internal/")) return handleInternal(request, env);
     if (url.pathname.startsWith("/api/")) return handleApi(request, env);
     return json({ error: "Not found" }, { status: 404 });
+}
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const response = await handleFetch(request, env);
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && response.status < 500) {
+      ctx.waitUntil(pushPhase7Wake(request, env).catch((error) => console.error("Phase 7 wake failed", error)));
+    }
+    return response;
   },
 
   async queue(batch: MessageBatch<ReelJobMessage>, env: Env): Promise<void> {

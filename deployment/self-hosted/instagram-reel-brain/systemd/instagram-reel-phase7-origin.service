@@ -1,0 +1,27 @@
+[Unit]
+Description=Instagram Reel Phase 7 private origin and push wake
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lucaj
+Group=srvapps
+WorkingDirectory=/srv/cartdotcom/instagram-reel-brain
+ExecStart=/usr/bin/python3 /srv/cartdotcom/instagram-reel-brain/scripts/phase7_origin.py --token-file /srv/cartdotcom/reel-brain-secrets/phase7-origin-token
+Restart=on-failure
+RestartSec=3
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+MemoryMax=256M
+CPUQuota=25%
+TasksMax=64
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/cartdotcom/instagram-reel-brain/runs/phase7-origin /srv/cartdotcom/reel-brain-data /srv/cartdotcom/reel-brain-runs/phase4-shadow/2026-08-21_01-42-46
+
+[Install]
+WantedBy=multi-user.target

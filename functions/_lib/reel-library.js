@@ -33,3 +33,30 @@ export async function getReelLibraryFile(kv, pathValue) {
     if (result.value === null) return null;
     return { path, html: result.value, metadata: result.metadata || {} };
 }
+
+function phase7OriginHeaders(env) {
+    if (!env.PHASE7_ORIGIN_URL || !env.PHASE7_ORIGIN_TOKEN) return null;
+    return { authorization: `Bearer ${env.PHASE7_ORIGIN_TOKEN}` };
+}
+
+export async function getLiveReelLibraryManifest(env) {
+    const headers = phase7OriginHeaders(env);
+    if (!headers) return null;
+    const response = await fetch(`${env.PHASE7_ORIGIN_URL.replace(/\/$/, "")}/v1/library/manifest`, { headers });
+    if (!response.ok) throw new Error(`Local Reel Library returned ${response.status}`);
+    const payload = await response.json();
+    if (payload?.ok !== true || !Array.isArray(payload.files)) throw new Error("Local Reel Library manifest is invalid");
+    return payload;
+}
+
+export async function getLiveReelLibraryFile(env, pathValue) {
+    const headers = phase7OriginHeaders(env);
+    if (!headers) return null;
+    const path = normalizeLibraryPath(pathValue);
+    const encoded = path.split("/").map(encodeURIComponent).join("/");
+    const response = await fetch(`${env.PHASE7_ORIGIN_URL.replace(/\/$/, "")}/v1/library/file/${encoded}`, { headers });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Local Reel Library returned ${response.status}`);
+    const html = await response.text();
+    return { path, html, metadata: { source: "ubuntu", bytes: new TextEncoder().encode(html).byteLength } };
+}

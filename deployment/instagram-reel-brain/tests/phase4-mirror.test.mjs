@@ -69,6 +69,8 @@ test("Phase 4 mirror table allowlist excludes secret and mutation surfaces", () 
     "outbound_events",
     "pending_dm_parts",
     "resources",
+    "retrieval_documents",
+    "retrieval_terms",
   ]);
   assert.equal(Object.hasOwn(PHASE4_MIRROR_TABLES, "runtime_secrets"), false);
   assert.equal(Object.hasOwn(PHASE4_MIRROR_TABLES, "settings"), false);
@@ -85,7 +87,7 @@ test("Phase 4 delta queries enforce watermark, cursor, pagination, and post-wate
 
   const cursor = decodePhase4Cursor(encodePhase4Cursor({ created_at: "2026-08-20T20:06:00.000Z", key: "abc" }), watermark);
   const query = phase4DeltaQuery("artifacts", watermark, cursor, 25);
-  assert.match(query.sql, /strftime\('%Y-%m-%dT%H:%M:%fZ', datetime\(created_at\)\) AS mirror_updated_at FROM artifacts WHERE datetime\(created_at\) >= datetime\(\?\)/);
+  assert.match(query.sql, /strftime\('%Y-%m-%dT%H:%M:%fZ', datetime\(created_at\)\) AS mirror_updated_at, CAST\(id AS TEXT\) AS mirror_key FROM artifacts WHERE datetime\(created_at\) >= datetime\(\?\)/);
   assert.match(query.sql, /job_id IN \(SELECT id FROM jobs WHERE datetime\(created_at\) >= datetime\(\?\)\)/);
   assert.match(query.sql, /ORDER BY datetime\(created_at\) ASC, CAST\(id AS TEXT\) ASC LIMIT \?/);
   assert.deepEqual(query.binds, [
@@ -98,12 +100,16 @@ test("Phase 4 delta queries enforce watermark, cursor, pagination, and post-wate
   ]);
 
   const jobs = phase4DeltaQuery("jobs", watermark, decodePhase4Cursor(null, watermark), 10);
-  assert.match(jobs.sql, /strftime\('%Y-%m-%dT%H:%M:%fZ', datetime\(updated_at\)\) AS mirror_updated_at FROM jobs/);
+  assert.match(jobs.sql, /strftime\('%Y-%m-%dT%H:%M:%fZ', datetime\(updated_at\)\) AS mirror_updated_at, CAST\(id AS TEXT\) AS mirror_key FROM jobs/);
   assert.match(jobs.sql, /datetime\(created_at\) >= datetime\(\?\)/);
   assert.equal(jobs.binds.at(-2), watermark);
 
   const resources = phase4DeltaQuery("resources", watermark, decodePhase4Cursor(null, watermark), 10);
   assert.match(resources.sql, /strftime\('%Y-%m-%dT%H:%M:%fZ', datetime\(COALESCE\(\(SELECT updated_at FROM jobs WHERE jobs.id=resources.job_id\), created_at\)\)\) AS mirror_updated_at/);
+
+  const terms = phase4DeltaQuery("retrieval_terms", watermark, decodePhase4Cursor(null, watermark), 10);
+  assert.match(terms.sql, /CAST\(job_id \|\| ':' \|\| term AS TEXT\) AS mirror_key/);
+  assert.match(terms.sql, /job_id IN \(SELECT id FROM jobs WHERE datetime\(created_at\) >= datetime\(\?\)\)/);
 
   const oldPending = phase4DeltaQuery("pending_dm_parts", watermark, decodePhase4Cursor(null, watermark), 10);
   assert.match(oldPending.sql, /datetime\(COALESCE\(consumed_at, created_at\)\) >= datetime\(\?\)/);

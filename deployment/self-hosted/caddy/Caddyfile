@@ -18,6 +18,10 @@
 		reverse_proxy news-api:3000
 	}
 
+	handle_path /api/reel-origin/* {
+		reverse_proxy 172.19.0.1:3110
+	}
+
 	handle /api/* {
 		reverse_proxy news-api:3000
 	}

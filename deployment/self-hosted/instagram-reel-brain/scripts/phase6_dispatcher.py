@@ -7,6 +7,7 @@ import argparse
 import fcntl
 import json
 import os
+import signal
 import stat
 import subprocess
 import time
@@ -17,6 +18,15 @@ from typing import Any
 CONTROL_SCRIPT = "/opt/reel/phase6_dispatch_control.py"
 TOKEN_CONTAINER_PATH = "/run/control-secrets/phase5_admin_token"
 MAX_CONCURRENCY = 2
+WAKE_EVENT = None
+
+
+def install_wake_signal() -> threading.Event:
+    global WAKE_EVENT
+    import threading
+    WAKE_EVENT = threading.Event()
+    signal.signal(signal.SIGUSR1, lambda _signum, _frame: WAKE_EVENT.set())
+    return WAKE_EVENT
 
 
 def parse_json(text: str) -> dict[str, Any]:
@@ -251,6 +261,7 @@ def main() -> int:
     parser.add_argument("--performance-log", default="/srv/cartdotcom/instagram-reel-brain/runs/phase6-performance.jsonl")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
+    wake_event = install_wake_signal()
     args.project_dir = str(Path(args.project_dir).resolve())
     args.compose_file = str(Path(args.project_dir, args.compose_file).resolve())
     expected_owner = f"phase6-local-worker-{args.slot}"
@@ -274,7 +285,8 @@ def main() -> int:
                     return 1
             if args.once:
                 return 0
-            time.sleep(max(5, args.poll_seconds))
+            wake_event.wait(max(5, args.poll_seconds))
+            wake_event.clear()
 
 
 if __name__ == "__main__":

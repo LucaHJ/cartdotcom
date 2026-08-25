@@ -525,6 +525,10 @@ def operational_schema_sql(schema: str, migrations_dir: Path) -> str:
         "0001_phase1_inert_schema.sql",
         "0002_phase2_local_contracts.sql",
         "0003_phase3_cloud_schema_drift.sql",
+        "0004_phase4_shadow_live_mirror.sql",
+        "0005_phase5_controlled_pilot.sql",
+        "0007_phase6_concurrency_two.sql",
+        "0008_phase7_primary_data.sql",
     ]:
         migration = (migrations_dir / name).read_text(encoding="utf-8")
         statements.append(migration.replace("reel_brain", schema))
@@ -598,6 +602,19 @@ def postgres_operational_sql(
         statements.append(generic_insert_sql(schema, "settings", row))
     for row in sqlite_rows(connection, "runtime_secrets"):
         statements.append(import_runtime_secret_sql(schema, row))
+    for row in sqlite_rows(connection, "phase5_local_pilot_fences"):
+        statements.append(generic_insert_sql(schema, "phase5_local_pilot_fences", row))
+    for row in sqlite_rows(connection, "phase5_preintake_arms"):
+        statements.append(generic_insert_sql(schema, "phase5_preintake_arms", row))
+    statements.append(f"DELETE FROM {schema}.processing_authority;")
+    for row in sqlite_rows(connection, "processing_authority"):
+        statements.append(generic_insert_sql(schema, "processing_authority", row, {"dispatch_enabled", "codex_enabled", "outbound_enabled", "backlog_enabled"}))
+    for row in sqlite_rows(connection, "processing_authority_events"):
+        statements.append(generic_insert_sql(schema, "processing_authority_events", row))
+    for row in sqlite_rows(connection, "retrieval_documents"):
+        statements.append(generic_insert_sql(schema, "retrieval_documents", row))
+    for row in sqlite_rows(connection, "retrieval_terms"):
+        statements.append(generic_insert_sql(schema, "retrieval_terms", row))
 
     for table, expected in sorted(table_counts.items()):
         if table == "sqlite_sequence":
