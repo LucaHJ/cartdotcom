@@ -48,11 +48,13 @@ import {
   PHASE6_CLAIM_CONFIRMATION,
   PHASE6_CLOUD_CONFIRMATION,
   PHASE6_LOCAL_CONFIRMATION,
+  PHASE6_LOCAL_CONCURRENCY,
   PHASE6_RELEASE_CONFIRMATION,
   PHASE6_RETRY_CONFIRMATION,
   PHASE6_TRANSITION_CONFIRMATION,
   phase6AuthorityAllowsCloudClaims,
   phase6AuthorityAllowsLocalClaims,
+  phase6LeaseOwnerAllowed,
   phase6PilotKey,
   phase6ShouldFenceNewJob,
   validatePhase6AuthorityRequest,
@@ -4101,7 +4103,7 @@ async function phase6NextCandidate(env: Env, owner: string): Promise<Record<stri
 
 async function handlePhase6Next(request: Request, env: Env): Promise<Response> {
   const owner = String(new URL(request.url).searchParams.get("lease_owner") || "phase6-local-worker-1").trim();
-  if (!owner || owner.length > 160) return json({ ok: false, error: "lease_owner is invalid" }, { status: 400 });
+  if (!phase6LeaseOwnerAllowed(owner)) return json({ ok: false, error: "lease_owner is not an allowed Phase 6 worker slot" }, { status: 400 });
   const authority = await phase6Authority(env);
   if (!phase6AuthorityAllowsLocalClaims(authority)) return json({ ok: true, candidate: null, authority });
   return json({ ok: true, candidate: await phase6NextCandidate(env, owner), authority });
@@ -4109,7 +4111,7 @@ async function handlePhase6Next(request: Request, env: Env): Promise<Response> {
 
 async function handlePhase6PrefetchNext(request: Request, env: Env): Promise<Response> {
   const owner = String(new URL(request.url).searchParams.get("lease_owner") || "phase6-local-worker-1").trim();
-  if (!owner || owner.length > 160) return json({ ok: false, error: "lease_owner is invalid" }, { status: 400 });
+  if (!phase6LeaseOwnerAllowed(owner)) return json({ ok: false, error: "lease_owner is not an allowed Phase 6 worker slot" }, { status: 400 });
   const authority = await phase6Authority(env);
   if (!phase6AuthorityAllowsLocalClaims(authority)) return json({ ok: true, active: null, candidate: null, authority });
   const active = await env.REEL_DB.prepare(
@@ -4150,6 +4152,9 @@ async function handlePhase6Claim(request: Request, env: Env, release = false): P
   if (validated.pilotKey !== phase6PilotKey(authority.generation, validated.jobId)) {
     return json({ ok: false, error: "Phase 6 pilot key does not match generation and job" }, { status: 409 });
   }
+  if (!phase6LeaseOwnerAllowed(validated.leaseOwner)) {
+    return json({ ok: false, error: "Phase 6 lease owner is outside the configured worker slots" }, { status: 409 });
+  }
   if (release) {
     const result = await env.REEL_DB.prepare(
       `UPDATE phase5_local_pilot_fences SET status='armed',local_lease_owner=NULL,local_lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP
@@ -4164,13 +4169,17 @@ async function handlePhase6Claim(request: Request, env: Env, release = false): P
        local_lease_expires_at=CASE WHEN datetime(expires_at)<datetime(?) THEN expires_at ELSE ? END,updated_at=CURRENT_TIMESTAMP
      WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status IN ('armed','local_claimed')
        AND datetime(expires_at)>datetime('now')
-       AND (local_lease_owner IS NULL OR local_lease_owner=?)
-       AND NOT EXISTS(
-         SELECT 1 FROM phase5_local_pilot_fences other
-         WHERE other.pilot_key<>phase5_local_pilot_fences.pilot_key AND other.status IN ('local_claimed','local_processing')
+       AND (
+         (status='local_claimed' AND local_lease_owner=?)
+         OR (status='armed' AND local_lease_owner IS NULL AND (
+           SELECT COUNT(*) FROM phase5_local_pilot_fences other
+           WHERE other.pilot_key<>phase5_local_pilot_fences.pilot_key
+             AND other.status IN ('local_claimed','local_processing')
+         )<?)
        )
        AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=phase5_local_pilot_fences.job_id AND j.status='queued' AND j.pilot_run_id IS NULL)`,
-  ).bind(validated.leaseOwner, requestedExpiry, requestedExpiry, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
+  ).bind(validated.leaseOwner, requestedExpiry, requestedExpiry, validated.pilotKey, validated.jobId,
+    validated.sourceMessageId, validated.leaseOwner, PHASE6_LOCAL_CONCURRENCY).run();
   const post = await env.REEL_DB.prepare(
     `SELECT pilot_key,job_id,source_message_id,status,expires_at,local_lease_owner,local_lease_expires_at
      FROM phase5_local_pilot_fences WHERE pilot_key=? AND job_id=?`,

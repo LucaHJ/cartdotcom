@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Credential-free host dispatcher for serial Phase 6 exact jobs."""
+"""Credential-free host dispatcher for one bounded Phase 6 worker slot."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from typing import Any
 
 CONTROL_SCRIPT = "/opt/reel/phase6_dispatch_control.py"
 TOKEN_CONTAINER_PATH = "/run/control-secrets/phase5_admin_token"
+MAX_CONCURRENCY = 2
 
 
 def parse_json(text: str) -> dict[str, Any]:
@@ -87,6 +88,14 @@ def eligible_prefetch(response: dict[str, Any], current_job_id: str) -> dict[str
 
 
 def prefetch(args: argparse.Namespace, candidate: dict[str, Any]) -> dict[str, Any]:
+    prefetch_lock_path = Path(args.project_dir) / "runs" / "phase6-prefetch.lock"
+    prefetch_lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = prefetch_lock_path.open("w", encoding="utf-8")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        return {"ok": True, "job_id": candidate["job_id"], "skipped": "prefetch_slot_busy"}
     command = [
         "docker", "compose", "-f", args.compose_file, "--profile", "phase5-runner", "run", "--rm", "--no-deps",
         "--entrypoint", "python3", "phase6-prefetch", "/opt/reel/processor/app.py", "--prefetch",
@@ -94,14 +103,17 @@ def prefetch(args: argparse.Namespace, candidate: dict[str, Any]) -> dict[str, A
         prefetch_container_path(candidate),
     ]
     started = time.monotonic()
-    result = subprocess.run(
-        command, cwd=args.project_dir, text=True, encoding="utf-8", errors="replace",
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=args.prefetch_timeout, check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Phase 6 prefetch failed rc={result.returncode}: {(result.stderr or result.stdout)[-1200:]}")
-    payload = parse_json(result.stdout)
-    return {"job_id": candidate["job_id"], "seconds": round(time.monotonic() - started, 3), **payload}
+    try:
+        result = subprocess.run(
+            command, cwd=args.project_dir, text=True, encoding="utf-8", errors="replace",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=args.prefetch_timeout, check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Phase 6 prefetch failed rc={result.returncode}: {(result.stderr or result.stdout)[-1200:]}")
+        payload = parse_json(result.stdout)
+        return {"job_id": candidate["job_id"], "seconds": round(time.monotonic() - started, 3), **payload}
+    finally:
+        lock.close()
 
 
 def orchestrate(args: argparse.Namespace, candidate: dict[str, Any], lock_fd: int) -> dict[str, Any]:
@@ -148,7 +160,17 @@ def orchestrate(args: argparse.Namespace, candidate: dict[str, Any], lock_fd: in
     return outcome
 
 
-def append_performance(args: argparse.Namespace, candidate: dict[str, Any], outcome: dict[str, Any], elapsed: float) -> None:
+def parse_created_at(value: Any) -> datetime | None:
+    try:
+        text = str(value or "").strip().replace(" ", "T")
+        if text and not text.endswith(("Z", "+00:00")):
+            text += "Z"
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def append_performance(args: argparse.Namespace, candidate: dict[str, Any], outcome: dict[str, Any], elapsed: float, dispatch_started: datetime) -> None:
     result_summary: dict[str, Any] = {}
     result_path = outcome.get("result_host_path")
     if isinstance(result_path, str) and result_path:
@@ -158,13 +180,22 @@ def append_performance(args: argparse.Namespace, candidate: dict[str, Any], outc
                 result_summary = parsed["processor_result"]
         except Exception:
             result_summary = {}
+    recorded_at = datetime.now(timezone.utc)
+    timings = result_summary.get("timings") if isinstance(result_summary.get("timings"), dict) else None
+    processor_total = float(timings.get("total_seconds") or 0) if timings else 0.0
+    created_at = parse_created_at(candidate.get("created_at"))
     record = {
-        "recorded_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "recorded_at": recorded_at.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "dispatch_started_at": dispatch_started.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "generation": args.generation,
+        "dispatcher_slot": args.slot,
+        "concurrency_limit": MAX_CONCURRENCY,
         "job_id": candidate.get("job_id"),
         "created_at": candidate.get("created_at"),
+        "queue_wait_seconds": round(max(0.0, (dispatch_started - created_at).total_seconds()), 3) if created_at else None,
         "orchestration_seconds": round(elapsed, 3),
-        "processor_timings": result_summary.get("timings"),
+        "control_handover_seconds": round(max(0.0, elapsed - processor_total), 3) if timings else None,
+        "processor_timings": timings,
         "prefetch": outcome.get("prefetch"),
     }
     path = Path(args.performance_log)
@@ -181,9 +212,10 @@ def run_once(args: argparse.Namespace, lock_fd: int) -> dict[str, Any]:
     candidate = claimed.get("candidate")
     if not isinstance(candidate, dict):
         raise RuntimeError("Phase 6 claim response omitted exact candidate")
+    dispatch_started = datetime.now(timezone.utc)
     started = time.monotonic()
     outcome = orchestrate(args, candidate, lock_fd)
-    append_performance(args, candidate, outcome, time.monotonic() - started)
+    append_performance(args, candidate, outcome, time.monotonic() - started, dispatch_started)
     if outcome.get("aborted_after_compute_failure") is True:
         failure = outcome.get("compute_failure") if isinstance(outcome.get("compute_failure"), dict) else {}
         error_code = str(failure.get("error_code") or "error_unknown")
@@ -203,12 +235,13 @@ def run_once(args: argparse.Namespace, lock_fd: int) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Serial Phase 6 host dispatcher")
+    parser = argparse.ArgumentParser(description="Bounded Phase 6 host dispatcher slot")
     parser.add_argument("--project-dir", default="/srv/cartdotcom/instagram-reel-brain")
     parser.add_argument("--compose-file", default="compose.yaml")
     parser.add_argument("--schema", default="reel_phase4_shadow_20260821_014246")
     parser.add_argument("--generation", type=int, required=True)
-    parser.add_argument("--lease-owner", default="phase6-local-worker-1")
+    parser.add_argument("--slot", type=int, choices=range(1, MAX_CONCURRENCY + 1), default=1)
+    parser.add_argument("--lease-owner", default="")
     parser.add_argument("--admin-token-host-file", default="/srv/cartdotcom/instagram-reel-brain/secrets/phase5_admin_token")
     parser.add_argument("--poll-seconds", type=int, default=20)
     parser.add_argument("--job-timeout", type=int, default=900)
@@ -220,10 +253,14 @@ def main() -> int:
     args = parser.parse_args()
     args.project_dir = str(Path(args.project_dir).resolve())
     args.compose_file = str(Path(args.project_dir, args.compose_file).resolve())
+    expected_owner = f"phase6-local-worker-{args.slot}"
+    args.lease_owner = args.lease_owner or expected_owner
+    if args.lease_owner != expected_owner:
+        raise SystemExit("Phase 6 lease owner does not match dispatcher slot")
     token_path = Path(args.admin_token_host_file)
     if not token_path.exists() or stat.S_IMODE(token_path.stat().st_mode) & 0o077:
         raise SystemExit("Phase 6 token file is missing or not mode 0600")
-    lock_path = Path(args.project_dir) / "runs" / "phase6-dispatcher.lock"
+    lock_path = Path(args.project_dir) / "runs" / f"phase6-dispatcher-slot-{args.slot}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

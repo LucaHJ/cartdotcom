@@ -19,6 +19,7 @@ SAMPLES_PATH = RUN_ROOT / "samples.jsonl"
 LATEST_PATH = RUN_ROOT / "latest.json"
 HEALTH_URL = "https://cartdotcom-instagram-reel-brain.lucajeannin.workers.dev/health"
 SCHEMA = "reel_phase4_shadow_20260821_014246"
+CURRENT_CONCURRENCY = 2
 
 
 def now_iso() -> str:
@@ -119,16 +120,21 @@ def docker_state() -> dict[str, Any]:
 
 
 def dispatcher_state(generation: int) -> dict[str, Any]:
-    pid_path = ROOT / "runs" / "phase6-dispatcher.pid"
-    if not pid_path.exists():
-        return {"ok": False, "error": "pid_missing"}
-    pid = int(pid_path.read_text(encoding="utf-8").strip())
-    cmdline_path = Path(f"/proc/{pid}/cmdline")
-    if not cmdline_path.exists():
-        return {"ok": False, "pid": pid, "error": "process_missing"}
-    cmdline = cmdline_path.read_bytes().replace(b"\0", b" ").decode("utf-8", errors="replace")
-    expected = f"phase6_dispatcher.py --generation {generation}"
-    return {"ok": expected in cmdline, "pid": pid, "command_matches": expected in cmdline}
+    slots = []
+    for slot in range(1, CURRENT_CONCURRENCY + 1):
+        pid_path = ROOT / "runs" / f"phase6-dispatcher-{slot}.pid"
+        if not pid_path.exists():
+            slots.append({"slot": slot, "ok": False, "error": "pid_missing"})
+            continue
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+        cmdline_path = Path(f"/proc/{pid}/cmdline")
+        if not cmdline_path.exists():
+            slots.append({"slot": slot, "ok": False, "pid": pid, "error": "process_missing"})
+            continue
+        cmdline = cmdline_path.read_bytes().replace(b"\0", b" ").decode("utf-8", errors="replace")
+        expected = f"phase6_dispatcher.py --generation {generation} --slot {slot}"
+        slots.append({"slot": slot, "ok": expected in cmdline, "pid": pid, "command_matches": expected in cmdline})
+    return {"ok": all(item["ok"] for item in slots), "concurrency_limit": CURRENT_CONCURRENCY, "slots": slots}
 
 
 def sample(generation: int) -> dict[str, Any]:
@@ -149,7 +155,7 @@ def sample(generation: int) -> dict[str, Any]:
             failures.append("cloud_authority_mismatch")
         if pg.get("mode") != "self_hosted" or int(pg.get("generation", -1)) != generation:
             failures.append("postgres_authority_mismatch")
-        if int(active.get("claimed") or 0) + int(active.get("processing") or 0) > 1 or int(pg.get("active_leases") or 0) > 1:
+        if int(active.get("claimed") or 0) + int(active.get("processing") or 0) > CURRENT_CONCURRENCY or int(pg.get("active_leases") or 0) > CURRENT_CONCURRENCY:
             failures.append("concurrency_exceeded")
         for key in ("divergences", "mirror_errors", "stale_leases", "duplicate_completion_jobs", "publication_drift"):
             if int(pg.get(key) or 0) != 0:
@@ -162,6 +168,7 @@ def sample(generation: int) -> dict[str, Any]:
             "ok": not failures,
             "sampled_at": now_iso(),
             "generation": generation,
+            "concurrency_limit": CURRENT_CONCURRENCY,
             "failures": failures,
             "worker": health,
             "authority": authority,
@@ -188,7 +195,7 @@ def initialise(generation: int) -> dict[str, Any]:
         "not_before": (started + timedelta(days=7)).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "required_duration_days": 7,
         "backlog_enabled": False,
-        "concurrency": 1,
+        "concurrency": CURRENT_CONCURRENCY,
     }
     atomic_json(STATE_PATH, payload)
     return payload
@@ -235,4 +242,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

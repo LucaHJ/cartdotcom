@@ -37,7 +37,7 @@ for service in "${expected_services[@]}"; do
         const enabledKeys = Object.entries(enabled).filter(([, value]) => value !== 'false');
         if (payload.phase !== 'phase1-inert') throw new Error('unexpected phase');
         if (payload.authority !== 'cloud') throw new Error('unexpected authority');
-        if (payload.workerConcurrency !== 1) throw new Error('unexpected concurrency');
+        if (payload.workerConcurrency !== 2) throw new Error('unexpected concurrency');
         if (enabledKeys.length) throw new Error('unexpected enabled flags: ' + JSON.stringify(enabledKeys));
       });
   "

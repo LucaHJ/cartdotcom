@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 6 control-container adapter for authority and exact serial claims."""
+"""Phase 6 control-container adapter for bounded exact claims."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ RUNNER_PATH = Path(os.environ.get("REEL_PHASE5_RUNNER_PATH", "/opt/reel/phase5_o
 TOKEN_PATH = Path(os.environ.get("REEL_PHASE5_ADMIN_TOKEN_FILE", "/run/control-secrets/phase5_admin_token"))
 WORKER_URL = os.environ.get("REEL_PHASE6_WORKER_URL", "https://cartdotcom-instagram-reel-brain.lucajeannin.workers.dev")
 DEFAULT_SCHEMA = os.environ.get("REEL_PHASE6_SCHEMA", "reel_phase4_shadow_20260821_014246")
+MAX_CONCURRENCY = 2
+ALLOWED_LEASE_OWNERS = tuple(f"phase6-local-worker-{slot}" for slot in range(1, MAX_CONCURRENCY + 1))
 
 CONFIRMATIONS = {
     "transition": "SET PHASE 6 AUTHORITY TRANSITION",
@@ -122,15 +124,23 @@ def insert_local_lease(runner: Any, args: argparse.Namespace, candidate: dict[st
     overall_expiry = str(fence.get("expires_at") or lease_expiry)
     detail = json.dumps({"phase6": True, "generation": args.generation, "lease_owner": args.lease_owner}, separators=(",", ":"))
     rows = runner.psql_json(pg_args(args), args.schema, f"""
-      WITH inserted AS (
+      WITH capacity_lock AS (
+        SELECT pg_advisory_xact_lock(hashtext('instagram-reel-brain-phase6-capacity'))
+      ), inserted AS (
         INSERT INTO {args.schema}.phase5_pilot_leases(
           pilot_key,exact_job_id,source_message_id,cloud_fence_key,status,lease_owner,
           lease_acquired_at,lease_heartbeat_at,lease_expires_at,expires_at,audit_json
-        ) VALUES (
+        ) SELECT
           {sql_literal(pilot_key)},{sql_literal(job_id)},{sql_literal(source_message_id)},
           {sql_literal(pilot_key)},'leased',{sql_literal(args.lease_owner)},now(),now(),
           {sql_literal(lease_expiry)}::timestamptz,{sql_literal(overall_expiry)}::timestamptz,{sql_literal(detail)}::jsonb
-        ) ON CONFLICT (pilot_key) DO UPDATE SET
+        FROM capacity_lock
+        WHERE (SELECT count(*) FROM {args.schema}.phase5_pilot_leases WHERE status IN ('leased','processing')) < {MAX_CONCURRENCY}
+           OR EXISTS(SELECT 1 FROM {args.schema}.phase5_pilot_leases
+             WHERE pilot_key={sql_literal(pilot_key)} AND exact_job_id={sql_literal(job_id)}
+               AND source_message_id={sql_literal(source_message_id)} AND lease_owner={sql_literal(args.lease_owner)}
+               AND status IN ('leased','processing','completed'))
+        ON CONFLICT (pilot_key) DO UPDATE SET
           status='leased',lease_owner=excluded.lease_owner,lease_acquired_at=now(),lease_heartbeat_at=now(),
           lease_expires_at=excluded.lease_expires_at,expires_at=excluded.expires_at,
           rollback_at=NULL,rollback_reason=NULL,updated_at=now(),audit_json=excluded.audit_json
@@ -191,7 +201,7 @@ def claim_next(args: argparse.Namespace) -> dict[str, Any]:
         "source_message_id": candidate["source_message_id"],
         "lease_owner": args.lease_owner,
         "lease_minutes": args.lease_minutes,
-        "reason": "phase6_serial_dispatch",
+        "reason": "phase6_bounded_dispatch",
     }, allowed_error_statuses=(409,))
     fence = claim.get("fence") if isinstance(claim.get("fence"), dict) else None
     recoverable_active = bool(
@@ -299,6 +309,8 @@ def main() -> int:
     args = parser.parse_args()
     if not args.schema.replace("_", "").isalnum():
         raise SystemExit("invalid schema")
+    if args.lease_owner not in ALLOWED_LEASE_OWNERS:
+        raise SystemExit("lease owner is outside the configured Phase 6 worker slots")
     if args.command == "state":
         payload = worker_json("GET", "/api/admin/phase6/authority")
     elif args.command == "claim-next":

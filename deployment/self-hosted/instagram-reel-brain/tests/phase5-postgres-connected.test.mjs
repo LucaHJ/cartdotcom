@@ -120,14 +120,15 @@ ${migrationSql("0001_phase1_inert_schema.sql")}
 ${migrationSql("0002_phase2_local_contracts.sql")}
 ${migrationSql("0003_phase3_cloud_schema_drift.sql")}
 ${migrationSql("0004_phase4_shadow_live_mirror.sql")}
-${migrationSql("0005_phase5_controlled_pilot.sql")}`);
+${migrationSql("0005_phase5_controlled_pilot.sql")}
+${migrationSql("0007_phase6_concurrency_two.sql")}`);
 });
 
 test.after(() => {
   runPsql(`DROP SCHEMA IF EXISTS ${schema} CASCADE;`);
 });
 
-test("connected PostgreSQL enforces a single active Phase 5 lease and exact-job rollback", async () => {
+test("connected PostgreSQL permits two owner-isolated leases and exact-job rollback", async () => {
   await withRepo(async (repo) => {
     await repo.createJob({ id: "phase5-job-a", sourceUrl: "https://www.instagram.com/reel/PHASE5A/", sourceMessageId: "mid-a" });
     await repo.createJob({ id: "phase5-job-b", sourceUrl: "https://www.instagram.com/reel/PHASE5B/", sourceMessageId: "mid-b" });
@@ -143,18 +144,24 @@ test("connected PostgreSQL enforces a single active Phase 5 lease and exact-job 
     assert.equal(claimed.status, "leased");
     const wrongJob = await repo.claimPhase5PilotLease({ pilotKey: "phase5-a", jobId: "phase5-job-b", leaseOwner: "worker-b" });
     assert.equal(wrongJob, null);
-    assert.throws(
-      () => runPsql(
-        `INSERT INTO ${schema}.phase5_pilot_leases(
-          pilot_key,exact_job_id,source_message_id,cloud_fence_key,status,expires_at
-        ) VALUES (
-          'phase5-b','phase5-job-b','mid-b','phase5-b','armed',now() + interval '10 minutes'
-        );`,
-      ),
-      /phase5_pilot_leases_one_active_idx|duplicate key/i,
-    );
+    await repo.createPhase5PilotLease({
+      pilotKey: "phase5-b",
+      jobId: "phase5-job-b",
+      sourceMessageId: "mid-b",
+      cloudFenceKey: "phase5-b",
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    const second = await repo.claimPhase5PilotLease({ pilotKey: "phase5-b", jobId: "phase5-job-b", leaseOwner: "worker-b" });
+    assert.equal(second.status, "leased");
+    assert.throws(() => runPsql(
+      `INSERT INTO ${schema}.phase5_pilot_leases(
+         pilot_key,exact_job_id,source_message_id,cloud_fence_key,status,lease_owner,expires_at
+       ) VALUES ('phase5-c','phase5-job-b','mid-c','phase5-c','leased','worker-b',now() + interval '10 minutes');`,
+    ), /phase6_pilot_leases_active_owner_idx|duplicate key/i);
     const rolledBack = await repo.rollbackPhase5PilotLease({ pilotKey: "phase5-a", jobId: "phase5-job-a", reason: "connected rollback" });
     assert.equal(rolledBack.status, "rolled_back");
+    const secondRolledBack = await repo.rollbackPhase5PilotLease({ pilotKey: "phase5-b", jobId: "phase5-job-b", reason: "connected rollback two" });
+    assert.equal(secondRolledBack.status, "rolled_back");
   });
 
   const summary = JSON.parse(runPsql(
@@ -165,8 +172,8 @@ test("connected PostgreSQL enforces a single active Phase 5 lease and exact-job 
      ) t;`,
     { json: true },
   ))[0];
-  assert.equal(summary.rolled_back, 1);
-  assert.equal(summary.rollback_events, 1);
+  assert.equal(summary.rolled_back, 2);
+  assert.equal(summary.rollback_events, 2);
 });
 
 test("connected PostgreSQL Phase 5 lease transitions write events only after a guarded row update", async () => {

@@ -5,9 +5,11 @@ import {
   PHASE6_CLAIM_CONFIRMATION,
   PHASE6_FAIL_CONFIRMATION,
   PHASE6_LOCAL_CONFIRMATION,
+  PHASE6_LOCAL_CONCURRENCY,
   phase6AuthorityAllowsCloudClaims,
   phase6AuthorityAllowsLocalClaims,
   phase6PilotKey,
+  phase6LeaseOwnerAllowed,
   phase6ShouldFenceNewJob,
   validatePhase6AuthorityRequest,
   validatePhase6ClaimRequest,
@@ -21,6 +23,10 @@ const cloud = { mode: "cloud", generation: 0, dispatch_enabled: 0, codex_enabled
 const local = { mode: "self_hosted", generation: 1, dispatch_enabled: 1, codex_enabled: 1, outbound_enabled: 1, backlog_enabled: 0, cutover_watermark: "2026-08-23T01:00:00Z" };
 
 test("Phase 6 authority helpers enforce exclusive claims and post-watermark fencing", () => {
+  assert.equal(PHASE6_LOCAL_CONCURRENCY, 2);
+  assert.equal(phase6LeaseOwnerAllowed("phase6-local-worker-1"), true);
+  assert.equal(phase6LeaseOwnerAllowed("phase6-local-worker-2"), true);
+  assert.equal(phase6LeaseOwnerAllowed("phase6-local-worker-3"), false);
   assert.equal(phase6AuthorityAllowsCloudClaims(cloud), true);
   assert.equal(phase6AuthorityAllowsLocalClaims(cloud), false);
   assert.equal(phase6AuthorityAllowsCloudClaims(local), false);
@@ -28,6 +34,12 @@ test("Phase 6 authority helpers enforce exclusive claims and post-watermark fenc
   assert.equal(phase6ShouldFenceNewJob(local, "2026-08-23T01:00:00Z"), true);
   assert.equal(phase6ShouldFenceNewJob(local, "2026-08-23T00:59:59Z"), false);
   assert.equal(phase6PilotKey(1, "job-1"), "phase6:1:job-1");
+});
+
+test("Phase 6 claim route enforces the bounded two-slot authority", () => {
+  assert.match(workerSource, /phase6LeaseOwnerAllowed\(validated\.leaseOwner\)/);
+  assert.match(workerSource, /SELECT COUNT\(\*\) FROM phase5_local_pilot_fences other/);
+  assert.match(workerSource, /PHASE6_LOCAL_CONCURRENCY/);
 });
 
 test("Phase 6 validators require exact confirmation, generation and identity", () => {

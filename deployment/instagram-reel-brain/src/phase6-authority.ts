@@ -5,6 +5,7 @@ export const PHASE6_CLAIM_CONFIRMATION = "CLAIM EXACT PHASE 6 JOB";
 export const PHASE6_RELEASE_CONFIRMATION = "RELEASE EXACT PHASE 6 JOB";
 export const PHASE6_RETRY_CONFIRMATION = "RETRY EXACT PHASE 6 JOB";
 export const PHASE6_FAIL_CONFIRMATION = "FAIL EXACT PHASE 6 JOB";
+export const PHASE6_LOCAL_CONCURRENCY = 2;
 
 export type Phase6AuthorityMode = "cloud" | "transition" | "self_hosted";
 
@@ -103,4 +104,8 @@ export function phase6ShouldFenceNewJob(snapshot: Phase6AuthoritySnapshot, creat
 
 export function phase6PilotKey(generationValue: number, jobId: string): string {
   return `phase6:${generationValue}:${jobId}`;
+}
+
+export function phase6LeaseOwnerAllowed(owner: string): boolean {
+  return Array.from({ length: PHASE6_LOCAL_CONCURRENCY }, (_unused, index) => `phase6-local-worker-${index + 1}`).includes(owner);
 }

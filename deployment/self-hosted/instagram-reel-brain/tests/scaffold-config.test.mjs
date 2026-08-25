@@ -37,8 +37,8 @@ test("compose keeps every operational flag disabled", () => {
     assert.match(compose, new RegExp(`${key}: "\\$\\{${key}:-false\\}"`));
     assert.match(envExample, new RegExp(`${key}=false`));
   }
-  assert.match(compose, /REEL_WORKER_CONCURRENCY: "\$\{REEL_WORKER_CONCURRENCY:-1\}"/);
-  assert.match(envExample, /REEL_WORKER_CONCURRENCY=1/);
+  assert.match(compose, /REEL_WORKER_CONCURRENCY: "\$\{REEL_WORKER_CONCURRENCY:-2\}"/);
+  assert.match(envExample, /REEL_WORKER_CONCURRENCY=2/);
 });
 
 test("compose resource ceilings remain under phase one limits", () => {

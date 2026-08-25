@@ -1,6 +1,7 @@
 import argparse
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -76,6 +77,19 @@ class Phase6RuntimeTests(unittest.TestCase):
         response["active"]["job_stage"] = "synthesizing"
         response["candidate"]["job_id"] = "current"
         self.assertIsNone(module.eligible_prefetch(response, "current"))
+
+    def test_prefetch_global_slot_busy_skips_without_container(self):
+        module = load_dispatcher()
+        candidate = {"job_id": "job-2", "source_url": "https://www.instagram.com/reel/x/", "source_message_id": "m-2", "attempts": 0}
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(module.fcntl, "flock", side_effect=BlockingIOError), mock.patch.object(module.subprocess, "run") as run:
+            result = module.prefetch(argparse.Namespace(project_dir=root), candidate)
+        self.assertEqual(result["skipped"], "prefetch_slot_busy")
+        run.assert_not_called()
+
+    def test_created_at_is_utc_and_queue_wait_can_be_measured(self):
+        module = load_dispatcher()
+        value = module.parse_created_at("2026-08-25 10:00:00")
+        self.assertEqual(value.isoformat(), "2026-08-25T10:00:00+00:00")
 
     def test_retry_attempt_uses_fresh_checkpoint_and_prefetch_paths(self):
         module = load_dispatcher()
