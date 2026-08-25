@@ -17,6 +17,16 @@ one. Historical backlog remains disabled, the required seven-day soak remains
 active, and stage-level comparison is recorded in
 `PHASE_6_CONCURRENCY_TWO_PERFORMANCE_2026-08-25.md`.
 
+The Phase 7 readiness check at `2026-08-25T13:24:08.378Z` did not pass:
+`phase6_soak_monitor.py gate --generation 2` reported 726 samples, 64 genuine
+post-watermark completions, 46 failed samples and an incomplete duration. Three
+failures were transient one-shot control containers observed while removing;
+43 were the genuine stale-lease incident on 25 August. Current state is clean,
+but the failed evidence is preserved and Phase 7 has not started. The intended
+Phase 7 handover is an authenticated private push wake after durable edge-spool
+commit, with idempotent cursor draining into PostgreSQL and only a slow safety
+reconciliation poll. See `PHASE_7_READINESS_CHECK_2026-08-25.md`.
+
 Phase 6 performance was tuned on `2026-08-25` in commit `c1e3765` and Worker
 version `4ff08465-a579-4b4e-b1aa-c1a39d6ede86`. Exact synthesis remains
 serial, but its compute limit is now `0.50` CPU. A separate secret-free
