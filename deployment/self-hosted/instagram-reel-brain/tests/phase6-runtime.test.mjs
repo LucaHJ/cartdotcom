@@ -6,6 +6,7 @@ const control = readFileSync(new URL("../scripts/phase6_dispatch_control.py", im
 const dispatcher = readFileSync(new URL("../scripts/phase6_dispatcher.py", import.meta.url), "utf8");
 const authority = readFileSync(new URL("../scripts/phase6_authority.py", import.meta.url), "utf8");
 const watchdog = readFileSync(new URL("../scripts/phase6_dispatcher_watchdog.sh", import.meta.url), "utf8");
+const mirrorWatchdog = readFileSync(new URL("../scripts/phase4_mirror_watchdog.sh", import.meta.url), "utf8");
 const soak = readFileSync(new URL("../scripts/phase6_soak_monitor.py", import.meta.url), "utf8");
 const performance = readFileSync(new URL("../scripts/phase6_performance_report.py", import.meta.url), "utf8");
 const dockerfile = readFileSync(new URL("../phase5-runner/Dockerfile", import.meta.url), "utf8");
@@ -110,6 +111,13 @@ test("Phase 6 dispatcher watchdog is reboot-safe and authority-aware", () => {
   assert.match(watchdog, /phase6-dispatcher-\$slot\.pid/);
   assert.match(watchdog, /--slot "\$slot"/);
   assert.doesNotMatch(watchdog, /Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
+});
+
+test("Phase 6 handover uses bounded low-latency mirror and dispatcher polling", () => {
+  assert.match(mirrorWatchdog, /MIRROR_POLL_SECONDS=15/);
+  assert.match(mirrorWatchdog, /--interval-seconds "\$MIRROR_POLL_SECONDS"/);
+  assert.match(dispatcher, /--poll-seconds", type=int, default=10/);
+  assert.doesNotMatch(mirrorWatchdog, /--interval-seconds 300/);
 });
 
 test("Phase 6 soak monitor preserves the full gate and checks critical regressions", () => {

@@ -243,7 +243,7 @@ def main() -> int:
     parser.add_argument("--slot", type=int, choices=range(1, MAX_CONCURRENCY + 1), default=1)
     parser.add_argument("--lease-owner", default="")
     parser.add_argument("--admin-token-host-file", default="/srv/cartdotcom/instagram-reel-brain/secrets/phase5_admin_token")
-    parser.add_argument("--poll-seconds", type=int, default=20)
+    parser.add_argument("--poll-seconds", type=int, default=10)
     parser.add_argument("--job-timeout", type=int, default=900)
     parser.add_argument("--control-timeout", type=int, default=120)
     parser.add_argument("--prefetch-timeout", type=int, default=300)

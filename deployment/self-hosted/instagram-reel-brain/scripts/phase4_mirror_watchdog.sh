@@ -8,6 +8,7 @@ LOG_FILE="$RUN_DIR/mirror-supervised.log"
 EXPECTED_SCRIPT="/srv/cartdotcom/instagram-reel-brain/scripts/phase4_shadow_mirror.py"
 EXPECTED_SCHEMA="reel_phase4_shadow_20260821_014246"
 EXPECTED_WATERMARK="2026-08-21T01:42:46Z"
+MIRROR_POLL_SECONDS=15
 
 mkdir -p "$RUN_DIR"
 
@@ -60,7 +61,7 @@ pid_matches_expected_mirror() {
       --object-root "$RUN_DIR/objects" \
       --token-file /srv/cartdotcom/reel-brain-secrets/phase4-mirror-token \
       --limit 100 \
-      --interval-seconds 300 \
+      --interval-seconds "$MIRROR_POLL_SECONDS" \
       >> "$LOG_FILE" 2>&1 &
   echo "$!" > "$PID_FILE"
 ) 9>"$LOCK_FILE"
