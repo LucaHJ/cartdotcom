@@ -10,8 +10,12 @@ runtime, corrected native-control and control/compute secret isolation, added
 the staged host orchestrator, authenticated control checkpoints, and installed
 a dedicated narrow Worker control token as a control-only mode-0600 server
 file. Phase 6 processing authority is now local on generation 2 with a durable
-watermark of `2026-08-23T01:17:09.133Z`. The serial dispatcher is supervised,
-historical backlog remains disabled, and the required seven-day soak is active.
+watermark of `2026-08-23T01:17:09.133Z`. Two exact dispatcher slots are
+supervised from `2026-08-25T12:47:56.931Z`; D1 and PostgreSQL independently
+enforce the concurrency-two fence, and speculative prefetch remains limited to
+one. Historical backlog remains disabled, the required seven-day soak remains
+active, and stage-level comparison is recorded in
+`PHASE_6_CONCURRENCY_TWO_PERFORMANCE_2026-08-25.md`.
 
 Phase 6 performance was tuned on `2026-08-25` in commit `c1e3765` and Worker
 version `4ff08465-a579-4b4e-b1aa-c1a39d6ede86`. Exact synthesis remains

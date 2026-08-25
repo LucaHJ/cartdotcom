@@ -229,22 +229,26 @@ completion callback is durable, compute is skipped and finalization proceeds.
 Rerun the same exact host command. Control state and Worker state lead to local
 completion without repeating Codex, publication, or reactions.
 
-### Phase 6 queue stops behind one processing lease
+### Phase 6 queue stops behind an exact processing lease
 
 Inspect the authority and soak state first:
 
 ```bash
 python3 scripts/phase6_authority.py state --generation 2
 cat runs/phase6-soak/latest.json
-tail -n 80 runs/phase6-dispatcher.log
+tail -n 80 runs/phase6-dispatcher-1.log
+tail -n 80 runs/phase6-dispatcher-2.log
+cat runs/phase6-concurrency2/latest.json
 ```
 
 After commits `14c31d9` and `2a856f1`, the dispatcher treats a 409 for the
 same exact `local_processing` fence and owner as a restart request. It renews
 or reconciles through `control-start`, then resumes compute or performs the
 guarded pre-publication abort. Other owners, source messages and generation
-keys still fail closed. The dispatcher lock is inherited by an in-flight
-orchestrator; do not manually remove the lock or start a second dispatcher.
+keys still fail closed. Each of the two exact dispatcher slots inherits its own
+lock into the in-flight orchestrator; do not manually remove either lock or
+start an unconfigured third dispatcher. Speculative prefetch is separately
+limited to one global slot.
 
 If a deployment must restart the dispatcher, first prove that no
 `phase5_one_job_orchestrator.py` or Phase 5 compute container remains. The

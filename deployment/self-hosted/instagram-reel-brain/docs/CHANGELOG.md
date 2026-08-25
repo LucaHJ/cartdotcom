@@ -2,6 +2,16 @@
 
 ## 2026-08-25
 
+- Raised Phase 6 processing concurrency from one to two in commit `4e4c86f`
+  and Worker version `b20c3661-ea53-4622-8f92-e7604d9a1309`. Two exact worker
+  identities are fenced in D1 and PostgreSQL, each dispatcher has an inherited
+  slot lock, and speculative prefetch remains globally limited to one. New
+  telemetry records queue wait, download, media preparation, Codex,
+  completion, orchestration, control/handover, prefetch hits, overlap and
+  throughput. The baseline is seven jobs averaging 250.413 seconds of
+  orchestration; natural post-change shares are tracked automatically from
+  `2026-08-25T12:47:56.931Z`. Backlog remains disabled.
+
 - Increased the Phase 6 synthesis container from `0.10` to `0.50` CPU and
   added a secret-free `0.25` CPU Reel-only prefetch service in commit
   `c1e3765` / Worker version `4ff08465-a579-4b4e-b1aa-c1a39d6ede86`.
