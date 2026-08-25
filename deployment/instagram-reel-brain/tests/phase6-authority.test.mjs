@@ -89,4 +89,7 @@ test("Phase 6 exact retry and terminal failure routes stay authenticated and job
   assert.match(workerSource, /status='rolled_back'/);
   assert.match(workerSource, /status='failed',stage=\?/);
   assert.match(workerSource, /attempts<3/);
+  assert.match(workerSource, /f\.status='armed'/);
+  assert.match(workerSource, /f\.status='rolled_back' AND f\.local_lease_owner=\?/);
+  assert.match(workerSource, /f\.rollback_reason=\?/);
 });

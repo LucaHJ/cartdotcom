@@ -4231,18 +4231,25 @@ async function handlePhase6Retry(request: Request, env: Env): Promise<Response> 
       `UPDATE phase5_local_pilot_fences
        SET status='armed',expires_at=?,local_lease_owner=NULL,local_lease_expires_at=NULL,
            rollback_at=NULL,rollback_reason=NULL,updated_at=CURRENT_TIMESTAMP
-       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='rolled_back'`,
+       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='rolled_back'
+         AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=phase5_local_pilot_fences.job_id
+           AND j.status IN ('queued','failed') AND j.completed_at IS NULL
+           AND j.html_key IS NULL AND j.library_path IS NULL AND j.attempts<3)`,
     ).bind(expiresAt, validated.pilotKey, validated.jobId, validated.sourceMessageId),
     env.REEL_DB.prepare(
       `UPDATE jobs SET status='queued',stage='queued',status_emoji=?,error_code=NULL,error_message=NULL,
        upload_token_hash=NULL,upload_token_expires_at=NULL,started_at=NULL,completed_at=NULL,processing_seconds=NULL,updated_at=CURRENT_TIMESTAMP
-       WHERE id=? AND status IN ('queued','failed') AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL AND attempts<3`,
-    ).bind(queuedEmoji.display, validated.jobId),
+       WHERE id=? AND status IN ('queued','failed') AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL AND attempts<3
+         AND EXISTS(SELECT 1 FROM phase5_local_pilot_fences f WHERE f.job_id=jobs.id
+           AND f.pilot_key=? AND f.source_message_id=? AND f.status='armed')`,
+    ).bind(queuedEmoji.display, validated.jobId, validated.pilotKey, validated.sourceMessageId),
     env.REEL_DB.prepare(
       `INSERT INTO job_events(job_id,stage,status,emoji,detail)
        SELECT ?,'phase6_retry_armed','queued',?,?
-       WHERE NOT EXISTS(SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''),?)>0)`,
-    ).bind(validated.jobId, queuedEmoji.display, detail, validated.jobId, marker),
+       WHERE EXISTS(SELECT 1 FROM jobs j JOIN phase5_local_pilot_fences f ON f.job_id=j.id
+         WHERE j.id=? AND j.status='queued' AND f.pilot_key=? AND f.status='armed')
+         AND NOT EXISTS(SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''),?)>0)`,
+    ).bind(validated.jobId, queuedEmoji.display, detail, validated.jobId, validated.pilotKey, validated.jobId, marker),
   ]);
   if ((results[0].meta.changes || 0) !== 1 || (results[1].meta.changes || 0) !== 1 || (results[2].meta.changes || 0) !== 1) {
     return json({ ok: false, error: "Phase 6 exact retry lost its guarded transition" }, { status: 409 });
@@ -4290,17 +4297,27 @@ async function handlePhase6TerminalFailure(request: Request, env: Env): Promise<
     env.REEL_DB.prepare(
       `UPDATE jobs SET status='failed',stage=?,status_emoji=?,error_code=?,error_message=?,
        upload_token_hash=NULL,upload_token_expires_at=NULL,updated_at=CURRENT_TIMESTAMP
-       WHERE id=? AND status='queued' AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL`,
-    ).bind(validated.errorCode, emoji.display, validated.errorCode, validated.errorMessage, validated.jobId),
+       WHERE id=? AND status='queued' AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL
+         AND EXISTS(SELECT 1 FROM phase5_local_pilot_fences f WHERE f.job_id=jobs.id
+           AND f.pilot_key=? AND f.source_message_id=? AND f.status='rolled_back' AND f.local_lease_owner=?)`,
+    ).bind(validated.errorCode, emoji.display, validated.errorCode, validated.errorMessage, validated.jobId,
+      validated.pilotKey, validated.sourceMessageId, validated.leaseOwner),
     env.REEL_DB.prepare(
       `UPDATE phase5_local_pilot_fences SET rollback_reason=?,updated_at=CURRENT_TIMESTAMP
-       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='rolled_back' AND local_lease_owner=?`,
-    ).bind(`phase6_terminal_failure:${validated.errorCode}`, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner),
+       WHERE pilot_key=? AND job_id=? AND source_message_id=? AND status='rolled_back' AND local_lease_owner=?
+         AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=phase5_local_pilot_fences.job_id
+           AND j.status='failed' AND j.error_code=?)`,
+    ).bind(`phase6_terminal_failure:${validated.errorCode}`, validated.pilotKey, validated.jobId,
+      validated.sourceMessageId, validated.leaseOwner, validated.errorCode),
     env.REEL_DB.prepare(
       `INSERT INTO job_events(job_id,stage,status,emoji,detail)
        SELECT ?,?,'failed',?,?
-       WHERE NOT EXISTS(SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''),?)>0)`,
-    ).bind(validated.jobId, validated.errorCode, emoji.display, detail, validated.jobId, marker),
+       WHERE EXISTS(SELECT 1 FROM jobs j JOIN phase5_local_pilot_fences f ON f.job_id=j.id
+         WHERE j.id=? AND j.status='failed' AND j.error_code=? AND f.pilot_key=? AND f.rollback_reason=?)
+         AND NOT EXISTS(SELECT 1 FROM job_events WHERE job_id=? AND instr(COALESCE(detail,''),?)>0)`,
+    ).bind(validated.jobId, validated.errorCode, emoji.display, detail,
+      validated.jobId, validated.errorCode, validated.pilotKey, `phase6_terminal_failure:${validated.errorCode}`,
+      validated.jobId, marker),
   ]);
   if ((results[0].meta.changes || 0) !== 1 || (results[1].meta.changes || 0) !== 1 || (results[2].meta.changes || 0) !== 1) {
     return json({ ok: false, error: "Phase 6 terminal failure lost its guarded transition" }, { status: 409 });
