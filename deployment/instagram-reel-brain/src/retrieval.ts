@@ -1,4 +1,5 @@
 export const RETRIEVAL_DOCUMENT_VERSION = 1;
+export const RETRIEVAL_REINDEX_CONFIRMATION = "REINDEX COMPLETED REEL SEARCH DOCUMENTS";
 
 export type RetrievalDocument = {
   job_id: string;

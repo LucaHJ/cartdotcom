@@ -61,6 +61,7 @@ import {
 import {
   buildRetrievalDocument,
   rankRetrievalCandidates,
+  RETRIEVAL_REINDEX_CONFIRMATION,
   retrievalDocumentTerms,
   retrievalExpandedTerms,
   selectRetrievalMatch,
@@ -4848,7 +4849,10 @@ function decodeRetrievalReindexCursor(value: unknown): RetrievalReindexCursor | 
 }
 
 async function handleRetrievalReindex(request: Request, env: Env): Promise<Response> {
-  const input = await readJson<{ limit?: number; cursor?: string; job_id?: string }>(request);
+  const input = await readJson<{ limit?: number; cursor?: string; job_id?: string; confirmation?: string }>(request);
+  if (input.confirmation !== RETRIEVAL_REINDEX_CONFIRMATION) {
+    return json({ error: `confirmation must exactly equal ${RETRIEVAL_REINDEX_CONFIRMATION}` }, { status: 400 });
+  }
   const limit = Math.min(Math.max(Math.trunc(Number(input.limit || 10)), 1), 20);
   const jobId = String(input.job_id || "").trim();
   const cursor = decodeRetrievalReindexCursor(input.cursor);
@@ -5941,15 +5945,20 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/api/admin/phase5/local-pilot/abort" && request.method === "POST") return handlePhase5AbortLocalProcessing(request, env);
     return json({ error: "Not found" }, { status: 404 });
   }
+  if (url.pathname.startsWith("/api/admin/retrieval/")) {
+    const retrievalUnauthorized = requirePhase5Control(request, env);
+    if (retrievalUnauthorized) return retrievalUnauthorized;
+    if (url.pathname === "/api/admin/retrieval/reindex" && request.method === "POST") {
+      return handleRetrievalReindex(request, env);
+    }
+    if (url.pathname === "/api/admin/retrieval/status" && request.method === "GET") {
+      return handleRetrievalIndexStatus(env);
+    }
+    return json({ error: "Not found" }, { status: 404 });
+  }
   const unauthorized = requireAdmin(request, env);
   if (unauthorized) return unauthorized;
 
-  if (url.pathname === "/api/admin/retrieval/reindex" && request.method === "POST") {
-    return handleRetrievalReindex(request, env);
-  }
-  if (url.pathname === "/api/admin/retrieval/status" && request.method === "GET") {
-    return handleRetrievalIndexStatus(env);
-  }
   if (url.pathname === "/api/search" && request.method === "GET") {
     return handleSearchQuery(env, url.searchParams.get("q") || "", Number(url.searchParams.get("limit") || 10));
   }

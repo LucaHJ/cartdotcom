@@ -150,3 +150,12 @@ test("migration creates durable document and inverted-term tables", async () => 
   assert.match(migration, /PRIMARY KEY\(job_id, term\)/);
   assert.match(migration, /FOREIGN KEY\(job_id\) REFERENCES jobs\(id\) ON DELETE CASCADE/);
 });
+
+test("reindex maintenance requires the exact bounded confirmation phrase", async () => {
+  assert.equal(retrieval.RETRIEVAL_REINDEX_CONFIRMATION, "REINDEX COMPLETED REEL SEARCH DOCUMENTS");
+  const worker = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+  assert.match(worker, /input\.confirmation !== RETRIEVAL_REINDEX_CONFIRMATION/);
+  assert.match(worker, /url\.pathname\.startsWith\("\/api\/admin\/retrieval\/"\)/);
+  assert.match(worker, /const retrievalUnauthorized = requirePhase5Control\(request, env\)/);
+  assert.doesNotMatch(worker, /RETRIEVAL_REINDEX_CONFIRMATION[\s\S]{0,500}REEL_QUEUE\.send/);
+});
