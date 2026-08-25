@@ -126,6 +126,16 @@ test("selects only an explicitly confident ranked match for delivery", () => {
   assert.equal(retrieval.selectRetrievalMatch("no_match", result.matches), undefined);
 });
 
+test("public match views exclude indexed transcripts and internal search documents", () => {
+  const result = retrieval.rankRetrievalCandidates("war movie Cherry", [cherryFilm, newestUnrelated]);
+  const view = retrieval.retrievalMatchView(result.matches[0]);
+  assert.equal(view.id, "DcbSU6ntnEF");
+  assert.equal(view.canonical_url, "https://www.instagram.com/reel/DcbSU6ntnEF/");
+  assert.equal("transcript_text" in view, false);
+  assert.equal("resource_details_text" in view, false);
+  assert.equal("content_hash" in view, false);
+});
+
 test("builds bounded full-content documents and deterministic index terms", () => {
   const document = retrieval.buildRetrievalDocument({
     jobId: "job-1",

@@ -49,6 +49,29 @@ export type RetrievalDecision = {
   matches: RankedRetrievalCandidate[];
 };
 
+export function retrievalMatchView(match: RankedRetrievalCandidate) {
+  return {
+    id: match.id,
+    title: match.title,
+    author_username: match.author_username,
+    description: match.description,
+    canonical_url: match.canonical_url,
+    status: match.status,
+    status_emoji: match.status_emoji,
+    original_video_key: match.original_video_key,
+    markdown_key: match.markdown_key,
+    resource_count: match.resource_count,
+    completed_at: match.completed_at,
+    score: match.score,
+    matched_terms: match.matched_terms,
+    matched_term_count: match.matched_term_count,
+    query_term_count: match.query_term_count,
+    coverage: match.coverage,
+    matched_fields: match.matched_fields,
+    exact_phrase: match.exact_phrase,
+  };
+}
+
 export function selectRetrievalMatch<T>(decision: RetrievalDecision["decision"] | undefined, matches: T[] | undefined): T | undefined {
   return decision === "match" ? matches?.[0] : undefined;
 }

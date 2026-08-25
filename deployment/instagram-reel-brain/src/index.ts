@@ -64,6 +64,7 @@ import {
   RETRIEVAL_REINDEX_CONFIRMATION,
   retrievalDocumentTerms,
   retrievalExpandedTerms,
+  retrievalMatchView,
   selectRetrievalMatch,
   type RetrievalCandidate,
   type RetrievalDocument,
@@ -4942,7 +4943,13 @@ async function handleSearchQuery(env: Env, query: string, limit: number): Promis
     resource_count: Number(candidate.resource_count || 0),
   }));
   const ranked = rankRetrievalCandidates(query, candidates, Math.min(Math.max(limit, 1), 25));
-  return json({ ok: true, command: "retrieval", query, ...ranked });
+  return json({
+    ok: true,
+    command: "retrieval",
+    query,
+    ...ranked,
+    matches: ranked.matches.map(retrievalMatchView),
+  });
 }
 
 async function handleArtifactUpload(request: Request, env: Env, jobId: string, kind: string): Promise<Response> {
