@@ -6179,6 +6179,35 @@ async function processJob(env: Env, jobId: string): Promise<void> {
 async function handleApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api/phase4/mirror/")) return handlePhase4Mirror(request, env);
+  if (url.pathname.startsWith("/api/phase7/library/")) {
+    if (request.method !== "GET") return json({ error: "Method not allowed" }, { status: 405 });
+    if (!env.PHASE7_ORIGIN_TOKEN || !timingSafeEqual(bearer(request), env.PHASE7_ORIGIN_TOKEN)) {
+      return json({ error: "Unauthorised" }, { status: 401 });
+    }
+    if (!env.REEL_LIBRARY_KV) return json({ error: "Reel Library KV unavailable" }, { status: 503 });
+    if (url.pathname === "/api/phase7/library/manifest") {
+      const manifest = await env.REEL_LIBRARY_KV.get(REEL_LIBRARY_MANIFEST_KEY, "json");
+      return json({ ok: true, ...(manifest && typeof manifest === "object" ? manifest as Record<string, unknown> : { generated_at: "", file_count: 0, files: [] }) });
+    }
+    if (url.pathname === "/api/phase7/library/file") {
+      const path = String(url.searchParams.get("path") || "").replace(/\\/g, "/").replace(/^\/+/, "");
+      if (!path.endsWith(".html") || path.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+        return json({ error: "Invalid library path" }, { status: 400 });
+      }
+      const stored = await env.REEL_LIBRARY_KV.getWithMetadata(`${REEL_LIBRARY_FILE_PREFIX}${toBase64Url(path)}`, "arrayBuffer");
+      if (stored.value === null) return json({ error: "Not found" }, { status: 404 });
+      const metadata = (stored.metadata || {}) as Record<string, unknown>;
+      return new Response(stored.value, {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          "content-length": String(stored.value.byteLength),
+          "x-content-sha256": String(metadata.sha256 || await sha256(stored.value)),
+          "cache-control": "no-store",
+        },
+      });
+    }
+    return json({ error: "Not found" }, { status: 404 });
+  }
   if (url.pathname === "/api/test/jobs" && request.method === "POST") return handleTestCreate(request, env);
   if (url.pathname === "/api/intake" && request.method === "POST") return handleNormalizedIntake(request, env);
   if (url.pathname.startsWith("/api/admin/phase6/")) {

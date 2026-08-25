@@ -8,7 +8,7 @@ Type=simple
 User=lucaj
 Group=srvapps
 WorkingDirectory=/srv/cartdotcom/instagram-reel-brain
-ExecStart=/usr/bin/python3 /srv/cartdotcom/instagram-reel-brain/scripts/phase7_origin.py --token-file /srv/cartdotcom/reel-brain-secrets/phase7-origin-token
+ExecStart=/usr/bin/python3 /srv/cartdotcom/instagram-reel-brain/scripts/phase7_origin.py --token-file /srv/cartdotcom/reel-brain-secrets/phase7-origin-token --schema reel_phase7_primary_20260825_133007 --watermark 2026-08-25T13:30:07Z --mirror-run-dir /srv/cartdotcom/reel-brain-runs/phase7-primary/20260825T133007Z --mirror-object-root /srv/cartdotcom/reel-brain-data/objects
 Restart=on-failure
 RestartSec=3
 Nice=10
@@ -21,7 +21,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/srv/cartdotcom/instagram-reel-brain/runs/phase7-origin /srv/cartdotcom/reel-brain-data /srv/cartdotcom/reel-brain-runs/phase4-shadow/2026-08-21_01-42-46
+ReadWritePaths=/srv/cartdotcom/instagram-reel-brain/runs/phase7-origin /srv/cartdotcom/reel-brain-data /srv/cartdotcom/reel-brain-runs/phase7-primary/20260825T133007Z
 
 [Install]
 WantedBy=multi-user.target
