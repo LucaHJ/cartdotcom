@@ -6,14 +6,18 @@ credentials, queues, or Cloudflare authority.
 
 ## Current Authority
 
-- Cloudflare Worker/D1/R2/KV remain the production intake, edge spool, mirror,
-  and recovery authority.
-- Ubuntu generation 2 is the sole new-job processing authority during the
-  Phase 6 soak. Cloudflare Container claims are disabled by the authority row.
-- Local PostgreSQL and object storage are mirrored and available for bounded
-  migration work.
+- Cloudflare Worker/D1 remain production intake and the durable edge spool;
+  R2/KV remain offsite mirrors and outage fallback.
+- Ubuntu generation 2 is the sole new-job processing authority. Cloudflare
+  Container claims are disabled by the authority row.
+- Phase 7 local primary uses PostgreSQL schema
+  `reel_phase7_primary_20260825_133007` and local roots under
+  `/srv/cartdotcom/reel-brain-data`.
+- Authenticated private wakes trigger cursor draining; the five-minute poll is
+  only a recovery safety net.
 - Phase 5 control and compute services are profile-gated one-shot containers.
-- No selector, scheduler, claim loop, or backlog consumer is enabled locally.
+- Two exact bounded dispatcher slots are enabled; no historical backlog
+  consumer is enabled.
 - Never run cloud and local processing authority for the same exact job.
 
 ## Runtime Map
@@ -61,8 +65,8 @@ Run roots:
 6. Mount Codex auth only into `phase5-compute`.
 7. Do not mount the Docker socket into either container.
 8. Abort only before publication. After durable publication, recover forward.
-9. Leave Cloudflare intake and recovery available until Phase 7 gates pass.
-10. Do not retire Cloudflare components without the final retirement approval.
+9. Leave Cloudflare intake and recovery available throughout Phase 7.
+10. Do not retire Cloudflare components without explicit Phase 8 approval.
 
 ## Normal Inspection
 
@@ -184,6 +188,69 @@ verified cache. Prefetch begins only after the active job reports
 fail, or alter the queued job, and the later exact processor uses its normal
 download path. At most one `phase5-compute` and one secret-free
 `phase6-prefetch` container may overlap.
+
+## Phase 7 Operations
+
+Primary paths:
+
+```text
+/srv/cartdotcom/reel-brain-data/objects
+/srv/cartdotcom/reel-brain-data/library
+/srv/cartdotcom/reel-brain-runs/phase7-primary/20260825T133007Z
+PostgreSQL: reel_phase7_primary_20260825_133007
+```
+
+Inspect supervised processes without reading credentials:
+
+```bash
+ps -eo pid,args | grep -E 'phase7_origin.py|phase6_dispatcher.py'
+cat runs/phase6-dispatcher-1.pid
+cat runs/phase6-dispatcher-2.pid
+cat runs/phase7-origin/origin.pid
+```
+
+Expected dispatcher arguments include:
+
+```text
+--schema reel_phase7_primary_20260825_133007 --poll-seconds 300
+```
+
+Run one lossless safety wake:
+
+```bash
+scripts/phase7_safety_poll.sh
+```
+
+The private origin is supervised every minute and at reboot. A wake applies
+D1 deltas transactionally before signalling both dispatcher slots. Duplicate
+wakes and cursor overlap are idempotent.
+
+Evidence and reconciliation:
+
+```bash
+cat /srv/cartdotcom/reel-brain-runs/phase7-primary/20260825T133007Z/last-poll.json
+jq '{ok,manifest_objects,verified_objects,verified_bytes}' \
+  /srv/cartdotcom/reel-brain-runs/phase7-primary/20260825T133007Z/artifact-reconciliation.json
+```
+
+The Reel Library routes through the private origin first. If Ubuntu is down,
+Pages catches the origin failure and reads the existing KV static copy. Do not
+delete either copy during an outage.
+
+The post-cutover PostgreSQL backup is:
+
+```text
+/srv/backups/instagram-reel-brain/phase7-override-20260825T133007Z/phase7-primary-post-cutover.dump
+```
+
+Rollback processing authority only after confirming no active local lease:
+
+```bash
+python3 scripts/phase6_authority.py rollback-cloud --generation 2
+```
+
+This rollback must not delete or reset PostgreSQL, local objects, D1, R2, KV,
+or Phase 7 evidence.
 
 ## Troubleshooting
 

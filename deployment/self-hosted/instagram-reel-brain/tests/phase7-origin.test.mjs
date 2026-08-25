@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const script = fileURLToPath(new URL("../scripts/phase7_origin.py", import.meta.url));
+const dispatcherWatchdog = readFileSync(new URL("../scripts/phase6_dispatcher_watchdog.sh", import.meta.url), "utf8");
+const safetyPoll = readFileSync(new URL("../scripts/phase7_safety_poll.sh", import.meta.url), "utf8");
 
 function freePort() {
   const probe = spawnSync("python", ["-c", "import socket;s=socket.socket();s.bind(('127.0.0.1',0));print(s.getsockname()[1]);s.close()"], { encoding: "utf8" });
@@ -70,4 +72,9 @@ test("phase7 dispatcher has event wake plus bounded safety poll", () => {
   assert.match(source, /signal\.SIGUSR1/);
   assert.match(source, /wake_event\.wait\(max\(5, args\.poll_seconds\)\)/);
   assert.doesNotMatch(source, /time\.sleep\(max\(5, args\.poll_seconds\)\)/);
+  assert.match(dispatcherWatchdog, /SCHEMA=reel_phase7_primary_20260825_133007/);
+  assert.match(dispatcherWatchdog, /POLL_SECONDS=300/);
+  assert.match(dispatcherWatchdog, /9>&-/);
+  assert.match(safetyPoll, /tr -d '\\r\\n'/);
+  assert.match(safetyPoll, /flock -n/);
 });

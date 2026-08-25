@@ -1,5 +1,24 @@
 # Instagram Reel Self-Hosted Changelog
 
+## 2026-08-26
+
+- Activated Phase 7 by explicit user override while preserving the failed and
+  incomplete Phase 6 soak as historical evidence. PostgreSQL schema
+  `reel_phase7_primary_20260825_133007`, local object/library roots, private
+  VPC wake delivery, and 300-second safety polling are active. Cloudflare
+  continues to provide Meta intake, D1 durable spool/recovery, R2/KV mirrors,
+  callbacks, and rollback.
+- Reconciled 335 jobs, 5,050 artifacts, 2,243 resources, 1,906 events, and
+  132,846 retrieval terms. All 5,050 referenced artifact files
+  (2,007,909,616 bytes) and 2,491 library pages verified. A bounded
+  authenticated GET-only recovery route restored 140 missing R2 objects;
+  orphan/superseded objects were preserved.
+- Passed local-origin outage/static-fallback recovery, dispatcher/origin
+  interruption recovery, isolated PostgreSQL restore, artifact restore sample,
+  Worker/Pages auth scope, and regression tests. A physical host reboot and
+  the first genuine post-deployment wake remain observation items. Phase 8 is
+  not authorised.
+
 ## 2026-08-25
 
 - Reduced the temporary cloud-to-Ubuntu handover bridge in commit `302eaba`:

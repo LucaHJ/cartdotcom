@@ -6,6 +6,10 @@ RUN_ROOT="$ROOT/runs"
 LOCK_FILE="$RUN_ROOT/phase6-dispatcher-watchdog.lock"
 GENERATION_FILE="$RUN_ROOT/phase6-generation"
 CONCURRENCY=2
+SCHEMA=reel_phase7_primary_20260825_133007
+# Phase 7 wakes the dispatcher immediately after the durable Cloudflare spool
+# and local delta apply. Polling remains only as a slow recovery safety net.
+POLL_SECONDS=300
 
 generation="$(cat "$GENERATION_FILE" 2>/dev/null || true)"
 [[ "$generation" =~ ^[0-9]+$ ]] || exit 0
@@ -33,7 +37,7 @@ fi
 for slot in $(seq 1 "$CONCURRENCY"); do
   pid_file="$RUN_ROOT/phase6-dispatcher-$slot.pid"
   log_file="$RUN_ROOT/phase6-dispatcher-$slot.log"
-  expected="$ROOT/scripts/phase6_dispatcher.py --generation $generation --slot $slot"
+  expected="$ROOT/scripts/phase6_dispatcher.py --generation $generation --slot $slot --schema $SCHEMA --poll-seconds $POLL_SECONDS"
   valid_pid=""
   if [[ -f "$pid_file" ]]; then
     pid="$(cat "$pid_file" 2>/dev/null || true)"
@@ -56,7 +60,8 @@ for slot in $(seq 1 "$CONCURRENCY"); do
   if [[ -z "$valid_pid" ]]; then
     rm -f "$pid_file"
     cd "$ROOT"
-    nohup python3 "$ROOT/scripts/phase6_dispatcher.py" --generation "$generation" --slot "$slot" >>"$log_file" 2>&1 < /dev/null &
+    nohup python3 "$ROOT/scripts/phase6_dispatcher.py" --generation "$generation" --slot "$slot" \
+      --schema "$SCHEMA" --poll-seconds "$POLL_SECONDS" >>"$log_file" 2>&1 < /dev/null 9>&- &
     pid=$!
     printf '%s\n' "$pid" > "$pid_file"
     chmod 0600 "$pid_file" "$log_file"

@@ -1,10 +1,20 @@
-# Instagram Reel Brain Self-Hosted Scaffold
+# Instagram Reel Brain Self-Hosted Runtime
 
-This is the Phase 1 inert local application scaffold from the migration plan.
+Current state: Phase 7 local-primary data path is active under the explicit
+2026-08-26 user override. Ubuntu generation 2 is the only new-job processor;
+PostgreSQL schema `reel_phase7_primary_20260825_133007` and
+`/srv/cartdotcom/reel-brain-data` hold the local primary copy. Cloudflare
+continues to provide Meta intake, durable D1 edge spool/recovery, R2/KV mirror
+and fallback, callbacks, and rollback. Historical backlog remains disabled.
 
-It is intentionally not a processor yet. Cloudflare remains production
-authority, and the local containers expose only health checks on private Docker
-networks.
+See `docs/PHASE_7_CUTOVER_REPORT_2026-08-26.md` and
+`docs/OPERATOR_GUIDE.md` before operating the service. Phase 8 is not
+authorised.
+
+This repository began as the Phase 1 inert scaffold. The six original Compose
+services remain health-only and fail closed, while the credential-separated
+one-shot control/compute runtime is invoked by two host-supervised exact
+dispatchers.
 
 ## Services
 
@@ -17,7 +27,9 @@ networks.
 
 ## Safety State
 
-- `REEL_PROCESSING_AUTHORITY=cloud`
+- D1 authority: `mode=self_hosted`, `generation=2`
+- local dispatcher slots: `2`
+- dispatcher safety poll: `300` seconds
 - `REEL_INTAKE_ENABLED=false`
 - `REEL_DISPATCH_ENABLED=false`
 - `REEL_WORKER_ENABLED=false`
@@ -25,10 +37,11 @@ networks.
 - `REEL_OUTBOUND_ENABLED=false`
 - `REEL_MUTATIONS_ENABLED=false`
 - `REEL_BACKLOG_ENABLED=false`
-- `REEL_WORKER_CONCURRENCY=1`
+- historical backlog processing: disabled
 
-No service publishes a host port, joins the shared platform edge/data networks,
-reads production secrets, or modifies production Cloudflare resources.
+The private Phase 7 origin binds only to Docker bridge address
+`172.19.0.1:3110` and is reachable from Cloudflare through the dedicated VPC
+Service. No public host port or Docker socket is exposed.
 
 ## Server Paths
 
@@ -48,12 +61,11 @@ docker compose up -d --build --wait
 ./scripts/verify-scaffold.sh
 ```
 
-The Phase 1 gate passed on 2026-08-21. Only the bounded Phase 2 contract and
-isolated-fixture work described in
-`docs/PHASE_1_GATE_REPORT_2026-08-21.md` is approved. Do not begin production
-data migration, ingress provisioning, local processing, or backlog work.
+The Phase 1 gate passed on 2026-08-21. Its original evidence remains in
+`docs/PHASE_1_GATE_REPORT_2026-08-21.md`; current authority is described only
+by the Phase 7 report and operator guide. Backlog work remains prohibited.
 
-## Phase 3 shadow migration tooling
+## Historical Phase 3 shadow migration tooling
 
 Phase 3 is a manual operator workflow only. The tooling in
 `scripts/phase3_shadow_migration.py` can inventory a captured D1 export, import
@@ -70,12 +82,12 @@ publication, Instagram outbound, auth-rotation, or backlog authority.
 The local R2 inventory Worker under `tools/r2-inventory-worker/` is for local
 `wrangler dev` only. It is GET-only, list-only, and must not be deployed.
 
-## Shortened Phase 1 health gate
+## Historical shortened Phase 1 health gate
 
 The bounded synthetic health-gate workload is intentionally separate from
 production ingestion and never processes the Instagram backlog. It exercises
 the isolated Reel network, health endpoints, CPU, memory, and the Reel runs
-volume while Cloudflare remains the sole processing authority.
+volume while Cloudflare was the sole processing authority at that phase.
 
 Start it with an explicit UTC deadline:
 

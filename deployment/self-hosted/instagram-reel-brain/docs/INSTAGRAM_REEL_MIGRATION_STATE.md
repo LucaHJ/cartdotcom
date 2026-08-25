@@ -1,6 +1,25 @@
 # Instagram Reel Migration State
 
-Status: Phase 4 shadow live intake observation passed independent review.
+Status: **Phase 7 primary-data path active by explicit user override.**
+
+At `2026-08-26T00:39:05+10:00`, Phase 7 was activated despite the preserved
+failed/incomplete Phase 6 soak. This is explicit risk acceptance, not a Phase
+6 gate pass. PostgreSQL schema `reel_phase7_primary_20260825_133007` is the
+typed local primary; local disk is first-write storage for new artifacts and
+library pages; Cloudflare provides the durable D1 edge spool and R2/KV
+mirrors. An authenticated private VPC wake drains new edge events to Ubuntu,
+with a 300-second recovery poll. Reconciliation verified all 5,050 referenced
+artifacts and 2,491 library pages. Outage, automatic process restart, database
+restore, and artifact restore-sample checks passed. See
+`PHASE_7_CUTOVER_REPORT_2026-08-26.md`.
+
+Phase 8 remains blocked. The next genuine message must provide the first live
+post-deployment push-wake proof. A controlled physical host reboot remains an
+observation item because the server account has no unattended sudo access.
+
+Historical context follows.
+
+Phase 4 shadow live intake observation passed independent review.
 Phase 5 controlled compute is complete. The exact Reel and carousel jobs
 completed locally, and a new retrieval command returned the exact carousel
 result through a successful outbound link event. All three required cases
@@ -17,12 +36,13 @@ one. Historical backlog remains disabled, the required seven-day soak remains
 active, and stage-level comparison is recorded in
 `PHASE_6_CONCURRENCY_TWO_PERFORMANCE_2026-08-25.md`.
 
-The Phase 7 readiness check at `2026-08-25T13:24:08.378Z` did not pass:
+The Phase 7 readiness check at `2026-08-25T13:24:08.378Z` did not pass, and
+its evidence remains authoritative for the pre-override period:
 `phase6_soak_monitor.py gate --generation 2` reported 726 samples, 64 genuine
 post-watermark completions, 46 failed samples and an incomplete duration. Three
 failures were transient one-shot control containers observed while removing;
-43 were the genuine stale-lease incident on 25 August. Current state is clean,
-but the failed evidence is preserved and Phase 7 has not started. The intended
+43 were the genuine stale-lease incident on 25 August. Current state later
+became clean, but the failed evidence remains preserved. The intended
 Phase 7 handover is an authenticated private push wake after durable edge-spool
 commit, with idempotent cursor draining into PostgreSQL and only a slow safety
 reconciliation poll. See `PHASE_7_READINESS_CHECK_2026-08-25.md`.
@@ -93,17 +113,25 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 
 ## Enabled
 
+- Phase 7 local-primary data path under the explicit 2026-08-26 override.
+- Authenticated Worker-to-Ubuntu wake through VPC Service
+  `cartdotcom-reel-origin`; D1 remains the durable spool and the wake a hint.
+- Typed PostgreSQL schema `reel_phase7_primary_20260825_133007`.
+- Local-first object/library writes with R2/KV mirror and static fallback.
+- Private-origin Reel Library reads with automatic cloud-static fallback.
+- Five-minute safety reconciliation and minute/`@reboot` process watchdogs.
+
 - Phase 6 processing authority generation 2 in `self_hosted` mode.
 - Cloudflare intake and edge spool with post-watermark automatic local fences.
-- Ubuntu serial dispatcher supervised every minute and at reboot.
-- Seven-day soak sampling every five minutes.
+- Two bounded Ubuntu dispatcher slots supervised every minute and at reboot.
+- Phase 6 soak evidence retained; sampling stopped after the Phase 7 override.
 - Serial `0.50` CPU synthesis plus one read-only `0.25` CPU Reel media
   prefetch during the active job's synthesis stage.
 
 - Six container-internal health endpoints.
 - Isolated Docker networks `cartdotcom-reel-runtime` and
   `cartdotcom-reel-egress`.
-- Empty local storage roots prepared for later phases.
+- Populated local object/library roots under `/srv/cartdotcom/reel-brain-data`.
 - Example backup and secret contracts.
 - Non-authoritative Phase 3 PostgreSQL JSONB audit schema
   `reel_phase3_shadow_20260821_040408`.
@@ -132,15 +160,10 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
   `/srv/cartdotcom/reel-brain-runs/phase4-replay/2026-08-21_03-19-20`, and
   object root with 1,075 verified copied objects for the approved slice
   `2026-08-19T04:19:57Z <= created_at < 2026-08-21T01:42:46Z`.
-- Cron-supervised Phase 4 mirror watchdog and health sampler for the
-  observation gate. The old raw `nohup` PIDs are stopped and preserved only as
-  evidence. The mirror watchdog now verifies process command identity before
-  trusting `mirror-supervised.pid`; corrected mirror PID `3168918` is running
-  after a stale/reused-PID replacement test.
-- Empty production D1 Phase 5 fence table `phase5_local_pilot_fences`, created
-  by migration `0021_phase5_local_pilot_fence.sql`.
-- Empty production D1 Phase 5 pre-intake arm table `phase5_preintake_arms`,
-  created by migration `0022_phase5_preintake_arm.sql`.
+- Preserved Phase 4 mirror evidence and schema. Its 15-second loop/watchdogs
+  are stopped; Phase 7 push plus five-minute safety polling replaced them.
+- Production D1 Phase 5 fence/arm audit tables retained for exact authority
+  history and recovery.
 - Narrow-token Cloudflare Phase 5 arm/fence/rollback/renew endpoints. The
   dedicated `PHASE5_CONTROL_TOKEN` is accepted only for Phase 5 local-pilot
   routes; the existing broad admin token remains an operator fallback.
@@ -188,10 +211,9 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 ## Disabled
 
 - Cloudflare Container processing claims while authority is `self_hosted`.
-- More than one local synthesis at a time.
+- More than two local synthesis slots.
 - Historical backlog enumeration, replay, selection, and processing.
 - Local direct Meta intake; Cloudflare remains the intake authority.
-- Phase 7 primary-data authority cutover before the Phase 6 soak passes.
 - Phase 8 retirement or deletion without explicit user approval.
 - Backlog processing.
 - Auth rotation.
@@ -208,10 +230,11 @@ recorded in `PHASE_5B_RUNNER_HARDENING_REPORT_2026-08-22.md`.
 - Active inert Reel service CPU ceiling: 1.85 cores.
 - Reel service ceiling with the stopped `phase5-runner` profile included:
   2528 MiB memory and 2.0 CPU cores.
-- Worker concurrency: 1.
+- Local synthesis concurrency: 2; prefetch remains single-slot.
 - PID limit: 128 per existing inert service, 128 for profile-gated
   `phase5-control`, and 256 for profile-gated `phase5-compute`.
-- No host ports.
+- Phase 7 origin listens only on the private Docker bridge host address
+  `172.19.0.1:3110`; it has no public host bind.
 - No shared `cartdotcom-edge` membership. Only stopped/profile-gated
   `phase5-control` may attach to `cartdotcom-data`, and only for native
   PostgreSQL control-plane checks. `phase5-compute` has no data-network

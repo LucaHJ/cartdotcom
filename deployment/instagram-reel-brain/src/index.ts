@@ -6225,6 +6225,24 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     }
     return json({ error: "Not found" }, { status: 404 });
   }
+  if (url.pathname === "/api/phase7/object") {
+    if (request.method !== "GET") return json({ error: "Method not allowed" }, { status: 405 });
+    if (!env.PHASE7_ORIGIN_TOKEN || !timingSafeEqual(bearer(request), env.PHASE7_ORIGIN_TOKEN)) {
+      return json({ error: "Unauthorised" }, { status: 401 });
+    }
+    const key = String(url.searchParams.get("key") || "").replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!key || key.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+      return json({ error: "Invalid object key" }, { status: 400 });
+    }
+    const stored = await env.REEL_ARCHIVE.get(key);
+    if (!stored) return json({ error: "Not found" }, { status: 404 });
+    const headers = new Headers();
+    stored.writeHttpMetadata(headers);
+    headers.set("content-length", String(stored.size));
+    headers.set("etag", stored.httpEtag);
+    headers.set("cache-control", "private, no-store");
+    return new Response(stored.body, { headers });
+  }
   if (url.pathname === "/api/test/jobs" && request.method === "POST") return handleTestCreate(request, env);
   if (url.pathname === "/api/intake" && request.method === "POST") return handleNormalizedIntake(request, env);
   if (url.pathname.startsWith("/api/admin/phase6/")) {

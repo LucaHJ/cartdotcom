@@ -224,10 +224,19 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def require_auth(self) -> bool:
-        if self.state.authorised(self.headers.get("authorization")):
+        if self.state.authorised(self.headers.get("Authorization")):
             return True
         self.respond_json(401, {"ok": False, "error": "unauthorised"})
         return False
+
+    def request_content_length(self, default: int) -> int:
+        # Some proxied requests preserve the field in raw_items() while the
+        # Message mapping lookup returns no value. Match the field name
+        # case-insensitively and reject malformed/duplicate lengths.
+        values = [value for key, value in self.headers.raw_items() if key.lower() == "content-length"]
+        if len(values) != 1:
+            return default
+        return int(values[0])
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -263,9 +272,9 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path != "/v1/wake":
             self.respond_json(405, {"ok": False, "error": "method_not_allowed"})
             return
-        length = int(self.headers.get("content-length") or 0)
+        length = self.request_content_length(0)
         if length < 2 or length > MAX_JSON_BYTES:
-            self.respond_json(413, {"ok": False, "error": "invalid_body_size"})
+            self.respond_json(413, {"ok": False, "error": "invalid_body_size", "received_bytes": length})
             return
         try:
             payload = json.loads(self.rfile.read(length))
@@ -290,8 +299,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             prefix = "/v1/object/" if kind == "object" else "/v1/library/file/"
             relative = safe_relative(parsed.removeprefix(prefix))
-            length = int(self.headers.get("content-length") or -1)
-            result = self.state.put_file(kind, relative, self.rfile, length, self.headers.get("x-content-sha256"))
+            length = self.request_content_length(-1)
+            result = self.state.put_file(kind, relative, self.rfile, length, self.headers.get("X-Content-Sha256"))
             self.respond_json(200, result)
         except FileExistsError as error:
             self.respond_json(409, {"ok": False, "error": str(error)})
