@@ -199,10 +199,30 @@ its prior healthy baseline.
 
 ### Retrieval returns the wrong item
 
-Stop before using the result. Compare the normalized query, `result_job_id`,
-source URL, resource count, and outbound event `source_message_id`. A valid
-retrieval must point to one durable completed job and send at most one
-idempotent outbound result for the exact requesting message.
+Use the control-only retrieval diagnostic route from the Ubuntu host. The
+server token file must be read inside the request process; never interpolate
+the token into argv or logs. Compare `decision`, `score`, `coverage`,
+`matched_terms`, job id, source URL, and source message id. A valid automatic
+delivery requires `decision=match`. `ambiguous` must return at most three
+candidate links and must not silently deliver the first row.
+
+Index health must show one document per completed/indexable job:
+
+```text
+GET /api/admin/retrieval/status
+```
+
+The exact bounded maintenance operation is:
+
+```text
+POST /api/admin/retrieval/reindex
+{"limit":10,"cursor":"<returned cursor>","confirmation":"REINDEX COMPLETED REEL SEARCH DOCUMENTS"}
+```
+
+It is authenticated by the control-only token, reads completed synthesis
+objects, and writes only the derived retrieval tables. It must never queue,
+claim, process, publish, react, or send Instagram messages. Preserve the
+pre-change D1 export before any broad rebuild.
 
 ## Backups and Rollback
 

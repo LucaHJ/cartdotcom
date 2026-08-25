@@ -13,6 +13,16 @@ file. Phase 6 processing authority is now local on generation 2 with a durable
 watermark of `2026-08-23T01:17:09.133Z`. The serial dispatcher is supervised,
 historical backlog remains disabled, and the required seven-day soak is active.
 
+On `2026-08-25`, the user-visible retrieval defect was repaired without changing
+processing authority. Cloudflare now maintains derived `retrieval_documents`
+and `retrieval_terms` tables populated from completed synthesis JSON. All 302
+completed jobs are indexed with 118,915 unique job-term rows. Ranked retrieval
+uses distinctive token coverage, conservative aliases, field weights and a
+confidence margin; ambiguous searches return candidates instead of an
+automatic link. Worker version is
+`282c170a-cafb-48c8-9317-e0cd878e774a`. The Phase 6 soak remains active and
+generation 2 remains the sole new-job processor.
+
 Cloudflare remains authoritative for intake, edge spool, D1 recovery ledger,
 R2/KV, callbacks, and recovery deployment. The Ubuntu serial runner is the sole
 new-job processing authority. Cloudflare Container claims are disabled by the

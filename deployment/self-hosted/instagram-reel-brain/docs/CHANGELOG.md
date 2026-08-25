@@ -1,5 +1,19 @@
 # Instagram Reel Self-Hosted Changelog
 
+## 2026-08-25
+
+- Replaced newest-first substring retrieval with a deterministic ranked search
+  index in commits `8992658`, `43e50b0`, `c1f0c03`, and `b7a6364` and Worker
+  version `282c170a-cafb-48c8-9317-e0cd878e774a`. Migration
+  `0025_ranked_retrieval_index.sql` adds derived document and term tables.
+  All 302 completed jobs were rebuilt from stored synthesis objects without
+  Codex or resynthesis, producing 118,915 unique job-term rows and zero missing
+  documents or hashes. The two reported live failures now select exact Reels
+  `DbkYou1ph6B` and `DcbSU6ntnEF`; the prior Phase 5 retrieval regression still
+  selects `DcOWkMakZ2k`. Ambiguous results return up to three candidates rather
+  than silently sending the newest weak match. Phase 6 generation 2 authority,
+  backlog state, dispatcher and soak configuration were unchanged.
+
 ## 2026-08-23
 
 - Cut processing authority to the Ubuntu serial runner on generation 2 at
