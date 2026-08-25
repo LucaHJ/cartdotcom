@@ -41,17 +41,19 @@ def control(args: argparse.Namespace, command: str) -> dict[str, Any]:
     return parse_json(result.stdout)
 
 
-def orchestrate(args: argparse.Namespace, candidate: dict[str, Any]) -> None:
+def orchestrate(args: argparse.Namespace, candidate: dict[str, Any]) -> dict[str, Any]:
     cmd = [
         "python3", "scripts/phase5_one_job_orchestrator.py", "--project-dir", args.project_dir,
         "--pilot-key", str(candidate["pilot_key"]), "--job-id", str(candidate["job_id"]),
         "--source-message-id", str(candidate["source_message_id"]), "--lease-owner", args.lease_owner,
         "--schema", args.schema, "--admin-token-host-file", args.admin_token_host_file,
         "--timeout-seconds", str(args.job_timeout), "--container-timeout", str(args.job_timeout),
+        "--abort-on-compute-failure",
     ]
     result = subprocess.run(cmd, cwd=args.project_dir, text=True, encoding="utf-8", errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=args.job_timeout + 120, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"Phase 6 exact orchestrator failed rc={result.returncode}: {(result.stderr or result.stdout)[-3000:]}")
+    return parse_json(result.stdout)
 
 
 def run_once(args: argparse.Namespace) -> dict[str, Any]:
@@ -61,7 +63,9 @@ def run_once(args: argparse.Namespace) -> dict[str, Any]:
     candidate = claimed.get("candidate")
     if not isinstance(candidate, dict):
         raise RuntimeError("Phase 6 claim response omitted exact candidate")
-    orchestrate(args, candidate)
+    outcome = orchestrate(args, candidate)
+    if outcome.get("aborted_after_compute_failure") is True:
+        return {"ok": False, "idle": False, "aborted_job_id": candidate.get("job_id"), "pilot_key": candidate.get("pilot_key"), "recovery": "prepublication_abort"}
     return {"ok": True, "idle": False, "completed_job_id": candidate.get("job_id"), "pilot_key": candidate.get("pilot_key")}
 
 
@@ -102,4 +106,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

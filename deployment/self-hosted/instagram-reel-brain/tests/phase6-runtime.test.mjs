@@ -17,6 +17,9 @@ test("Phase 6 control keeps credentials inside the control container", () => {
   assert.match(control, /local_job_ready/);
   assert.match(control, /insert_local_lease/);
   assert.match(control, /release_candidate/);
+  assert.match(control, /allowed_error_statuses=\(409,\)/);
+  assert.match(control, /recoverable_active/);
+  assert.match(control, /inserted == 1 and events == 1/);
   assert.match(control, /claim-next/);
   assert.doesNotMatch(control, /print\(.*token|PGPASSWORD|docker\.sock|privileged/);
   assert.match(dockerfile, /phase6_dispatch_control\.py/);
@@ -28,6 +31,8 @@ test("Phase 6 host dispatcher is serial, credential-free and reuses exact orches
   assert.match(dispatcher, /claim-next/);
   assert.match(dispatcher, /--once/);
   assert.match(dispatcher, /--lease-owner/);
+  assert.match(dispatcher, /--abort-on-compute-failure/);
+  assert.match(dispatcher, /aborted_after_compute_failure/);
   assert.doesNotMatch(dispatcher, /read_text|Bearer |PGPASSWORD|sk-[A-Za-z0-9]/);
 });
 

@@ -748,27 +748,50 @@ def inspect_and_extract(video: Path, workdir: Path) -> tuple[dict[str, Any], Pat
         probe = json.loads(probe_raw)
         frames_dir = workdir / "frames"
         frames_dir.mkdir(exist_ok=True)
-        run(
-            [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video),
-                "-vf", "fps=1/4,scale=720:-2", "-frames:v", str(MAX_FRAMES), "-q:v", "3", str(frames_dir / "frame-%02d.jpg"),
-            ],
-            cwd=workdir,
-            timeout=120,
-        )
+        try:
+            duration = max(0.0, float((probe.get("format") or {}).get("duration") or 0))
+        except (TypeError, ValueError):
+            duration = 0.0
+        sample_times = [0.0]
+        if duration > 0:
+            sample_times = [min(index * 4.0, max(0.0, duration - 0.05)) for index in range(MAX_FRAMES)]
+            sample_times = list(dict.fromkeys(round(value, 3) for value in sample_times if value < duration)) or [0.0]
+        for index, sample_time in enumerate(sample_times[:MAX_FRAMES], start=1):
+            target = frames_dir / f"frame-{index:02d}.jpg"
+            try:
+                frame_result = subprocess.run(
+                    [
+                        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                        "-ss", f"{sample_time:.3f}", "-i", str(video),
+                        "-map", "0:v:0", "-frames:v", "1", "-vf", "scale=720:-2", "-q:v", "3", str(target),
+                    ],
+                    cwd=str(workdir),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=20,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                continue
+            if frame_result.returncode != 0 or not target.exists() or target.stat().st_size == 0:
+                target.unlink(missing_ok=True)
         frames = sorted(frames_dir.glob("*.jpg"))[:MAX_FRAMES]
         audio = workdir / "audio.mp3"
-        audio_result = subprocess.run(
-            [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video), "-vn", "-ac", "2", "-ar", "48000", "-b:a", "128k", str(audio),
-            ],
-            cwd=str(workdir),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=120,
-            check=False,
-        )
-        if audio_result.returncode != 0 or not audio.exists() or audio.stat().st_size == 0:
+        try:
+            audio_result = subprocess.run(
+                [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(video), "-vn", "-ac", "2", "-ar", "48000", "-b:a", "128k", str(audio),
+                ],
+                cwd=str(workdir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            audio_result = None
+        if audio_result is None or audio_result.returncode != 0 or not audio.exists() or audio.stat().st_size == 0:
+            audio.unlink(missing_ok=True)
             audio = None
         return probe, audio, frames
     except PipelineError:

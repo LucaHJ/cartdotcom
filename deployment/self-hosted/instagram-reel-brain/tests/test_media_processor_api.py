@@ -7,6 +7,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -24,6 +25,13 @@ def load_module(storage_root: Path, *, enabled=True, max_body=1048576):
     os.environ["REEL_MEDIA_MAX_BODY_BYTES"] = str(max_body)
     os.environ["REEL_CLOUD_PROCESSOR_PATH"] = str(CLOUD_PROCESSOR)
     spec = importlib.util.spec_from_file_location(f"phase2_media_api_{id(storage_root)}", APP_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_processor():
+    spec = importlib.util.spec_from_file_location("phase2_cloud_processor_timeout_test", CLOUD_PROCESSOR)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -66,6 +74,23 @@ def make_synthetic_video(path: Path):
 
 
 class MediaProcessorApiTests(unittest.TestCase):
+    def test_optional_frame_and_audio_timeouts_do_not_fail_media_probe(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            module = load_processor()
+            video = root / "synthetic.mp4"
+            video.write_bytes(b"fixture")
+            probe = json.dumps({"format": {"duration": "9.0"}, "streams": [{"codec_type": "video"}]})
+            with mock.patch.object(module, "run", return_value=probe), mock.patch.object(
+                module.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=20),
+            ):
+                parsed, audio, frames = module.inspect_and_extract(video, root)
+            self.assertEqual(parsed["format"]["duration"], "9.0")
+            self.assertIsNone(audio)
+            self.assertEqual(frames, [])
+
     def test_disabled_by_default_refuses_fixture_processing(self):
         with tempfile.TemporaryDirectory() as raw:
             module = load_module(Path(raw), enabled=False)

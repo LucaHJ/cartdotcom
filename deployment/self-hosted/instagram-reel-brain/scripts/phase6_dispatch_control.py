@@ -48,7 +48,13 @@ def token() -> str:
     return value
 
 
-def worker_json(method: str, path: str, *, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def worker_json(
+    method: str,
+    path: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    allowed_error_statuses: tuple[int, ...] = (),
+) -> dict[str, Any]:
     body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
     request = Request(
         f"{WORKER_URL.rstrip('/')}{path}",
@@ -65,8 +71,17 @@ def worker_json(method: str, path: str, *, payload: dict[str, Any] | None = None
         with urlopen(request, timeout=90) as response:
             parsed = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
     except HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"Phase 6 Worker control returned HTTP {error.code}: {detail}") from error
+        detail = error.read().decode("utf-8", errors="replace")[:8192]
+        if error.code in allowed_error_statuses:
+            try:
+                parsed = json.loads(detail or "{}")
+            except json.JSONDecodeError as decode_error:
+                raise RuntimeError(f"Phase 6 Worker control returned invalid JSON with HTTP {error.code}") from decode_error
+            if not isinstance(parsed, dict):
+                raise RuntimeError(f"Phase 6 Worker control returned a non-object response with HTTP {error.code}")
+            parsed["_http_status"] = error.code
+            return parsed
+        raise RuntimeError(f"Phase 6 Worker control returned HTTP {error.code}: {detail[:500]}") from error
     except URLError as error:
         raise RuntimeError(f"Phase 6 Worker control failed: {error.reason}") from error
     if not isinstance(parsed, dict):
@@ -127,7 +142,10 @@ def insert_local_lease(runner: Any, args: argparse.Namespace, candidate: dict[st
             AND status IN ('leased','processing','completed'))
       );
     """)
-    if len(rows) != 1 or int(rows[0].get("existing") or 0) != 1:
+    inserted = int(rows[0].get("inserted") or 0) if len(rows) == 1 else 0
+    events = int(rows[0].get("events") or 0) if len(rows) == 1 else 0
+    existing = int(rows[0].get("existing") or 0) if len(rows) == 1 else 0
+    if len(rows) != 1 or not ((inserted == 1 and events == 1) or existing == 1):
         raise RuntimeError(f"Phase 6 local exact lease insert failed closed: {json.dumps(rows, sort_keys=True)}")
     return rows[0]
 
@@ -165,15 +183,27 @@ def claim_next(args: argparse.Namespace) -> dict[str, Any]:
         "lease_owner": args.lease_owner,
         "lease_minutes": args.lease_minutes,
         "reason": "phase6_serial_dispatch",
-    })
-    if claim.get("ok") is not True or not isinstance(claim.get("fence"), dict):
+    }, allowed_error_statuses=(409,))
+    fence = claim.get("fence") if isinstance(claim.get("fence"), dict) else None
+    recoverable_active = bool(
+        claim.get("_http_status") == 409
+        and fence
+        and fence.get("pilot_key") == candidate["pilot_key"]
+        and fence.get("job_id") == candidate["job_id"]
+        and fence.get("source_message_id") == candidate["source_message_id"]
+        and fence.get("status") == "local_processing"
+        and fence.get("local_lease_owner") == args.lease_owner
+        and str(candidate["pilot_key"]).startswith(f"phase6:{args.generation}:")
+    )
+    if not recoverable_active and (claim.get("ok") is not True or fence is None):
         raise RuntimeError(f"Phase 6 cloud exact claim failed: {json.dumps(claim, sort_keys=True)}")
     try:
-        local = insert_local_lease(runner, args, candidate, claim["fence"])
+        local = insert_local_lease(runner, args, candidate, fence or {})
     except Exception:
-        release_candidate(args, candidate)
+        if not recoverable_active:
+            release_candidate(args, candidate)
         raise
-    return {"ok": True, "idle": False, "candidate": candidate, "claim": {"claimed": claim.get("claimed"), "idempotent": claim.get("idempotent")}, "local": local, "authority": authority}
+    return {"ok": True, "idle": False, "candidate": candidate, "claim": {"claimed": claim.get("claimed"), "idempotent": claim.get("idempotent"), "recovered_active": recoverable_active}, "local": local, "authority": authority}
 
 
 def update_local_authority(runner: Any, args: argparse.Namespace, response: dict[str, Any]) -> None:
