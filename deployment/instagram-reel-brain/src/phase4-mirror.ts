@@ -214,14 +214,19 @@ export function parsePhase4Watermark(raw: string | null | undefined): string | n
 }
 
 export function encodePhase4Cursor(cursor: Phase4Cursor): string {
-  return btoa(JSON.stringify(cursor)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  const bytes = new TextEncoder().encode(JSON.stringify(cursor));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 export function decodePhase4Cursor(raw: string | null | undefined, watermark: string): Phase4Cursor {
   if (!raw) return { created_at: watermark, key: "" };
   try {
     const padded = raw.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(raw.length / 4) * 4, "=");
-    const parsed = JSON.parse(atob(padded)) as Partial<Phase4Cursor>;
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Partial<Phase4Cursor>;
     const createdAt = parsePhase4Watermark(parsed.created_at) || watermark;
     const key = typeof parsed.key === "string" ? parsed.key : "";
     return Date.parse(createdAt) < Date.parse(watermark) ? { created_at: watermark, key: "" } : { created_at: createdAt, key };

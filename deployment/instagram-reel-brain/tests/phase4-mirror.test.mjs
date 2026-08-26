@@ -137,6 +137,11 @@ test("Phase 4 cursor advances for every nonempty page including partial pages", 
   assert.equal(phase4NextCursor("jobs", []), null);
 });
 
+test("Phase 4 cursor round-trips Unicode retrieval keys", () => {
+  const cursor = { created_at: "2026-08-26T05:27:02.000Z", key: "job-1:невидимка" };
+  assert.deepEqual(decodePhase4Cursor(encodePhase4Cursor(cursor), "2026-08-25T13:30:07.000Z"), cursor);
+});
+
 test("Phase 4 object access is GET-only scoped to post-watermark D1 references", () => {
   const query = phase4ObjectAccessQuery("library/reels/example/index.html", "2026-08-20T20:05:00.000Z");
   assert.match(query.sql, /FROM artifacts\s+WHERE object_key=\?/);
