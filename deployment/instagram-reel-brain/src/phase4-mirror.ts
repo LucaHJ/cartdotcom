@@ -264,7 +264,13 @@ export function phase4DeltaQuery(table: Phase4MirrorTable, watermark: string, cu
   const spec = PHASE4_MIRROR_TABLES[table];
   const keyExpression = `CAST(${spec.keyExpression || spec.keyColumn} AS TEXT)`;
   const cursorExpression = spec.cursorExpression;
-  const normalizedCursorExpression = phase4NormalizedTimestampExpression(cursorExpression);
+  // retrieval_terms is large and indexed_at is always D1 CURRENT_TIMESTAMP text.
+  // Comparing the raw column to datetime(?) preserves timestamp normalisation while
+  // allowing SQLite/D1 to use the dedicated cursor index. datetime(indexed_at)
+  // forced a full table scan and eventually exhausted the Worker request budget.
+  const normalizedCursorExpression = table === "retrieval_terms"
+    ? cursorExpression
+    : phase4NormalizedTimestampExpression(cursorExpression);
   const mirrorTimestampExpression = phase4MirrorTimestampExpression(cursorExpression);
   const where = [
     `${normalizedCursorExpression} >= datetime(?)`,

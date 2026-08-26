@@ -109,6 +109,9 @@ test("Phase 4 delta queries enforce watermark, cursor, pagination, and post-wate
 
   const terms = phase4DeltaQuery("retrieval_terms", watermark, decodePhase4Cursor(null, watermark), 10);
   assert.match(terms.sql, /CAST\(job_id \|\| ':' \|\| term AS TEXT\) AS mirror_key/);
+  assert.match(terms.sql, /WHERE indexed_at >= datetime\(\?\)/);
+  assert.match(terms.sql, /ORDER BY indexed_at ASC/);
+  assert.doesNotMatch(terms.sql, /WHERE datetime\(indexed_at\)/);
   assert.match(terms.sql, /job_id IN \(SELECT id FROM jobs WHERE datetime\(created_at\) >= datetime\(\?\)\)/);
 
   const oldPending = phase4DeltaQuery("pending_dm_parts", watermark, decodePhase4Cursor(null, watermark), 10);
