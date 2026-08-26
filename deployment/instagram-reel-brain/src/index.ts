@@ -3100,7 +3100,8 @@ async function handleCorrectiveResynthesis(request: Request, env: Env, jobId: st
         const claim = await env.REEL_DB.prepare(
           `UPDATE jobs SET instructions=?,status='queued',stage='queued',error_code=NULL,error_message=NULL,started_at=NULL,completed_at=NULL,
             processing_seconds=NULL,codex_input_tokens=NULL,codex_cached_input_tokens=NULL,codex_output_tokens=NULL,
-            codex_reasoning_output_tokens=NULL,codex_total_tokens=NULL,synthesis_json_key=NULL,upload_token_hash=NULL,
+            codex_reasoning_output_tokens=NULL,codex_total_tokens=NULL,html_key=NULL,library_path=NULL,markdown_key=NULL,
+            transcript_key=NULL,synthesis_json_key=NULL,upload_token_hash=NULL,
             upload_token_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='complete' AND pilot_run_id IS NULL`,
         ).bind(reset.instructions, reset.job.id).run();
         if (!correctiveClaimApplied(claim)) return { applied: false };
@@ -3364,14 +3365,22 @@ async function handlePhase5RenewLease(request: Request, env: Env): Promise<Respo
     return json({ ok: false, error: String((error as Error).message || error) }, { status: 400 });
   }
   const row = await env.REEL_DB.prepare(
-    `SELECT f.pilot_key,f.job_id,f.source_message_id,f.status,f.local_lease_owner,f.local_lease_expires_at,
+    `WITH latest_correction AS (
+       SELECT ${phase5LatestCorrectiveAtSql("?")} AS started_at
+     )
+     SELECT f.pilot_key,f.job_id,f.source_message_id,f.status,f.local_lease_owner,f.local_lease_expires_at,
             j.status AS job_status,j.stage AS job_stage,j.html_key,j.library_path,j.completed_at,
-            (SELECT COUNT(*) FROM artifacts a WHERE a.job_id=f.job_id AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')) AS publication_artifacts,
-            (SELECT COUNT(*) FROM job_events e WHERE e.job_id=f.job_id AND e.stage IN ('complete','published','phase5_local_complete')) AS completion_events
+            (SELECT COUNT(*) FROM artifacts a WHERE a.job_id=f.job_id
+              AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+              AND datetime(a.created_at)>=datetime(COALESCE(latest_correction.started_at,a.created_at))) AS publication_artifacts,
+            (SELECT COUNT(*) FROM job_events e WHERE e.job_id=f.job_id
+              AND e.stage IN ('complete','published','phase5_local_complete')
+              AND datetime(e.created_at)>=datetime(COALESCE(latest_correction.started_at,e.created_at))) AS completion_events
      FROM phase5_local_pilot_fences f
      JOIN jobs j ON j.id=f.job_id
+     CROSS JOIN latest_correction
      WHERE f.pilot_key=? AND f.job_id=? AND f.source_message_id=?`,
-  ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId).first<Phase5FenceRow & {
+  ).bind(validated.jobId, validated.pilotKey, validated.jobId, validated.sourceMessageId).first<Phase5FenceRow & {
     job_status: string;
     job_stage: string;
     html_key: string | null;
@@ -3407,11 +3416,13 @@ async function handlePhase5RenewLease(request: Request, env: Env): Promise<Respo
          SELECT 1 FROM artifacts a
          WHERE a.job_id=phase5_local_pilot_fences.job_id
            AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+           AND datetime(a.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},a.created_at))
        )
        AND NOT EXISTS (
          SELECT 1 FROM job_events e
          WHERE e.job_id=phase5_local_pilot_fences.job_id
            AND e.stage IN ('complete','published','phase5_local_complete')
+           AND datetime(e.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},e.created_at))
        )`,
   ).bind(validated.expiresAt, validated.expiresAt, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
   if ((updated.meta.changes || 0) !== 1) {
@@ -3444,20 +3455,35 @@ type Phase5ControlStateRow = Phase5FenceRow & {
   marker_events: number;
 };
 
+function phase5LatestCorrectiveAtSql(jobIdExpression: string): string {
+  return `(SELECT MAX(correction.created_at) FROM job_events correction
+    WHERE correction.job_id=${jobIdExpression}
+      AND json_valid(correction.detail)
+      AND CAST(json_extract(correction.detail, '$.marker') AS TEXT) LIKE 'corrective-resynthesis:%')`;
+}
+
 async function phase5ControlState(
   env: Env,
   input: { pilotKey: string; jobId: string; sourceMessageId: string; marker?: string },
 ): Promise<Phase5ControlStateRow | null> {
   return env.REEL_DB.prepare(
-    `SELECT f.pilot_key,f.job_id,f.source_message_id,f.status,f.expires_at,f.local_lease_owner,f.local_lease_expires_at,
+    `WITH latest_correction AS (
+       SELECT ${phase5LatestCorrectiveAtSql("?")} AS started_at
+     )
+     SELECT f.pilot_key,f.job_id,f.source_message_id,f.status,f.expires_at,f.local_lease_owner,f.local_lease_expires_at,
             j.status AS job_status,j.stage AS job_stage,j.upload_token_hash,j.upload_token_expires_at,j.html_key,j.library_path,j.completed_at,
-            (SELECT COUNT(*) FROM artifacts a WHERE a.job_id=f.job_id AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')) AS publication_artifacts,
-            (SELECT COUNT(*) FROM job_events e WHERE e.job_id=f.job_id AND e.stage IN ('complete','published','phase5_local_complete')) AS completion_events,
+            (SELECT COUNT(*) FROM artifacts a WHERE a.job_id=f.job_id
+              AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+              AND datetime(a.created_at)>=datetime(COALESCE(latest_correction.started_at,a.created_at))) AS publication_artifacts,
+            (SELECT COUNT(*) FROM job_events e WHERE e.job_id=f.job_id
+              AND e.stage IN ('complete','published','phase5_local_complete')
+              AND datetime(e.created_at)>=datetime(COALESCE(latest_correction.started_at,e.created_at))) AS completion_events,
             (SELECT COUNT(*) FROM job_events e WHERE e.job_id=f.job_id AND instr(COALESCE(e.detail,''), ?) > 0) AS marker_events
      FROM phase5_local_pilot_fences f
      JOIN jobs j ON j.id=f.job_id
+     CROSS JOIN latest_correction
      WHERE f.pilot_key=? AND f.job_id=? AND f.source_message_id=?`,
-  ).bind(input.marker || "__phase5_no_marker__", input.pilotKey, input.jobId, input.sourceMessageId).first<Phase5ControlStateRow>();
+  ).bind(input.jobId, input.marker || "__phase5_no_marker__", input.pilotKey, input.jobId, input.sourceMessageId).first<Phase5ControlStateRow>();
 }
 
 async function phase5InsertControlMarker(
@@ -3576,11 +3602,13 @@ async function phase5RenewProcessingLease(
            SELECT 1 FROM artifacts a
            WHERE a.job_id=phase5_local_pilot_fences.job_id
              AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+             AND datetime(a.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},a.created_at))
          )
          AND NOT EXISTS (
            SELECT 1 FROM job_events e
            WHERE e.job_id=phase5_local_pilot_fences.job_id
              AND e.stage IN ('complete','published','phase5_local_complete')
+             AND datetime(e.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},e.created_at))
          )`,
     ).bind(
       input.tokenExpiresAt,
@@ -3614,11 +3642,13 @@ async function phase5RenewProcessingLease(
            SELECT 1 FROM artifacts a
            WHERE a.job_id=jobs.id
              AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+             AND datetime(a.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("jobs.id")},a.created_at))
          )
          AND NOT EXISTS (
            SELECT 1 FROM job_events e
            WHERE e.job_id=jobs.id
              AND e.stage IN ('complete','published','phase5_local_complete')
+             AND datetime(e.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("jobs.id")},e.created_at))
          )`,
     ).bind(
       input.tokenExpiresAt,
@@ -3661,11 +3691,13 @@ async function phase5RepairQueuedStart(
            SELECT 1 FROM artifacts a
            WHERE a.job_id=phase5_local_pilot_fences.job_id
              AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+             AND datetime(a.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},a.created_at))
          )
          AND NOT EXISTS (
            SELECT 1 FROM job_events e
            WHERE e.job_id=phase5_local_pilot_fences.job_id
              AND e.stage IN ('complete','published','phase5_local_complete')
+             AND datetime(e.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},e.created_at))
          )`,
     ).bind(input.tokenExpiresAt, input.pilotKey, input.jobId, input.sourceMessageId, input.leaseOwner, input.tokenExpiresAt, input.sourceMessageId),
     env.REEL_DB.prepare(
@@ -3688,11 +3720,13 @@ async function phase5RepairQueuedStart(
            SELECT 1 FROM artifacts a
            WHERE a.job_id=jobs.id
              AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+             AND datetime(a.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("jobs.id")},a.created_at))
          )
          AND NOT EXISTS (
            SELECT 1 FROM job_events e
            WHERE e.job_id=jobs.id
              AND e.stage IN ('complete','published','phase5_local_complete')
+             AND datetime(e.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("jobs.id")},e.created_at))
          )`,
     ).bind(
       emoji.display,
@@ -3880,11 +3914,13 @@ async function handlePhase5StartLocalProcessing(request: Request, env: Env): Pro
          SELECT 1 FROM artifacts a
          WHERE a.job_id=phase5_local_pilot_fences.job_id
            AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+           AND datetime(a.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},a.created_at))
        )
        AND NOT EXISTS (
          SELECT 1 FROM job_events e
          WHERE e.job_id=phase5_local_pilot_fences.job_id
            AND e.stage IN ('complete','published','phase5_local_complete')
+           AND datetime(e.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},e.created_at))
        )`,
   ).bind(execution.tokenExpiresAt, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner, execution.tokenExpiresAt).run();
   if ((fenceUpdate.meta.changes || 0) !== 1) {
@@ -4081,11 +4117,13 @@ async function handlePhase5AbortLocalProcessing(request: Request, env: Env): Pro
            SELECT 1 FROM artifacts a
            WHERE a.job_id=phase5_local_pilot_fences.job_id
              AND (a.object_key LIKE 'library/%' OR a.object_key LIKE 'reels/%/index.html')
+             AND datetime(a.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},a.created_at))
          )
          AND NOT EXISTS (
            SELECT 1 FROM job_events e
            WHERE e.job_id=phase5_local_pilot_fences.job_id
              AND e.stage IN ('complete','published','phase5_local_complete')
+             AND datetime(e.created_at)>=datetime(COALESCE(${phase5LatestCorrectiveAtSql("phase5_local_pilot_fences.job_id")},e.created_at))
          )`,
     ).bind(validated.reason, validated.pilotKey, validated.jobId, validated.sourceMessageId, validated.leaseOwner).run();
     if ((fenceUpdate.meta.changes || 0) !== 1) {

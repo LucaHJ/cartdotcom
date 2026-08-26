@@ -909,6 +909,28 @@ test("Phase 5 renewal route fails closed on queued exact-job claim without compl
   assert.ok(source.indexOf("phase5_local_lease_renewed", renewIndex) > renewIndex);
 });
 
+test("corrective resynthesis clears stale output keys and scopes Phase 5 publication guards to the new attempt", () => {
+  const correctiveIndex = source.indexOf("async function handleCorrectiveResynthesis");
+  const controlStateIndex = source.indexOf("async function phase5ControlState");
+  const startIndex = source.indexOf("async function handlePhase5StartLocalProcessing");
+  assert.ok(correctiveIndex > 0);
+  assert.ok(controlStateIndex > correctiveIndex);
+  assert.ok(startIndex > controlStateIndex);
+
+  const correctiveBody = source.slice(correctiveIndex, controlStateIndex);
+  assert.match(correctiveBody, /html_key=NULL,library_path=NULL,markdown_key=NULL/);
+  assert.match(correctiveBody, /transcript_key=NULL,synthesis_json_key=NULL/);
+
+  const controlBody = source.slice(source.indexOf("function phase5LatestCorrectiveAtSql"), startIndex);
+  assert.match(controlBody, /LIKE 'corrective-resynthesis:%'/);
+  assert.match(controlBody, /WITH latest_correction AS/);
+  assert.match(controlBody, /datetime\(a\.created_at\)>=datetime\(COALESCE\(latest_correction\.started_at,a\.created_at\)\)/);
+  assert.match(controlBody, /datetime\(e\.created_at\)>=datetime\(COALESCE\(latest_correction\.started_at,e\.created_at\)\)/);
+
+  const startBody = source.slice(startIndex, source.indexOf("async function handlePhase5FinalizeLocalProcessing", startIndex));
+  assert.match(startBody, /phase5LatestCorrectiveAtSql\("phase5_local_pilot_fences\.job_id"\)/);
+});
+
 test("Phase 5 exact control routes guard every cloud transition before audit or queue effects", () => {
   const startIndex = source.indexOf("async function handlePhase5StartLocalProcessing");
   const finalizeIndex = source.indexOf("async function handlePhase5FinalizeLocalProcessing");
