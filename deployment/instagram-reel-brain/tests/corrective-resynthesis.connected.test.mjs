@@ -254,3 +254,16 @@ test("corrective admin route remains behind the existing admin gate", () => {
   assert.ok(claimCheckIndex > correctiveHandlerIndex, "D1 adapter should check the conditional claim result");
   assert.ok(destructiveBatchIndex > claimCheckIndex, "job-owned destructive work should happen only after a won claim");
 });
+
+test("library corrective alias uses the dedicated exact-control credential", () => {
+  const source = readFileSync(new URL("src/index.ts", root), "utf8");
+  const handleApiIndex = source.indexOf("async function handleApi");
+  const routeIndex = source.indexOf("const libraryCorrectiveMatch = url.pathname.match", handleApiIndex);
+  const credentialCheck = source.indexOf("const libraryUnauthorized = requirePhase5Control(request, env);", routeIndex);
+  const handlerCall = source.indexOf("return handleCorrectiveResynthesis(request, env, libraryCorrectiveMatch[1]);", routeIndex);
+  const adminGateIndex = source.indexOf("const unauthorized = requireAdmin(request, env);", handleApiIndex);
+
+  assert.ok(routeIndex > handleApiIndex);
+  assert.ok(credentialCheck > routeIndex && credentialCheck < handlerCall);
+  assert.ok(handlerCall < adminGateIndex, "the scoped alias must authenticate before the unrelated general admin gate");
+});

@@ -6498,6 +6498,13 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     if (request.method === "POST") return handleListBackfill(request, env);
     return json({ error: "Method not allowed" }, { status: 405 });
   }
+  const libraryCorrectiveMatch = url.pathname.match(/^\/api\/admin\/reel-library\/corrective-resynthesis\/([^/]+)$/);
+  if (libraryCorrectiveMatch) {
+    const libraryUnauthorized = requirePhase5Control(request, env);
+    if (libraryUnauthorized) return libraryUnauthorized;
+    if (request.method === "POST") return handleCorrectiveResynthesis(request, env, libraryCorrectiveMatch[1]);
+    return json({ error: "Method not allowed" }, { status: 405 });
+  }
   const unauthorized = requireAdmin(request, env);
   if (unauthorized) return unauthorized;
 
