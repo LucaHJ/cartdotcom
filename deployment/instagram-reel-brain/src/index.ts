@@ -2105,6 +2105,15 @@ async function publishSynthesisHtml(
   options: { deferIndexRefresh?: boolean } = {},
 ): Promise<{ rootKey: string; rootPath: string; resourceCount: number }> {
   if (!env.REEL_LIBRARY_KV) throw new Error("REEL_LIBRARY_KV is not configured");
+  if (!Array.isArray(payload.lists) || !payload.lists.length) {
+    const storedLists = await env.REEL_DB.prepare("SELECT object_key FROM artifacts WHERE job_id=? AND kind='lists' ORDER BY created_at DESC LIMIT 1")
+      .bind(job.id).first<{ object_key: string }>();
+    if (storedLists?.object_key) {
+      const object = await env.REEL_ARCHIVE.get(storedLists.object_key);
+      const lists = object ? await object.json<SynthesisList[]>().catch(() => []) : [];
+      if (Array.isArray(lists)) payload.lists = lists;
+    }
+  }
   const resources = routeSynthesisResources(job, payload);
   const tokenUsage = tokenUsageFromPayload(payload);
   const commentBundle = await loadCapturedCommentBundle(env, job, payload);
@@ -2947,8 +2956,14 @@ async function handleListBackfill(request: Request, env: Env): Promise<Response>
     }
   }
   payload.lists = input.lists;
-  const serialised = JSON.stringify(payload, null, 2);
-  await putPhase7MirroredObject(env, job.synthesis_json_key, serialised, { httpMetadata: { contentType: "application/json" } });
+  const serialised = JSON.stringify(input.lists, null, 2);
+  const digest = await sha256(serialised);
+  const listKey = `reels/${job.shortcode || job.id}/${job.id}/synthesis/lists-${digest.slice(0, 12)}.json`;
+  const existing = await env.REEL_ARCHIVE.head(listKey);
+  if (!existing) await putPhase7MirroredObject(env, listKey, serialised, { httpMetadata: { contentType: "application/json" } });
+  await env.REEL_DB.prepare(
+    "INSERT INTO artifacts(id,job_id,kind,object_key,content_type,byte_size,sha256) VALUES (?,?,?,?,?,?,?) ON CONFLICT(object_key) DO UPDATE SET byte_size=excluded.byte_size,sha256=excluded.sha256",
+  ).bind(uuid(), jobId, "lists", listKey, "application/json", new TextEncoder().encode(serialised).byteLength, digest).run();
   const published = await publishSynthesisHtml(env, job, payload);
   await env.REEL_DB.prepare("INSERT INTO job_events(job_id,stage,status,detail) VALUES (?,'published','complete',?)")
     .bind(jobId, `list_backfill:${input.lists.length}`).run();

@@ -24,7 +24,10 @@ def main() -> int:
         json=payload,
         timeout=180,
     )
-    result = response.json()
+    try:
+        result = response.json()
+    except ValueError:
+        raise SystemExit(f"list backfill failed ({response.status_code}): non-JSON Worker response") from None
     if not response.ok:
         raise SystemExit(f"list backfill failed ({response.status_code}): {result.get('error', 'unknown error')}")
     print(json.dumps({"ok": True, "job_id": result.get("job_id"), "lists": result.get("lists"), "root_path": result.get("root_path")}))
