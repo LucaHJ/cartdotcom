@@ -105,3 +105,11 @@ test("Phase 6 exact retry and terminal failure routes stay authenticated and job
   assert.match(workerSource, /f\.status='rolled_back' AND f\.local_lease_owner=\?/);
   assert.match(workerSource, /f\.rollback_reason=\?/);
 });
+
+test("Phase 6 admits only audited corrective resynthesis jobs across the cutover watermark", () => {
+  assert.match(workerSource, /corrective_resynthesis/);
+  assert.match(workerSource, /json_extract\(correction\.detail, '\$\.marker'\)/);
+  assert.match(workerSource, /LIKE 'corrective-resynthesis:%'/);
+  assert.match(workerSource, /phase5_local_pilot_fences\.status IN \('local_complete','rolled_back','expired'\)/);
+  assert.match(workerSource, /datetime\(j\.created_at\)>=datetime\(\?\) OR EXISTS/);
+});

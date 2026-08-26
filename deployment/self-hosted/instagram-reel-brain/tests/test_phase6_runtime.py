@@ -47,8 +47,10 @@ def args():
 class FakeRunner:
     def __init__(self, rows):
         self.rows = rows
+        self.queries = []
 
     def psql_json(self, *_args):
+        self.queries.append(_args[-1])
         return self.rows
 
 
@@ -123,6 +125,29 @@ class Phase6RuntimeTests(unittest.TestCase):
         }
         result = module.insert_local_lease(FakeRunner([{"inserted": 1, "events": 1, "existing": 0}]), args(), candidate, fence)
         self.assertEqual(result["inserted"], 1)
+
+    def test_corrective_resynthesis_reopens_only_its_completed_exact_local_lease(self):
+        module = load_control()
+        candidate = {
+            "pilot_key": "phase6:2:job-1",
+            "job_id": "job-1",
+            "source_message_id": "message-1",
+            "corrective_resynthesis": 1,
+        }
+        fence = {
+            "expires_at": "2026-08-26T12:00:00Z",
+            "local_lease_expires_at": "2026-08-26T11:00:00Z",
+        }
+        runner = FakeRunner([{"inserted": 1, "events": 1, "existing": 1}])
+        module.insert_local_lease(runner, args(), candidate, fence)
+        self.assertIn("status IN ('rolled_back','completed')", runner.queries[0])
+        self.assertIn("status IN ('leased','processing'))", runner.queries[0])
+
+        ordinary = {**candidate, "corrective_resynthesis": 0}
+        ordinary_runner = FakeRunner([{"inserted": 1, "events": 1, "existing": 1}])
+        module.insert_local_lease(ordinary_runner, args(), ordinary, fence)
+        self.assertIn("status IN ('rolled_back')", ordinary_runner.queries[0])
+        self.assertNotIn("status IN ('rolled_back','completed')", ordinary_runner.queries[0])
 
     def test_local_processing_claim_conflict_is_reconciled_for_exact_owner(self):
         module = load_control()

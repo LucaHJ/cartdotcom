@@ -3085,6 +3085,9 @@ async function handleRetryJob(request: Request, env: Env, jobId: string): Promis
 
 async function handleCorrectiveResynthesis(request: Request, env: Env, jobId: string): Promise<Response> {
   const input = await readJson<{ confirm_corrective?: string; corrective_key?: string; instructions?: string; reason?: string }>(request);
+  const correctiveAuthority = await phase6Authority(env);
+  const selfHostedCorrective = phase6AuthorityAllowsLocalClaims(correctiveAuthority);
+  const correctiveFenceExpiry = new Date(Date.now() + 6 * 60 * 60_000).toISOString();
   const result = await correctivelyResynthesiseOne(
     {
       readJob: async (id) => env.REEL_DB.prepare("SELECT * FROM jobs WHERE id=?").bind(id).first<JobRow>(),
@@ -3102,7 +3105,7 @@ async function handleCorrectiveResynthesis(request: Request, env: Env, jobId: st
         ).bind(reset.instructions, reset.job.id).run();
         if (!correctiveClaimApplied(claim)) return { applied: false };
         const guardedJob = "EXISTS(SELECT 1 FROM jobs WHERE id=? AND status='queued' AND pilot_run_id IS NULL AND instructions=?)";
-        const results = await env.REEL_DB.batch([
+        const statements = [
           env.REEL_DB.prepare(`DELETE FROM resources WHERE job_id=? AND ${guardedJob}`)
             .bind(reset.job.id, reset.job.id, reset.instructions),
           env.REEL_DB.prepare(
@@ -3113,8 +3116,35 @@ async function handleCorrectiveResynthesis(request: Request, env: Env, jobId: st
             `INSERT INTO job_events(job_id,stage,status,emoji,detail)
              SELECT ?,'queued','queued','⬇️',? WHERE ${guardedJob}`,
           ).bind(reset.job.id, reset.eventDetail, reset.job.id, reset.instructions),
-        ]);
-        return { applied: correctiveClaimApplied(results[2]) };
+        ];
+        if (selfHostedCorrective) {
+          statements.push(env.REEL_DB.prepare(
+            `INSERT INTO phase5_local_pilot_fences(
+               pilot_key,job_id,source_message_id,dedupe_key,status,expires_at,
+               local_lease_owner,local_lease_expires_at,completed_at,rollback_at,rollback_reason,audit_json
+             )
+             SELECT 'phase6:' || ? || ':' || j.id,j.id,j.source_message_id,j.dedupe_key,'armed',?,
+                    NULL,NULL,NULL,NULL,NULL,?
+             FROM jobs j
+             WHERE j.id=? AND j.status='queued' AND j.pilot_run_id IS NULL AND j.instructions=?
+               AND j.source_message_id IS NOT NULL
+             ON CONFLICT(job_id) DO UPDATE SET
+               pilot_key=excluded.pilot_key,source_message_id=excluded.source_message_id,dedupe_key=excluded.dedupe_key,
+               status='armed',expires_at=excluded.expires_at,local_lease_owner=NULL,local_lease_expires_at=NULL,
+               completed_at=NULL,rollback_at=NULL,rollback_reason=NULL,audit_json=excluded.audit_json,updated_at=CURRENT_TIMESTAMP
+             WHERE phase5_local_pilot_fences.status IN ('local_complete','rolled_back','expired')`,
+          ).bind(
+            correctiveAuthority.generation,
+            correctiveFenceExpiry,
+            JSON.stringify({ corrective_resynthesis: true, marker: reset.marker, generation: correctiveAuthority.generation }),
+            reset.job.id,
+            reset.instructions,
+          ));
+        }
+        const results = await env.REEL_DB.batch(statements);
+        const auditApplied = correctiveClaimApplied(results[2]);
+        const fenceApplied = !selfHostedCorrective || correctiveClaimApplied(results[3]);
+        return { applied: auditApplied && fenceApplied };
       },
       queueJob: async (id) => {
         await env.REEL_QUEUE.send({ jobId: id });
@@ -4361,15 +4391,34 @@ async function phase6NextCandidate(env: Env, owner: string): Promise<Record<stri
   return env.REEL_DB.prepare(
     `SELECT f.pilot_key,f.job_id,f.source_message_id,f.status AS fence_status,f.expires_at,
             f.local_lease_owner,f.local_lease_expires_at,j.source_url,j.created_at,j.attempts,
-            j.status AS job_status,j.stage AS job_stage
+            j.status AS job_status,j.stage AS job_stage,
+            CASE WHEN EXISTS(
+              SELECT 1 FROM job_events correction
+              WHERE correction.job_id=j.id AND datetime(correction.created_at)>=datetime(?)
+                AND COALESCE(CASE WHEN json_valid(correction.detail)
+                  THEN CAST(json_extract(correction.detail, '$.marker') AS TEXT) END,'') LIKE 'corrective-resynthesis:%'
+            ) THEN 1 ELSE 0 END AS corrective_resynthesis
      FROM phase5_local_pilot_fences f JOIN jobs j ON j.id=f.job_id
      WHERE f.pilot_key LIKE ? AND datetime(f.expires_at)>datetime('now')
-       AND j.pilot_run_id IS NULL AND datetime(j.created_at)>=datetime(?)
+       AND j.pilot_run_id IS NULL AND (
+         datetime(j.created_at)>=datetime(?) OR EXISTS(
+           SELECT 1 FROM job_events correction
+           WHERE correction.job_id=j.id AND datetime(correction.created_at)>=datetime(?)
+             AND COALESCE(CASE WHEN json_valid(correction.detail)
+               THEN CAST(json_extract(correction.detail, '$.marker') AS TEXT) END,'') LIKE 'corrective-resynthesis:%'
+         )
+       )
        AND ((f.status IN ('local_claimed','local_processing') AND f.local_lease_owner=?) OR f.status='armed')
        AND j.status IN ('queued','running')
      ORDER BY CASE f.status WHEN 'local_processing' THEN 0 WHEN 'local_claimed' THEN 1 ELSE 2 END, datetime(j.created_at),f.job_id
      LIMIT 1`,
-  ).bind(`phase6:${authority.generation}:%`, authority.cutover_watermark, owner).first<Record<string, unknown>>();
+  ).bind(
+    authority.cutover_watermark,
+    `phase6:${authority.generation}:%`,
+    authority.cutover_watermark,
+    authority.cutover_watermark,
+    owner,
+  ).first<Record<string, unknown>>();
 }
 
 async function handlePhase6Next(request: Request, env: Env): Promise<Response> {

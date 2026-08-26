@@ -29,7 +29,7 @@ test("Phase 6 control keeps credentials inside the control container", () => {
   assert.match(control, /claim-next/);
   assert.match(control, /retry-job/);
   assert.match(control, /fail-job/);
-  assert.match(control, /phase5_pilot_leases\.status='rolled_back'/);
+  assert.match(control, /reset_statuses = "\('rolled_back','completed'\)" if corrective_resynthesis/);
   assert.doesNotMatch(control, /print\(.*token|PGPASSWORD|docker\.sock|privileged/);
   assert.match(dockerfile, /phase6_dispatch_control\.py/);
 });

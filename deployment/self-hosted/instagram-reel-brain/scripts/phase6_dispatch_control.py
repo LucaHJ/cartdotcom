@@ -122,6 +122,9 @@ def insert_local_lease(runner: Any, args: argparse.Namespace, candidate: dict[st
     source_message_id = str(candidate["source_message_id"])
     lease_expiry = str(fence.get("local_lease_expires_at") or fence.get("expires_at") or "")
     overall_expiry = str(fence.get("expires_at") or lease_expiry)
+    corrective_resynthesis = bool(candidate.get("corrective_resynthesis"))
+    reset_statuses = "('rolled_back','completed')" if corrective_resynthesis else "('rolled_back')"
+    existing_statuses = "('leased','processing')" if corrective_resynthesis else "('leased','processing','completed')"
     detail = json.dumps({"phase6": True, "generation": args.generation, "lease_owner": args.lease_owner}, separators=(",", ":"))
     rows = runner.psql_json(pg_args(args), args.schema, f"""
       WITH capacity_lock AS (
@@ -139,14 +142,14 @@ def insert_local_lease(runner: Any, args: argparse.Namespace, candidate: dict[st
            OR EXISTS(SELECT 1 FROM {args.schema}.phase5_pilot_leases
              WHERE pilot_key={sql_literal(pilot_key)} AND exact_job_id={sql_literal(job_id)}
                AND source_message_id={sql_literal(source_message_id)} AND lease_owner={sql_literal(args.lease_owner)}
-               AND status IN ('leased','processing','completed'))
+               AND status IN ('leased','processing'))
         ON CONFLICT (pilot_key) DO UPDATE SET
           status='leased',lease_owner=excluded.lease_owner,lease_acquired_at=now(),lease_heartbeat_at=now(),
           lease_expires_at=excluded.lease_expires_at,expires_at=excluded.expires_at,
           rollback_at=NULL,rollback_reason=NULL,updated_at=now(),audit_json=excluded.audit_json
         WHERE phase5_pilot_leases.exact_job_id=excluded.exact_job_id
           AND phase5_pilot_leases.source_message_id=excluded.source_message_id
-          AND phase5_pilot_leases.status='rolled_back'
+          AND phase5_pilot_leases.status IN {reset_statuses}
         RETURNING pilot_key,exact_job_id
       ), event_insert AS (
         INSERT INTO {args.schema}.phase5_pilot_events(pilot_key,job_id,stage,status,detail)
@@ -158,7 +161,7 @@ def insert_local_lease(runner: Any, args: argparse.Namespace, candidate: dict[st
         'existing',(SELECT count(*) FROM {args.schema}.phase5_pilot_leases
           WHERE pilot_key={sql_literal(pilot_key)} AND exact_job_id={sql_literal(job_id)}
             AND source_message_id={sql_literal(source_message_id)} AND lease_owner={sql_literal(args.lease_owner)}
-            AND status IN ('leased','processing','completed'))
+            AND status IN {existing_statuses})
       );
     """)
     inserted = int(rows[0].get("inserted") or 0) if len(rows) == 1 else 0
