@@ -194,6 +194,36 @@ test("Phase 4 SQLite queries return same-day D1 space timestamps after ISO water
   assert.deepEqual(rows.map((row) => row.mirror_updated_at), ["2026-08-21T02:37:16.000Z", "2026-08-21T02:42:04.000Z"]);
 });
 
+test("Phase 4 live scope admits only explicitly audited post-watermark corrections of historical jobs", () => {
+  const db = createPhase4Sqlite();
+  db.exec(`
+    INSERT INTO jobs(id, status, created_at, updated_at, shortcode, html_key) VALUES
+      ('old-ordinary', 'queued', '2026-08-20 12:00:00', '2026-08-26 06:00:00', 'old-ordinary', 'library/old-ordinary.html'),
+      ('old-corrected', 'queued', '2026-08-20 12:00:01', '2026-08-26 06:00:01', 'old-corrected', 'library/old-corrected.html'),
+      ('new-normal', 'queued', '2026-08-26 05:59:59', '2026-08-26 06:00:02', 'new-normal', 'library/new-normal.html');
+    INSERT INTO job_events(id, job_id, stage, status, detail, created_at) VALUES
+      ('ordinary-event', 'old-ordinary', 'queued', 'queued', 'manual status update', '2026-08-26 05:59:58'),
+      ('corrective-event', 'old-corrected', 'queued', 'queued', 'corrective-resynthesis:brad-pitt-full-ranking-and-hm-v1', '2026-08-26 05:59:59');
+    INSERT INTO artifacts(id, job_id, kind, object_key, content_type, byte_size, sha256, created_at) VALUES
+      ('ordinary-artifact', 'old-ordinary', 'html', 'library/old-ordinary.html', 'text/html', '1', 'sha-a', '2026-08-26 06:00:00'),
+      ('corrected-artifact', 'old-corrected', 'html', 'library/old-corrected.html', 'text/html', '1', 'sha-b', '2026-08-26 06:00:01');
+  `);
+  const watermark = "2026-08-25T13:30:07.000Z";
+  const liveScope = { kind: "live", minWatermark: watermark };
+  const jobsQuery = phase4DeltaQuery("jobs", watermark, decodePhase4Cursor(null, watermark), 10, liveScope);
+  const jobs = db.prepare(jobsQuery.sql).all(...jobsQuery.binds);
+  assert.deepEqual(jobs.map((row) => row.id), ["old-corrected", "new-normal"]);
+
+  const artifactsQuery = phase4DeltaQuery("artifacts", watermark, decodePhase4Cursor(null, watermark), 10, liveScope);
+  const artifacts = db.prepare(artifactsQuery.sql).all(...artifactsQuery.binds);
+  assert.deepEqual(artifacts.map((row) => row.id), ["corrected-artifact"]);
+
+  const allowedObject = phase4ObjectAccessQuery("library/old-corrected.html", watermark, liveScope);
+  assert.equal(db.prepare(allowedObject.sql).all(...allowedObject.binds).length, 1);
+  const blockedObject = phase4ObjectAccessQuery("library/old-ordinary.html", watermark, liveScope);
+  assert.equal(db.prepare(blockedObject.sql).all(...blockedObject.binds).length, 0);
+});
+
 test("Phase 4 SQLite pagination remains complete and idempotent with normalized timestamps", () => {
   const db = createPhase4Sqlite();
   db.exec(`
