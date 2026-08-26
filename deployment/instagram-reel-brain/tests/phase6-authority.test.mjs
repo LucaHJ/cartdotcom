@@ -113,3 +113,12 @@ test("Phase 6 admits only audited corrective resynthesis jobs across the cutover
   assert.match(workerSource, /phase5_local_pilot_fences\.status IN \('local_complete','rolled_back','expired'\)/);
   assert.match(workerSource, /datetime\(j\.created_at\)>=datetime\(\?\) OR EXISTS/);
 });
+
+test("Phase 6 exact retry admits only an audited post-cutover correction of a pre-cutover job", () => {
+  const retryIndex = workerSource.indexOf("async function handlePhase6Retry");
+  const failIndex = workerSource.indexOf("async function handlePhase6TerminalFailure", retryIndex);
+  const retryBody = workerSource.slice(retryIndex, failIndex);
+  assert.match(retryBody, /LIKE 'corrective-resynthesis:%'/);
+  assert.match(retryBody, /datetime\(correction\.created_at\)>=datetime\(\?\)/);
+  assert.match(retryBody, /createdTime < watermarkTime && Number\(existing\.corrective_resynthesis \|\| 0\) !== 1/);
+});

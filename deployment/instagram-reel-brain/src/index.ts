@@ -76,6 +76,7 @@ import {
 import {
   DEFAULT_STAGE_REACTIONS,
   applyMediaLinkFallbacks,
+  completionSynthesisObjectKey,
   canonicalArtifactKey,
   canonicalizeInstagramUrl,
   classifyInstagramMediaPayload,
@@ -4570,10 +4571,17 @@ async function handlePhase6Retry(request: Request, env: Env): Promise<Response> 
   }
   const existing = await env.REEL_DB.prepare(
     `SELECT f.status AS fence_status,f.rollback_reason,f.source_message_id,f.local_lease_owner,
-            j.status AS job_status,j.stage AS job_stage,j.attempts,j.created_at,j.completed_at,j.html_key,j.library_path
+            j.status AS job_status,j.stage AS job_stage,j.attempts,j.created_at,j.completed_at,j.html_key,j.library_path,
+            EXISTS(
+              SELECT 1 FROM job_events correction
+              WHERE correction.job_id=j.id
+                AND json_valid(correction.detail)
+                AND CAST(json_extract(correction.detail,'$.marker') AS TEXT) LIKE 'corrective-resynthesis:%'
+                AND datetime(correction.created_at)>=datetime(?)
+            ) AS corrective_resynthesis
      FROM phase5_local_pilot_fences f JOIN jobs j ON j.id=f.job_id
      WHERE f.pilot_key=? AND f.job_id=? AND f.source_message_id=?`,
-  ).bind(validated.pilotKey, validated.jobId, validated.sourceMessageId).first<Record<string, unknown>>();
+  ).bind(authority.cutover_watermark, validated.pilotKey, validated.jobId, validated.sourceMessageId).first<Record<string, unknown>>();
   if (existing?.fence_status === "armed" && existing.job_status === "queued") {
     return json({ ok: true, retry_armed: true, idempotent: true, job_id: validated.jobId, pilot_key: validated.pilotKey });
   }
@@ -4585,7 +4593,8 @@ async function handlePhase6Retry(request: Request, env: Env): Promise<Response> 
     || !["queued", "failed"].includes(String(existing.job_status || ""))
     || Number(existing.attempts || 0) >= 3
     || existing.completed_at || existing.html_key || existing.library_path
-    || !Number.isFinite(createdTime) || !Number.isFinite(watermarkTime) || createdTime < watermarkTime
+    || !Number.isFinite(createdTime) || !Number.isFinite(watermarkTime)
+    || (createdTime < watermarkTime && Number(existing.corrective_resynthesis || 0) !== 1)
   ) {
     return json({ ok: false, error: "Phase 6 exact retry is not eligible", state: existing || null }, { status: 409 });
   }
@@ -5641,7 +5650,11 @@ async function handleComplete(request: Request, env: Env, jobId: string): Promis
       };
   payload.audio = audio;
   const processingSeconds = processingSecondsSince(job.started_at || job.created_at);
-  const synthesisKey = `reels/${job.shortcode || job.id}/${job.id}/synthesis/result.json`;
+  const synthesisKey = completionSynthesisObjectKey({
+    jobId: job.id,
+    shortcode: job.shortcode,
+    currentSynthesisKey: job.synthesis_json_key,
+  });
   await putPhase7MirroredObject(env, synthesisKey, JSON.stringify(payload, null, 2), { httpMetadata: { contentType: "application/json" } });
 
   const statements: D1PreparedStatement[] = [

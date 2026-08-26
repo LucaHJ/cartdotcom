@@ -1,5 +1,17 @@
 export type InstagramReaction = string;
 
+export function completionSynthesisObjectKey(input: {
+  jobId: string;
+  shortcode?: string | null;
+  currentSynthesisKey?: string | null;
+}): string {
+  const current = String(input.currentSynthesisKey || "").trim();
+  if (/\/synthesis\/attempt-[^/]+\/synthesis\.json$/i.test(current)) {
+    return current.replace(/\/synthesis\.json$/i, "/result.json");
+  }
+  return `reels/${input.shortcode || input.jobId}/${input.jobId}/synthesis/result.json`;
+}
+
 export type ResourceMedia = {
   hero_image_url?: string | null;
   hero_image_alt?: string | null;
