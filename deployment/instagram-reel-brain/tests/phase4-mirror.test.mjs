@@ -199,6 +199,7 @@ test("Phase 4 live scope admits only explicitly audited post-watermark correctio
   db.exec(`
     INSERT INTO jobs(id, status, created_at, updated_at, shortcode, html_key) VALUES
       ('old-ordinary', 'queued', '2026-08-20 12:00:00', '2026-08-26 06:00:00', 'old-ordinary', 'library/old-ordinary.html'),
+      ('between-watermarks', 'queued', '2026-08-24 12:00:00', '2026-08-26 06:00:00', 'between-watermarks', 'library/between-watermarks.html'),
       ('old-corrected', 'queued', '2026-08-20 12:00:01', '2026-08-26 06:00:01', 'old-corrected', 'library/old-corrected.html'),
       ('new-normal', 'queued', '2026-08-26 05:59:59', '2026-08-26 06:00:02', 'new-normal', 'library/new-normal.html');
     INSERT INTO job_events(id, job_id, stage, status, detail, created_at) VALUES

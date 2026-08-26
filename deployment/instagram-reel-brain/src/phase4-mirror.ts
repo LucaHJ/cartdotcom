@@ -265,7 +265,7 @@ function phase4ReplayLinkedJobScope(table: Phase4MirrorTable, scope: Phase4Mirro
   return { sql: "0 = 1", binds: [] };
 }
 
-function phase4LiveCorrectiveJobScope(scope: Phase4MirrorScope | undefined): { sql: string; binds: string[] } | null {
+function phase4LiveCorrectiveJobScope(scope: Phase4MirrorScope | undefined, watermark: string): { sql: string; binds: string[] } | null {
   if (scope?.kind !== "live") return null;
   return {
     sql: `(datetime(created_at) >= datetime(?) OR EXISTS (
@@ -274,12 +274,12 @@ function phase4LiveCorrectiveJobScope(scope: Phase4MirrorScope | undefined): { s
         AND datetime(job_events.created_at) >= datetime(?)
         AND instr(COALESCE(job_events.detail, ''), 'corrective-resynthesis:') = 1
     ))`,
-    binds: [scope.minWatermark, scope.minWatermark],
+    binds: [watermark, watermark],
   };
 }
 
-function phase4LiveLinkedJobScope(table: Phase4MirrorTable, scope: Phase4MirrorScope | undefined): { sql: string; binds: string[] } | null {
-  const jobScope = phase4LiveCorrectiveJobScope(scope);
+function phase4LiveLinkedJobScope(table: Phase4MirrorTable, scope: Phase4MirrorScope | undefined, watermark: string): { sql: string; binds: string[] } | null {
+  const jobScope = phase4LiveCorrectiveJobScope(scope, watermark);
   if (!jobScope) return null;
   if (table === "jobs") return jobScope;
   if (["job_events", "artifacts", "resources", "outbound_events", "retrieval_documents", "retrieval_terms"].includes(table)) {
@@ -305,7 +305,7 @@ export function phase4DeltaQuery(table: Phase4MirrorTable, watermark: string, cu
     `(${normalizedCursorExpression} > datetime(?) OR (${normalizedCursorExpression} = datetime(?) AND ${keyExpression} > ?))`,
   ];
   const binds: Array<string | number> = [watermark, cursor.created_at, cursor.created_at, cursor.key];
-  const liveScope = phase4LiveLinkedJobScope(table, scope);
+  const liveScope = phase4LiveLinkedJobScope(table, scope, watermark);
   if (liveScope) {
     where.push(liveScope.sql);
     binds.push(...liveScope.binds);
@@ -338,7 +338,7 @@ export function phase4NextCursor(table: Phase4MirrorTable, rows: Array<Record<st
 }
 
 export function phase4ObjectAccessQuery(key: string, watermark: string, scope?: Phase4MirrorScope): { sql: string; binds: string[] } {
-  const liveJobScope = phase4LiveCorrectiveJobScope(scope);
+  const liveJobScope = phase4LiveCorrectiveJobScope(scope, watermark);
   const jobWhere = [liveJobScope?.sql || "datetime(created_at) >= datetime(?)"];
   const jobBinds = liveJobScope?.binds || [watermark];
   if (scope?.completedJobsOnly) jobWhere.push("status = 'complete'");
