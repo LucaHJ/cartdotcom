@@ -287,8 +287,11 @@ export function phase4DeltaQuery(table: Phase4MirrorTable, watermark: string, cu
     binds.push(...replayScope.binds);
   }
   binds.push(limit);
+  const tableExpression = table === "retrieval_terms"
+    ? "retrieval_terms INDEXED BY retrieval_terms_mirror_cursor_idx"
+    : spec.table;
   return {
-    sql: `SELECT ${spec.columns.join(", ")}, ${mirrorTimestampExpression} AS mirror_updated_at, ${keyExpression} AS mirror_key FROM ${spec.table} WHERE ${where.join(" AND ")} ORDER BY ${normalizedCursorExpression} ASC, ${keyExpression} ASC LIMIT ?`,
+    sql: `SELECT ${spec.columns.join(", ")}, ${mirrorTimestampExpression} AS mirror_updated_at, ${keyExpression} AS mirror_key FROM ${tableExpression} WHERE ${where.join(" AND ")} ORDER BY ${normalizedCursorExpression} ASC, ${keyExpression} ASC LIMIT ?`,
     binds,
   };
 }
