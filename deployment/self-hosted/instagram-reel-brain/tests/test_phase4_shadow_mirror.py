@@ -332,6 +332,33 @@ class Phase4ShadowMirrorTest(unittest.TestCase):
         self.assertIn("local_typed_row_drift", sql)
         self.assertNotIn("RAISE EXCEPTION", sql)
 
+    def test_resource_upsert_audits_and_replaces_a_newer_same_job_slug_source_id(self):
+        row = {
+            "id": "resource-new", "job_id": "job-1", "name": "Ocean's Eleven",
+            "slug": "ocean-s-eleven", "created_at": "2026-08-26T06:21:26Z",
+        }
+        sql = mirror.upsert_typed_sql("reel_phase7_test", "resources", row)
+        self.assertIn("phase7_mirror_row_replacements", sql)
+        self.assertIn("newer_cloud_resource_replaced_same_job_slug", sql)
+        self.assertIn("r.created_at <= '2026-08-26T06:21:26Z'::timestamptz", sql)
+        self.assertIn("DELETE FROM reel_phase7_test.resources", sql)
+
+        conflicts = mirror.row_conflict_queries_sql("reel_phase7_test", "resources", row)
+        self.assertIn("semantic_key_newer_local_row", conflicts)
+        self.assertIn("semantic_key_local_drift", conflicts)
+
+    def test_complete_job_reset_to_queued_clears_resource_projection_with_audit(self):
+        row = {
+            "id": "job-1", "status": "queued", "stage": "queued",
+            "synthesis_json_key": None, "updated_at": "2026-08-26T06:20:00Z",
+            "mirror_updated_at": "2026-08-26T06:20:00Z",
+        }
+        sql = mirror.upsert_typed_sql("reel_phase7_test", "jobs", row)
+        self.assertIn("cloud_job_reset_cleared_resources", sql)
+        self.assertIn("job-reset:job-1:2026-08-26T06:20:00Z", sql)
+        self.assertIn("j.status='complete'", sql)
+        self.assertIn("DELETE FROM reel_phase7_test.resources", sql)
+
     def test_watchdog_validates_process_identity_not_only_pid_liveness(self):
         source = WATCHDOG_PATH.read_text(encoding="utf-8")
         self.assertIn("pid_matches_expected_mirror", source)

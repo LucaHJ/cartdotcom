@@ -89,6 +89,52 @@ test("phase7 origin authenticates and atomically verifies local library/object w
   assert.equal((await fetch(`${base}/v1/library/file/reels/test/index.html`, { method: "DELETE" })).status, 405);
 });
 
+test("phase7 origin health fails closed after a mirror drain failure and recovers after success", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "phase7-origin-health-"));
+  const token = randomBytes(40).toString("hex");
+  const tokenFile = join(root, "token");
+  const runDir = join(root, "run");
+  writeFileSync(tokenFile, token);
+  chmodSync(tokenFile, 0o600);
+  const port = freePort();
+  const child = spawn("python", [script, "--bind", "127.0.0.1", "--port", String(port), "--token-file", tokenFile,
+    "--run-dir", runDir, "--object-root", join(root, "objects"), "--library-root", join(root, "library")],
+  { stdio: "ignore" });
+  t.after(() => child.kill());
+  const healthUrl = `http://127.0.0.1:${port}/healthz`;
+  await waitFor(healthUrl);
+  const dbPath = join(runDir, "phase7-origin.sqlite3");
+  const insert = (wakeId, completedAt, ok, returncode) => spawnSync("python", ["-c", `
+import json,sqlite3
+db=sqlite3.connect(${JSON.stringify(dbPath)})
+db.execute("INSERT INTO wake_receipts(wake_id,path,received_at,completed_at,result_json) VALUES(?,?,?,?,?)", (${JSON.stringify(wakeId)},"test",${JSON.stringify(completedAt)},${JSON.stringify(completedAt)},json.dumps({"ok":${ok ? "True" : "False"},"returncode":${returncode}})))
+db.commit()
+`], { encoding: "utf8" });
+
+  let inserted = insert("failed-wake", "2026-08-26T01:00:00.000Z", false, 1);
+  assert.equal(inserted.status, 0, inserted.stderr);
+  let response = await fetch(healthUrl);
+  assert.equal(response.status, 503);
+  let payload = await response.json();
+  assert.equal(payload.mirror_state, "degraded");
+  assert.equal(payload.consecutive_failures, 1);
+  response = await fetch(`${healthUrl}?wake_id=failed-wake`);
+  assert.equal(response.status, 503);
+  payload = await response.json();
+  assert.equal(payload.wake_id, "failed-wake");
+
+  inserted = insert("successful-wake", "2026-08-26T01:01:00.000Z", true, 0);
+  assert.equal(inserted.status, 0, inserted.stderr);
+  response = await fetch(healthUrl);
+  assert.equal(response.status, 200);
+  payload = await response.json();
+  assert.equal(payload.mirror_state, "healthy");
+  assert.equal(payload.consecutive_failures, 0);
+  response = await fetch(`${healthUrl}?wake_id=successful-wake`);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).wake_id, "successful-wake");
+});
+
 test("phase7 dispatcher has event wake plus bounded safety poll", () => {
   const source = readFileSync(new URL("../scripts/phase6_dispatcher.py", import.meta.url), "utf8");
   assert.match(source, /signal\.SIGUSR1/);
@@ -99,6 +145,9 @@ test("phase7 dispatcher has event wake plus bounded safety poll", () => {
   assert.match(dispatcherWatchdog, /9>&-/);
   assert.match(safetyPoll, /tr -d '\\r\\n'/);
   assert.match(safetyPoll, /flock -n/);
+  assert.match(safetyPoll, /\/healthz/);
+  assert.match(safetyPoll, /healthz\?wake_id=\$wake_id/);
+  assert.match(safetyPoll, /phase7_mirror_drain_failed/);
 });
 
 test("phase7 library backfill preserves original manifest timestamps", () => {

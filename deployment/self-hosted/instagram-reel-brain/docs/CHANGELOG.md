@@ -2,6 +2,15 @@
 
 ## 2026-08-26
 
+- Recovered five new Reels stranded at `queued` after a legitimate corrective
+  synthesis replaced D1 resource ids while retaining the same `(job_id, slug)`
+  identities. The Phase 7 PostgreSQL mirror now audits and accepts only newer
+  semantic replacements, clears stale local resources when a completed cloud
+  job is reset to queued, and fails closed on older or locally divergent rows.
+  Origin health now reflects mirror-drain outcomes, and each safety poll waits
+  for its own exact wake receipt instead of treating wake acceptance as
+  completion. All five affected jobs completed in one attempt; production
+  ended idle with zero mirror divergences/errors and backlog disabled.
 - Activated Phase 7 by explicit user override while preserving the failed and
   incomplete Phase 6 soak as historical evidence. PostgreSQL schema
   `reel_phase7_primary_20260825_133007`, local object/library roots, private

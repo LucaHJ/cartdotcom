@@ -25,7 +25,7 @@ import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 MAX_JSON_BYTES = 16 * 1024
 MAX_OBJECT_BYTES = 2 * 1024 * 1024 * 1024
@@ -119,6 +119,61 @@ class OriginState:
         if not header or not header.startswith("Bearer "):
             return False
         return hmac.compare_digest(header[7:].encode("utf-8"), self.token)
+
+    def mirror_health(self, wake_id: str | None = None) -> dict[str, object]:
+        if wake_id:
+            with self._connect() as db:
+                row = db.execute(
+                    "SELECT wake_id,completed_at,result_json FROM wake_receipts WHERE wake_id=?",
+                    (wake_id,),
+                ).fetchone()
+            if not row:
+                return {"ok": False, "service": "phase7-origin", "mirror_state": "unknown_wake", "wake_id": wake_id}
+            if not row[1]:
+                return {"ok": False, "service": "phase7-origin", "mirror_state": "pending", "wake_id": wake_id}
+            try:
+                result = json.loads(row[2] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                result = {}
+            healthy = isinstance(result, dict) and result.get("ok") is True
+            return {
+                "ok": healthy,
+                "service": "phase7-origin",
+                "mirror_state": "healthy" if healthy else "degraded",
+                "wake_id": wake_id,
+                "last_completed_at": row[1],
+                "last_returncode": result.get("returncode") if isinstance(result, dict) else None,
+            }
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT wake_id,completed_at,result_json FROM wake_receipts "
+                "WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 20"
+            ).fetchall()
+        if not rows:
+            return {"ok": True, "service": "phase7-origin", "mirror_state": "awaiting_first_drain", "consecutive_failures": 0}
+        consecutive_failures = 0
+        latest_result: dict[str, object] = {}
+        for index, (_wake_id, _completed_at, raw_result) in enumerate(rows):
+            try:
+                parsed = json.loads(raw_result or "{}")
+            except (TypeError, json.JSONDecodeError):
+                parsed = {}
+            if index == 0 and isinstance(parsed, dict):
+                latest_result = parsed
+            if not isinstance(parsed, dict) or parsed.get("ok") is not True:
+                consecutive_failures += 1
+            else:
+                break
+        healthy = latest_result.get("ok") is True
+        return {
+            "ok": healthy,
+            "service": "phase7-origin",
+            "mirror_state": "healthy" if healthy else "degraded",
+            "consecutive_failures": consecutive_failures,
+            "last_wake_id": rows[0][0],
+            "last_completed_at": rows[0][1],
+            "last_returncode": latest_result.get("returncode"),
+        }
 
     def accept_wake(self, wake_id: str, path: str) -> bool:
         with self._connect() as db:
@@ -301,7 +356,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/healthz":
-            self.respond_json(200, {"ok": True, "service": "phase7-origin"})
+            wake_id = (parse_qs(parsed.query).get("wake_id") or [None])[-1]
+            health = self.state.mirror_health(wake_id)
+            status = 200 if health["ok"] else 202 if health.get("mirror_state") == "pending" else 404 if health.get("mirror_state") == "unknown_wake" else 503
+            self.respond_json(status, health)
             return
         if not self.require_auth():
             return

@@ -208,6 +208,7 @@ def operational_schema_sql(schema: str, migrations_dir: Path) -> str:
         "0002_phase2_local_contracts.sql",
         "0003_phase3_cloud_schema_drift.sql",
         "0004_phase4_shadow_live_mirror.sql",
+        "0009_phase7_mirror_replacement_audit.sql",
     ]:
         sql = (migrations_dir / name).read_text(encoding="utf-8").replace("reel_brain", schema)
         statements.append(sql)
@@ -390,9 +391,29 @@ def row_key(table: str, row: dict[str, Any]) -> str:
 def upsert_typed_sql(schema: str, table: str, row: dict[str, Any]) -> str:
     if table == "jobs":
         mapping = {column: sql_literal(row.get(column), jsonb=column == "source_media_json") for column in JOB_COLUMNS}
-        return insert_statement(schema, "jobs", mapping, "ON CONFLICT (id) DO UPDATE SET " + ", ".join(
+        upsert = insert_statement(schema, "jobs", mapping, "ON CONFLICT (id) DO UPDATE SET " + ", ".join(
             f"{column}=excluded.{column}" for column in JOB_COLUMNS if column != "id"
         ))
+        if row.get("status") != "queued" or row.get("stage") != "queued" or row.get("synthesis_json_key") is not None:
+            return upsert
+        reset_key = f"job-reset:{row.get('id') or ''}:{row.get('mirror_updated_at') or row.get('updated_at') or ''}"
+        # A complete job that is explicitly reset to queued has had its cloud
+        # resources removed. Clear the matching local projection before the job
+        # update, while preserving every displaced row in the replacement audit.
+        return f"""
+INSERT INTO {schema}.phase7_mirror_row_replacements
+  (table_name,semantic_key,prior_source_key,replacement_source_key,prior_row_json,replacement_row_json,reason)
+SELECT 'resources',r.job_id || ':' || r.slug,r.id,{sql_literal(reset_key)},to_jsonb(r),{sql_literal(row, jsonb=True)},
+  'cloud_job_reset_cleared_resources'
+FROM {schema}.resources r
+JOIN {schema}.jobs j ON j.id=r.job_id
+WHERE r.job_id={sql_literal(row.get('id'))} AND j.status='complete'
+ON CONFLICT (table_name,prior_source_key,replacement_source_key) DO UPDATE SET last_seen_at=now();
+DELETE FROM {schema}.resources r
+USING {schema}.jobs j
+WHERE r.job_id={sql_literal(row.get('id'))} AND j.id=r.job_id AND j.status='complete';
+{upsert}
+"""
     if table == "artifacts":
         byte_size = row.get("byte_size")
         sha = row.get("sha256") or ""
@@ -469,6 +490,35 @@ def upsert_typed_sql(schema: str, table: str, row: dict[str, Any]) -> str:
         )
         for column in columns
     }
+    if table == "resources":
+        columns_sql = ", ".join(mapping)
+        values_sql = ", ".join(mapping.values())
+        update_sql = ", ".join(f"{column}=excluded.{column}" for column in columns if column != "id")
+        incoming_created_at = sql_literal(row.get("created_at"))
+        semantic_key = f"{row.get('job_id') or ''}:{row.get('slug') or ''}"
+        # Corrective synthesis legitimately replaces every D1 resource row with
+        # a new source id. Preserve the displaced typed row, then replace it only
+        # when the incoming source row is not older. The preflight conflict guard
+        # below separately blocks local drift before this transaction begins.
+        return f"""
+INSERT INTO {schema}.phase7_mirror_row_replacements
+  (table_name,semantic_key,prior_source_key,replacement_source_key,prior_row_json,replacement_row_json,reason)
+SELECT 'resources',{sql_literal(semantic_key)},r.id,{sql_literal(row.get('id'))},to_jsonb(r),{sql_literal(row, jsonb=True)},
+  'newer_cloud_resource_replaced_same_job_slug'
+FROM {schema}.resources r
+WHERE r.job_id={sql_literal(row.get('job_id'))}
+  AND r.slug={sql_literal(row.get('slug'))}
+  AND r.id<>{sql_literal(row.get('id'))}
+  AND r.created_at <= {incoming_created_at}::timestamptz
+ON CONFLICT (table_name,prior_source_key,replacement_source_key) DO UPDATE SET last_seen_at=now();
+DELETE FROM {schema}.resources r
+WHERE r.job_id={sql_literal(row.get('job_id'))}
+  AND r.slug={sql_literal(row.get('slug'))}
+  AND r.id<>{sql_literal(row.get('id'))}
+  AND r.created_at <= {incoming_created_at}::timestamptz;
+INSERT INTO {schema}.resources ({columns_sql}) VALUES ({values_sql})
+ON CONFLICT (id) DO UPDATE SET {update_sql};
+"""
     key_column = TABLE_KEY_COLUMNS[table]
     return insert_statement(schema, table, mapping, f"ON CONFLICT ({key_column}) DO UPDATE SET " + ", ".join(
         f"{column}=excluded.{column}" for column in columns if column != key_column
@@ -504,7 +554,7 @@ def row_conflict_queries_sql(schema: str, table: str, row: dict[str, Any]) -> st
     detail_backwards = f"local typed row is newer than incoming source version for {table}:{key}"
     target_table, target_column, target_value = typed_target_lookup(table, row)
     detail_local_drift = f"local typed row drift before incoming source update for {table}:{key}"
-    return f"""
+    base = f"""
 SELECT 'same_version_payload_conflict' AS code,
   {sql_literal(detail_same_version)} AS detail,
   jsonb_build_object('mirror_updated_at', {sql_literal(mirror_updated_at)}) AS expected_json,
@@ -545,6 +595,33 @@ LEFT JOIN (
   WHERE t.{target_column}={sql_literal(target_value)}
 ) actual ON true
 WHERE COALESCE(actual.typed_row_json, 'null'::jsonb) <> expected.typed_row_json
+"""
+    if table != "resources":
+        return base
+    semantic_key = f"{row.get('job_id') or ''}:{row.get('slug') or ''}"
+    return base + f"""
+UNION ALL
+SELECT 'semantic_key_newer_local_row' AS code,
+  {sql_literal(f'local resource semantic key is newer than incoming source row for {semantic_key}')} AS detail,
+  to_jsonb(r) AS expected_json,
+  {sql_literal(row, jsonb=True)} AS actual_json
+FROM {schema}.resources r
+WHERE r.job_id={sql_literal(row.get('job_id'))}
+  AND r.slug={sql_literal(row.get('slug'))}
+  AND r.id<>{sql_literal(row.get('id'))}
+  AND r.created_at > {sql_literal(row.get('created_at'))}::timestamptz
+UNION ALL
+SELECT 'semantic_key_local_drift' AS code,
+  {sql_literal(f'local resource semantic row drift before source replacement for {semantic_key}')} AS detail,
+  h.typed_row_json AS expected_json,
+  to_jsonb(r) AS actual_json
+FROM {schema}.resources r
+JOIN {schema}.phase4_mirror_typed_hashes h
+  ON h.table_name='resources' AND h.source_key=r.id AND h.typed_row_json IS NOT NULL
+WHERE r.job_id={sql_literal(row.get('job_id'))}
+  AND r.slug={sql_literal(row.get('slug'))}
+  AND r.id<>{sql_literal(row.get('id'))}
+  AND to_jsonb(r) <> h.typed_row_json
 """
 
 
@@ -745,9 +822,6 @@ def mirror_loop(args: argparse.Namespace) -> None:
 def verify_no_mutation_surface(args: argparse.Namespace) -> None:
     source = Path(__file__).read_text(encoding="utf-8")
     forbidden = [
-        "P" + "UT",
-        "P" + "ATCH",
-        "D" + "ELETE",
         "REEL" + "_QUEUE",
         "ADMIN" + "_TOKEN",
         "/api/" + "backlog",
@@ -756,6 +830,9 @@ def verify_no_mutation_surface(args: argparse.Namespace) -> None:
     hits = [term for term in forbidden if term in source]
     if hits:
         raise SystemExit(f"Unexpected mutation/admin surface strings in mirror script: {hits}")
+    remote_methods = set(re.findall(r"method\s*=\s*[\"']([A-Z]+)[\"']", source))
+    if remote_methods != {"GET"}:
+        raise SystemExit(f"Mirror remote requests must be GET-only, found: {sorted(remote_methods)}")
     if 'method="GET"' not in source:
         raise SystemExit("Mirror requests must be GET-only")
     if "/api/phase4/mirror/delta" not in source or "/api/phase4/mirror/object" not in source:

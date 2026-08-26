@@ -172,6 +172,29 @@ def note_row(body: str, updated_at: str = WATERMARK) -> dict:
     }
 
 
+def resource_row(resource_id: str, created_at: str) -> dict:
+    return {
+        "id": resource_id,
+        "job_id": "phase4-connected-job",
+        "name": "Ocean's Eleven",
+        "slug": "ocean-s-eleven",
+        "kind": "film",
+        "canonical_url": None,
+        "summary": f"Resource {resource_id}",
+        "why_useful": "Connected replacement fixture",
+        "guide_markdown_key": None,
+        "evidence_json": "[]",
+        "created_at": created_at,
+        "guide_html_key": None,
+        "library_path": "films/ocean-s-eleven.html",
+        "artifact_type": "film",
+        "canonical_key": "film:ocean-s-eleven",
+        "guide_text": "Fixture guide",
+        "media_json": {},
+        "mirror_updated_at": created_at,
+    }
+
+
 @unittest.skipIf(os.environ.get("REEL_PHASE4_SKIP_CONNECTED") == "1", "connected PostgreSQL tests explicitly skipped")
 class Phase4ShadowMirrorConnectedTest(unittest.TestCase):
     def setUp(self):
@@ -265,6 +288,43 @@ class Phase4ShadowMirrorConnectedTest(unittest.TestCase):
             f"SELECT typed_row_json->>'title' FROM {self.schema}.phase4_mirror_typed_hashes WHERE table_name='jobs' AND source_key='phase4-connected-job';"
         )
         self.assertEqual(typed_title, "cloud newer title")
+
+    def test_newer_resource_id_replaces_same_job_slug_with_durable_audit(self):
+        old_time = "2026-08-21T01:43:46Z"
+        new_time = "2026-08-21T01:44:46Z"
+        self.mirror_rows({"jobs": [job_row("resource replacement")], "resources": [resource_row("resource-old", old_time)]}, "resource-old")
+        self.reset_cursor("resources")
+        self.mirror_rows({"resources": [resource_row("resource-new", new_time)]}, "resource-new")
+
+        self.assertEqual(self.divergence_count(), 0)
+        self.assertEqual(self.scalar(f"SELECT count(*) FROM {self.schema}.resources WHERE job_id='phase4-connected-job' AND slug='ocean-s-eleven';"), "1")
+        self.assertEqual(self.scalar(f"SELECT id FROM {self.schema}.resources WHERE job_id='phase4-connected-job' AND slug='ocean-s-eleven';"), "resource-new")
+        self.assertEqual(self.scalar(f"SELECT count(*) FROM {self.schema}.phase7_mirror_row_replacements WHERE prior_source_key='resource-old' AND replacement_source_key='resource-new';"), "1")
+
+    def test_older_resource_replacement_fails_closed_and_preserves_current_row(self):
+        newer_time = "2026-08-21T01:44:46Z"
+        older_time = "2026-08-21T01:43:46Z"
+        self.mirror_rows({"jobs": [job_row("resource replacement")], "resources": [resource_row("resource-current", newer_time)]}, "resource-current")
+        self.reset_cursor("resources")
+        with self.assertRaisesRegex(RuntimeError, "local resource semantic key is newer"):
+            self.mirror_rows({"resources": [resource_row("resource-stale", older_time)]}, "resource-stale")
+
+        self.assertEqual(self.divergence_count(), 1)
+        self.assertEqual(self.scalar(f"SELECT id FROM {self.schema}.resources WHERE job_id='phase4-connected-job' AND slug='ocean-s-eleven';"), "resource-current")
+        self.assertEqual(self.scalar(f"SELECT count(*) FROM {self.schema}.phase7_mirror_row_replacements;"), "0")
+
+    def test_complete_job_reset_to_queued_audits_and_clears_old_resources(self):
+        old_time = "2026-08-21T01:43:46Z"
+        reset_time = "2026-08-21T01:44:46Z"
+        self.mirror_rows({"jobs": [job_row("before reset")], "resources": [resource_row("resource-old", old_time)]}, "job-before-reset")
+        self.reset_cursor("jobs")
+        reset = job_row("reset", reset_time)
+        reset.update({"status": "queued", "stage": "queued", "synthesis_json_key": None})
+        self.mirror_rows({"jobs": [reset]}, "job-reset")
+
+        self.assertEqual(self.scalar(f"SELECT status || ':' || stage FROM {self.schema}.jobs WHERE id='phase4-connected-job';"), "queued:queued")
+        self.assertEqual(self.scalar(f"SELECT count(*) FROM {self.schema}.resources WHERE job_id='phase4-connected-job';"), "0")
+        self.assertEqual(self.scalar(f"SELECT count(*) FROM {self.schema}.phase7_mirror_row_replacements WHERE reason='cloud_job_reset_cleared_resources' AND prior_source_key='resource-old';"), "1")
 
     def test_artifact_local_drift_is_detected_before_overwrite(self):
         artifact, objects = artifact_row("text/html")
