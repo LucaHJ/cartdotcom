@@ -2959,14 +2959,18 @@ async function handleListBackfill(request: Request, env: Env): Promise<Response>
   const serialised = JSON.stringify(input.lists, null, 2);
   const digest = await sha256(serialised);
   const listKey = `reels/${job.shortcode || job.id}/${job.id}/synthesis/lists-${digest.slice(0, 12)}.json`;
+  const marker = `list_backfill:${digest.slice(0, 12)}`;
+  const prior = await env.REEL_DB.prepare("SELECT id FROM job_events WHERE job_id=? AND detail=? LIMIT 1")
+    .bind(jobId, marker).first<{ id: string }>();
+  if (prior) return json({ ok: true, idempotent: true, job_id: jobId, lists: input.lists.length, root_path: job.library_path });
   const existing = await env.REEL_ARCHIVE.head(listKey);
   if (!existing) await putPhase7MirroredObject(env, listKey, serialised, { httpMetadata: { contentType: "application/json" } });
   await env.REEL_DB.prepare(
     "INSERT INTO artifacts(id,job_id,kind,object_key,content_type,byte_size,sha256) VALUES (?,?,?,?,?,?,?) ON CONFLICT(object_key) DO UPDATE SET byte_size=excluded.byte_size,sha256=excluded.sha256",
   ).bind(uuid(), jobId, "lists", listKey, "application/json", new TextEncoder().encode(serialised).byteLength, digest).run();
   const published = await publishSynthesisHtml(env, job, payload);
-  await env.REEL_DB.prepare("INSERT INTO job_events(job_id,stage,status,detail) VALUES (?,'published','complete',?)")
-    .bind(jobId, `list_backfill:${input.lists.length}`).run();
+  await env.REEL_DB.prepare("INSERT INTO job_events(job_id,stage,status,detail) SELECT ?,'published','complete',? WHERE NOT EXISTS (SELECT 1 FROM job_events WHERE job_id=? AND detail=?)")
+    .bind(jobId, marker, jobId, marker).run();
   return json({ ok: true, job_id: jobId, lists: input.lists.length, root_path: published.rootPath });
 }
 
