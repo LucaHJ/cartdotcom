@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const script = fileURLToPath(new URL("../scripts/phase7_origin.py", import.meta.url));
+const backfillScript = fileURLToPath(new URL("../scripts/phase7_library_backfill.py", import.meta.url));
 const dispatcherWatchdog = readFileSync(new URL("../scripts/phase6_dispatcher_watchdog.sh", import.meta.url), "utf8");
 const safetyPoll = readFileSync(new URL("../scripts/phase7_safety_poll.sh", import.meta.url), "utf8");
 
@@ -98,4 +99,21 @@ test("phase7 dispatcher has event wake plus bounded safety poll", () => {
   assert.match(dispatcherWatchdog, /9>&-/);
   assert.match(safetyPoll, /tr -d '\\r\\n'/);
   assert.match(safetyPoll, /flock -n/);
+});
+
+test("phase7 library backfill preserves original manifest timestamps", () => {
+  const probe = spawnSync("python", ["-c", `
+import importlib.util, json
+spec=importlib.util.spec_from_file_location("phase7_library_backfill", ${JSON.stringify(backfillScript)})
+module=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(json.dumps({
+  "valid": module.metadata_updated_at({"updated_at":"2026-08-09T12:11:47.983Z"}),
+  "fallback": module.metadata_updated_at({"updated_at":"not-a-date"})
+}))
+`], { encoding: "utf8" });
+  assert.equal(probe.status, 0, probe.stderr);
+  const payload = JSON.parse(probe.stdout);
+  assert.equal(payload.valid, "2026-08-09T12:11:47.983Z");
+  assert.notEqual(payload.fallback, "not-a-date");
 });
