@@ -3,7 +3,9 @@
 
 The wake is only a latency hint. D1 remains the durable edge spool and the
 Phase 4 cursor mirror remains the recovery path. Object and library writes are
-verified before atomic placement; divergent existing files are never replaced.
+verified before atomic placement. Archived objects are immutable; generated
+library pages are mutable projections and are atomically replaced with an
+audited previous/new digest pair.
 """
 
 from __future__ import annotations
@@ -98,6 +100,13 @@ class OriginState:
                   kind TEXT NOT NULL, path TEXT NOT NULL, byte_size INTEGER NOT NULL,
                   sha256 TEXT NOT NULL, updated_at TEXT NOT NULL, metadata_json TEXT,
                   PRIMARY KEY(kind,path)
+                );
+                CREATE TABLE IF NOT EXISTS file_replacements(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  kind TEXT NOT NULL, path TEXT NOT NULL,
+                  previous_byte_size INTEGER NOT NULL, previous_sha256 TEXT NOT NULL,
+                  replacement_byte_size INTEGER NOT NULL, replacement_sha256 TEXT NOT NULL,
+                  replaced_at TEXT NOT NULL
                 );
                 """
             )
@@ -199,24 +208,40 @@ class OriginState:
                 quarantine = Path(temp_name).with_name(Path(temp_name).name + ".quarantine")
                 os.replace(temp_name, quarantine)
                 raise RuntimeError("size_or_checksum_mismatch")
+            replaced = False
+            previous_size = 0
+            previous_sha = ""
             if target.exists():
+                previous_size = target.stat().st_size
                 existing_sha = hashlib.sha256(target.read_bytes()).hexdigest()
-                if target.stat().st_size != received or existing_sha != actual_sha:
-                    quarantine = Path(temp_name).with_name(Path(temp_name).name + ".conflict")
-                    os.replace(temp_name, quarantine)
-                    raise FileExistsError("existing_file_divergence")
-                os.unlink(temp_name)
+                previous_sha = existing_sha
+                if previous_size != received or existing_sha != actual_sha:
+                    if kind == "object":
+                        quarantine = Path(temp_name).with_name(Path(temp_name).name + ".conflict")
+                        os.replace(temp_name, quarantine)
+                        raise FileExistsError("existing_file_divergence")
+                    os.replace(temp_name, target)
+                    os.chmod(target, 0o600)
+                    replaced = True
+                else:
+                    os.unlink(temp_name)
             else:
                 os.replace(temp_name, target)
                 os.chmod(target, 0o600)
             with self._connect() as db:
+                if replaced:
+                    db.execute(
+                        "INSERT INTO file_replacements(kind,path,previous_byte_size,previous_sha256,replacement_byte_size,replacement_sha256,replaced_at) "
+                        "VALUES(?,?,?,?,?,?,?)",
+                        (kind, relative.as_posix(), previous_size, previous_sha, received, actual_sha, utc_now()),
+                    )
                 db.execute(
                     "INSERT INTO file_receipts(kind,path,byte_size,sha256,updated_at,metadata_json) VALUES(?,?,?,?,?,?) "
                     "ON CONFLICT(kind,path) DO UPDATE SET byte_size=excluded.byte_size,sha256=excluded.sha256,"
                     "updated_at=excluded.updated_at,metadata_json=COALESCE(excluded.metadata_json,file_receipts.metadata_json)",
                     (kind, relative.as_posix(), received, actual_sha, utc_now(), json.dumps(metadata, separators=(",", ":")) if metadata else None),
                 )
-            return {"ok": True, "path": relative.as_posix(), "bytes": received, "sha256": actual_sha}
+            return {"ok": True, "path": relative.as_posix(), "bytes": received, "sha256": actual_sha, "replaced": replaced}
         except Exception:
             if os.path.exists(temp_name):
                 os.unlink(temp_name)

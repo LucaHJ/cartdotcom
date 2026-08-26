@@ -64,11 +64,26 @@ test("phase7 origin authenticates and atomically verifies local library/object w
   assert.equal(manifest.files[0].path, "reels/test/index.html");
   assert.equal(manifest.files[0].sha256, sha);
 
-  const conflict = await fetch(`${base}/v1/library/file/reels/test/index.html`, {
+  const updated = await fetch(`${base}/v1/library/file/reels/test/index.html`, {
     method: "PUT", headers: { authorization: `Bearer ${token}`, "x-content-sha256": createHash("sha256").update("different").digest("hex"), "content-length": "9" }, body: "different",
   });
-  assert.equal(conflict.status, 409);
-  assert.equal(readFileSync(join(root, "library", "reels", "test", "index.html"), "utf8"), html.toString());
+  assert.equal(updated.status, 200);
+  assert.equal((await updated.json()).replaced, true);
+  assert.equal(readFileSync(join(root, "library", "reels", "test", "index.html"), "utf8"), "different");
+  const updatedManifest = await fetch(`${base}/v1/library/manifest`, { headers: { authorization: `Bearer ${token}` } }).then((response) => response.json());
+  assert.equal(updatedManifest.files[0].kind, "reel");
+  assert.equal(updatedManifest.files[0].sha256, createHash("sha256").update("different").digest("hex"));
+
+  const objectOne = Buffer.from("immutable-one");
+  const objectPath = `${base}/v1/object/reels/test/original.mp4`;
+  assert.equal((await fetch(objectPath, {
+    method: "PUT", headers: { authorization: `Bearer ${token}`, "x-content-sha256": createHash("sha256").update(objectOne).digest("hex"), "content-length": String(objectOne.length) }, body: objectOne,
+  })).status, 200);
+  const objectTwo = Buffer.from("immutable-two");
+  assert.equal((await fetch(objectPath, {
+    method: "PUT", headers: { authorization: `Bearer ${token}`, "x-content-sha256": createHash("sha256").update(objectTwo).digest("hex"), "content-length": String(objectTwo.length) }, body: objectTwo,
+  })).status, 409);
+  assert.equal(readFileSync(join(root, "objects", "reels", "test", "original.mp4"), "utf8"), objectOne.toString());
   assert.equal((await fetch(`${base}/v1/library/file/reels/%5C../escape.html`, { method: "PUT", headers: { authorization: `Bearer ${token}`, "content-length": "1" }, body: "x" })).status, 400);
   assert.equal((await fetch(`${base}/v1/library/file/reels/test/index.html`, { method: "DELETE" })).status, 405);
 });
