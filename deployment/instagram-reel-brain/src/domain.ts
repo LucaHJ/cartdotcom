@@ -250,6 +250,7 @@ export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
 
 export type SynthesisListItem = {
   position: number;
+  section?: "main" | "ranked" | "honourable_mention";
   label: string;
   description: string;
   resource_name: string;
@@ -258,6 +259,8 @@ export type SynthesisListItem = {
 export type SynthesisList = {
   title: string;
   summary: string;
+  ranked_count?: number;
+  honourable_mention_count?: number;
   items: SynthesisListItem[];
 };
 
@@ -966,7 +969,7 @@ export function renderListHtml(input: {
   carouselItemCount?: number | null;
   comments?: CapturedComment[];
   reportedCommentCount?: number | null;
-  items: Array<{ position: number; label: string; description: string; resourcePath: string }>;
+  items: Array<{ position: number; section?: "main" | "ranked" | "honourable_mention"; label: string; description: string; resourcePath: string }>;
 }): string {
   const comments = (input.comments || []).filter((comment) => String(comment.text || "").trim());
   const commentItems = comments.length
@@ -980,7 +983,22 @@ export function renderListHtml(input: {
     : `<li class="captured-comment empty-comment"><p>No public comments were captured for this Reel.</p></li>`;
   const reportedCommentCount = typeof input.reportedCommentCount === "number" ? input.reportedCommentCount : "";
   const mediaType = input.mediaType || "reel";
-  const entries = input.items.map((item) => `<li value="${escapeHtml(item.position)}"><a href="#${encodeURIComponent(item.resourcePath)}" data-library-path="${escapeHtml(item.resourcePath)}">${escapeHtml(item.label)}</a>${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}</li>`).join("");
+  const renderEntries = (items: typeof input.items, ordered: boolean) => {
+    const tag = ordered ? "ol" : "ul";
+    const entries = items.map((item) => `<li${ordered ? ` value="${escapeHtml(item.position)}"` : ""}><a href="#${encodeURIComponent(item.resourcePath)}" data-library-path="${escapeHtml(item.resourcePath)}">${escapeHtml(item.label)}</a>${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}</li>`).join("");
+    return `<${tag} class="recreated-list${ordered ? "" : " honourable-mentions"}">${entries}</${tag}>`;
+  };
+  const rankedItems = input.items.filter((item) => item.section === "ranked");
+  const honourableMentions = input.items.filter((item) => item.section === "honourable_mention");
+  const mainItems = input.items.filter((item) => !item.section || item.section === "main");
+  const grouped = rankedItems.length > 0 || honourableMentions.length > 0;
+  const entries = grouped
+    ? [
+      rankedItems.length ? `<section class="list-section ranked-list"><h2>Ranked recommendations</h2>${renderEntries(rankedItems, true)}</section>` : "",
+      mainItems.length ? `<section class="list-section main-list"><h2>Main list</h2>${renderEntries(mainItems, true)}</section>` : "",
+      honourableMentions.length ? `<section class="list-section honourable-mention-list"><h2>Honourable mentions</h2>${renderEntries(honourableMentions, false)}</section>` : "",
+    ].join("")
+    : `<section>${renderEntries(mainItems, true)}</section>`;
   return `<article class="reel-document list-document" data-document-kind="list" data-reel-preview="true" data-job-id="${escapeHtml(input.id)}">
   <header class="document-header">
     <p class="document-kicker">Recreated list · lists/</p>
@@ -993,7 +1011,8 @@ export function renderListHtml(input: {
     <div data-sidecar-description>${renderProse(input.description, "No creator description was captured.", true)}</div>
     <div data-sidecar-comments data-reported-comment-count="${escapeHtml(reportedCommentCount)}"><ol>${commentItems}</ol></div>
   </aside>
-  <section><h2>${escapeHtml(input.items.length)} entries, in source order</h2><ol class="recreated-list">${entries}</ol></section>
+  <section class="list-entry-summary"><h2>${escapeHtml(input.items.length)} entries</h2><p>Rankings and honourable mentions are preserved separately in their source order.</p></section>
+  ${entries}
 </article>`;
 }
 

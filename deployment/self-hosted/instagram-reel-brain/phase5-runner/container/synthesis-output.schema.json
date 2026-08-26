@@ -56,10 +56,12 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "summary", "items"],
+        "required": ["title", "summary", "ranked_count", "honourable_mention_count", "items"],
         "properties": {
           "title": { "type": "string" },
           "summary": { "type": "string" },
+          "ranked_count": { "type": "integer", "minimum": 0, "maximum": 200 },
+          "honourable_mention_count": { "type": "integer", "minimum": 0, "maximum": 200 },
           "items": {
             "type": "array",
             "minItems": 2,
@@ -67,9 +69,10 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["position", "label", "description", "resource_name"],
+              "required": ["position", "section", "label", "description", "resource_name"],
               "properties": {
                 "position": { "type": "integer", "minimum": 1 },
+                "section": { "type": "string", "enum": ["main", "ranked", "honourable_mention"] },
                 "label": { "type": "string" },
                 "description": { "type": "string" },
                 "resource_name": { "type": "string" }

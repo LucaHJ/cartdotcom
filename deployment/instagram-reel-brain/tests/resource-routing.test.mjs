@@ -105,8 +105,9 @@ test("renders ordered list pages with linked resource profiles and source Reel p
     mediaType: "reel",
     comments: [{ author: "reader", text: "Number two is excellent.", like_count: 4 }],
     items: [
-      { position: 1, label: "Inter", description: "A neutral interface sans.", resourcePath: "fonts/inter.html" },
-      { position: 2, label: "EB Garamond", description: "An open-source serif.", resourcePath: "fonts/eb-garamond.html" },
+      { position: 1, section: "ranked", label: "Inter", description: "A neutral interface sans.", resourcePath: "fonts/inter.html" },
+      { position: 2, section: "ranked", label: "EB Garamond", description: "An open-source serif.", resourcePath: "fonts/eb-garamond.html" },
+      { position: 1, section: "honourable_mention", label: "Source Sans", description: "An honourable mention.", resourcePath: "fonts/source-sans.html" },
     ],
   });
   assert.match(detail, /data-document-kind="list"/);
@@ -115,7 +116,11 @@ test("renders ordered list pages with linked resource profiles and source Reel p
   assert.match(detail, /data-library-path="reels\/designer\/type-list\/index\.html"/);
   assert.match(detail, /data-library-path="fonts\/inter\.html"/);
   assert.match(detail, /data-library-path="fonts\/eb-garamond\.html"/);
+  assert.match(detail, /data-library-path="fonts\/source-sans\.html"/);
   assert.ok(detail.indexOf("Inter") < detail.indexOf("EB Garamond"));
+  assert.match(detail, /Ranked recommendations/);
+  assert.match(detail, /Honourable mentions/);
+  assert.match(detail, /class="recreated-list honourable-mentions"/);
   assert.match(detail, /data-reel-sidecar/);
 
   const collection = domain.renderListCollectionHtml({ items: [{

@@ -1749,16 +1749,29 @@ function routeSynthesisLists(job: JobRow, payload: SynthesisPayload, resources: 
       const resourcePath = resource ? resourcePaths.get(resource.slug) : null;
       if (!label || !resourcePath) return [];
       const requestedPosition = Number(item?.position);
+      const section: NonNullable<SynthesisList["items"][number]["section"]> = item?.section === "ranked" || item?.section === "honourable_mention" ? item.section : "main";
       return [{
         position: Number.isInteger(requestedPosition) && requestedPosition > 0 ? requestedPosition : itemIndex + 1,
+        section,
         label,
         description: String(item?.description || "").trim(),
         resource_name: resource!.name,
         resourcePath,
       }];
-    }).sort((left, right) => left.position - right.position);
+    }).sort((left, right) => {
+      const sectionOrder = { ranked: 0, main: 1, honourable_mention: 2 } as const;
+      return sectionOrder[left.section] - sectionOrder[right.section] || left.position - right.position;
+    });
     if (items.length !== list.items.length || items.length < 2) {
       throw new Error(`List ${title} has an item without a matching researched resource profile`);
+    }
+    const rankedCount = items.filter((item) => item.section === "ranked").length;
+    const honourableMentionCount = items.filter((item) => item.section === "honourable_mention").length;
+    if (typeof list.ranked_count === "number" && list.ranked_count !== rankedCount) {
+      throw new Error(`List ${title} declares ${list.ranked_count} ranked entries but contains ${rankedCount}`);
+    }
+    if (typeof list.honourable_mention_count === "number" && list.honourable_mention_count !== honourableMentionCount) {
+      throw new Error(`List ${title} declares ${list.honourable_mention_count} honourable mentions but contains ${honourableMentionCount}`);
     }
     let libraryPath = `lists/${slugify(title)}-${sourceSuffix}.html`;
     if (usedPaths.has(libraryPath)) libraryPath = `lists/${slugify(title)}-${sourceSuffix}-${listIndex + 1}.html`;
@@ -2232,6 +2245,7 @@ async function publishSynthesisHtml(
       reportedCommentCount: commentBundle.reportedCommentCount,
       items: list.items.map((item) => ({
         position: item.position,
+        section: item.section,
         label: item.label,
         description: item.description,
         resourcePath: item.resourcePath,

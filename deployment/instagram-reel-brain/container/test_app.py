@@ -45,6 +45,9 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("lists", schema["required"])
         list_schema = schema["properties"]["lists"]["items"]
         self.assertEqual(list_schema["properties"]["items"]["minItems"], 2)
+        self.assertIn("ranked_count", list_schema["required"])
+        self.assertIn("honourable_mention_count", list_schema["required"])
+        self.assertIn("section", list_schema["properties"]["items"]["items"]["required"])
         self.assertIn("resource_name", list_schema["properties"]["items"]["items"]["required"])
         prompt = app.build_prompt(
             {"media_type": "reel", "comments": []},
@@ -52,7 +55,59 @@ class RecoveryTests(unittest.TestCase):
             "",
         )
         self.assertIn("Preserve the source order, entry wording, and numbering", prompt)
+        self.assertIn("Explicit honourable mentions are part of the same recreated list", prompt)
+        self.assertIn("section=honourable_mention", prompt)
         self.assertIn("matching resources entry in resource_name", prompt)
+
+    def test_carousel_analysis_uses_every_archived_slide(self):
+        slides = [Path(f"slide-{index:02d}.jpg") for index in range(1, 13)]
+        selected = app.select_analysis_frames(
+            {"media_type": "carousel", "carousel_item_count": 12}, slides, [Path("video-frame.jpg")],
+        )
+        self.assertEqual(selected, slides)
+
+    def test_incomplete_carousel_analysis_fails_closed(self):
+        with self.assertRaises(app.PipelineError) as raised:
+            app.select_analysis_frames(
+                {"media_type": "carousel", "carousel_item_count": 12},
+                [Path(f"slide-{index:02d}.jpg") for index in range(1, 9)],
+                [],
+            )
+        self.assertEqual(raised.exception.code, "error_archive")
+        self.assertIn("requires all 12 slides", str(raised.exception))
+
+    def test_video_analysis_remains_bounded_to_eight_frames(self):
+        frames = [Path(f"frame-{index:02d}.jpg") for index in range(1, 13)]
+        self.assertEqual(len(app.select_analysis_frames({"media_type": "reel"}, [], frames)), 8)
+
+    def test_ranked_list_keeps_honourable_mentions_and_complete_top_count(self):
+        items = [
+            {"position": index, "section": "ranked", "label": f"Rank {index}"}
+            for index in range(1, 6)
+        ] + [
+            {"position": index, "section": "honourable_mention", "label": f"HM {index}"}
+            for index in range(1, 7)
+        ]
+        app.validate_synthesis_lists({"lists": [{
+            "title": "Brad Pitt films",
+            "ranked_count": 5,
+            "honourable_mention_count": 6,
+            "items": items,
+        }]}, {"title": "My top 5 Brad Pitt movies", "description": ""})
+
+    def test_incomplete_advertised_ranking_fails_closed(self):
+        with self.assertRaises(app.PipelineError) as raised:
+            app.validate_synthesis_lists({"lists": [{
+                "title": "Brad Pitt films",
+                "ranked_count": 4,
+                "honourable_mention_count": 0,
+                "items": [
+                    {"position": index, "section": "ranked", "label": f"Rank {index}"}
+                    for index in range(1, 5)
+                ],
+            }]}, {"title": "My top 5 Brad Pitt movies", "description": ""})
+        self.assertEqual(raised.exception.code, "error_research")
+        self.assertIn("top 5", str(raised.exception))
 
     def test_selects_largest_image_candidate_instead_of_last_thumbnail(self):
         candidates = [

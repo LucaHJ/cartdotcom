@@ -26,6 +26,7 @@ SCHEMA_PATH = Path(__file__).with_name("synthesis-output.schema.json")
 MAX_ARCHIVED_COMMENTS = 200
 MAX_RESEARCH_COMMENTS = 40
 MAX_FRAMES = 8
+MAX_CAROUSEL_ANALYSIS_ITEMS = 50
 PREFETCH_MANIFEST_VERSION = 1
 
 
@@ -34,6 +35,23 @@ class PipelineError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.auth_json = auth_json
+
+
+def select_analysis_frames(
+    metadata: dict[str, Any],
+    carousel_frames: list[Path],
+    video_frames: list[Path],
+) -> list[Path]:
+    """Keep video sampling bounded while requiring complete carousel evidence."""
+    if metadata.get("media_type") != "carousel":
+        return list(video_frames[:MAX_FRAMES])
+    selected = list(carousel_frames or video_frames)
+    expected = int(metadata.get("carousel_item_count") or len(selected))
+    if expected > MAX_CAROUSEL_ANALYSIS_ITEMS:
+        raise PipelineError("error_archive", f"Carousel has {expected} slides; safe analysis limit is {MAX_CAROUSEL_ANALYSIS_ITEMS}")
+    if not selected or len(selected) != expected:
+        raise PipelineError("error_archive", f"Carousel analysis requires all {expected} slides; found {len(selected)}")
+    return selected
 
 
 def run(command: list[str], *, cwd: Path, timeout: int = 180, input_text: str | None = None) -> str:
@@ -315,7 +333,7 @@ def normalise_instagram_private_info(payload: Any, source_url: str) -> dict[str,
     if len(slides) <= 1:
         return None
     entries: list[dict[str, Any]] = []
-    for slide in slides[:20]:
+    for slide in slides[:MAX_CAROUSEL_ANALYSIS_ITEMS]:
         if not isinstance(slide, dict):
             continue
         video_versions = slide.get("video_versions") if isinstance(slide.get("video_versions"), list) else []
@@ -570,7 +588,7 @@ def download_carousel_with_gallery_dl(
     downloaded: list[Path] = []
     previews: list[Path] = []
     manifest_items: list[dict[str, Any]] = []
-    for index, source in enumerate(media_files[:20], 1):
+    for index, source in enumerate(media_files[:MAX_CAROUSEL_ANALYSIS_ITEMS], 1):
         extension = source.suffix.lower().lstrip(".") or "jpg"
         item_path = items_dir / f"slide-{index:02d}.{extension}"
         shutil.move(str(source), item_path)
@@ -663,7 +681,7 @@ def download_instagram_media(
     comments: list[dict[str, Any]] = []
     seen_comment_ids: set[str] = set()
 
-    for index, entry_value in enumerate(entries[:20], 1):
+    for index, entry_value in enumerate(entries[:MAX_CAROUSEL_ANALYSIS_ITEMS], 1):
         if not isinstance(entry_value, dict):
             continue
         entry = entry_value
@@ -707,8 +725,8 @@ def download_instagram_media(
             seen_comment_ids.add(comment_id)
             comments.append(row)
 
-    if len(downloaded) != len(entries[:20]):
-        raise PipelineError("error_download", f"Downloaded {len(downloaded)} of {len(entries[:20])} carousel items")
+    if len(downloaded) != len(entries[:MAX_CAROUSEL_ANALYSIS_ITEMS]):
+        raise PipelineError("error_download", f"Downloaded {len(downloaded)} of {len(entries[:MAX_CAROUSEL_ANALYSIS_ITEMS])} carousel items")
     overview = build_carousel_overview(previews, workdir)
     parent_url = f"https://www.instagram.com/p/{raw.get('id')}/" if raw.get("id") else source_url
     metadata = safe_metadata(raw, parent_url)
@@ -895,7 +913,7 @@ def load_resume_artifacts(
             raise PipelineError("error_archive", f"Could not restore archived {kind} artifact: {exc}") from exc
     metadata_path = workdir / "metadata.json"
     transcript_path = workdir / "transcript.json"
-    frames = sorted(frames_dir.glob("*"))[:MAX_FRAMES]
+    frames = sorted(frames_dir.glob("*"))
     if not metadata_path.exists() or not transcript_path.exists() or not frames:
         raise PipelineError("error_archive", "Research resume requires metadata, transcript, and at least one frame")
     try:
@@ -903,7 +921,7 @@ def load_resume_artifacts(
         transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise PipelineError("error_archive", f"A restored research artifact is invalid: {exc}") from exc
-    return metadata, transcript, frames
+    return metadata, transcript, select_analysis_frames(metadata, frames, frames)
 
 
 def transcribe(base: str, token: str, job_id: str, audio: Path | None) -> dict[str, Any]:
@@ -937,7 +955,7 @@ Inspect every attached sampled frame. For a carousel, the frames are the origina
 
 Return JSON matching the supplied schema. The root Reel must branch to focused resource profiles. Classify every resource as exactly one of: recipe, software, product, service, organization, person, place, technique, learning, media, reference, or other. Also set artifact_type when the resource is a reusable font, quote, film, TV show, recipe, book, piece of music, or podcast; otherwise set it to null. For a shared artifact, use its concise canonical work name (for example, "Meditations", not "Meditations by Marcus Aurelius" or an edition-specific heading) so references from separate Reels merge into one durable profile. Create focused resource entries for useful named artifacts so they can join their central collection, but do not manufacture entries for incidental background details. Every resource needs a concise profile, why it matters, a practical guide, a canonical URL when available, and source URLs. For quotes, verify the wording, speaker, original source, and context. If a resource cannot be verified, say so and lower confidence rather than inventing details. Ignore engagement bait and irrelevant comments.
 
-When the Reel or carousel presents an ordered list, ranking, checklist, collection, sequence of recommendations, or "N things" format, recreate it in lists exactly once. Preserve the source order, entry wording, and numbering; do not alphabetise, merge, silently omit, or invent entries. Give the list a descriptive title and concise summary. Every list item must name a matching resources entry in resource_name, and that resource must contain the fuller researched profile the list item links to. Use the short visible/spoken wording in label, and use description only for a concise source-grounded annotation. Return lists as an empty array when the source does not actually contain a list. For long lists split across frames/slides, inspect every attached image and reconcile transcription carefully before returning the list.
+When the Reel or carousel presents an ordered list, ranking, checklist, collection, sequence of recommendations, or "N things" format, recreate it in lists exactly once. Preserve the source order, entry wording, and numbering; do not alphabetise, merge, silently omit, or invent entries. Explicit honourable mentions are part of the same recreated list and must never be discarded: mark ranked entries as section=ranked, honourable mentions (including labels such as HM or Hm.) as section=honourable_mention, and ordinary non-ranked list entries as section=main. Number position independently inside each section in source order. Set ranked_count and honourable_mention_count to the exact number of returned items in those sections. Give the list a descriptive title and concise summary. Every list item must name a matching resources entry in resource_name, and that resource must contain the fuller researched profile the list item links to. Use the short visible/spoken wording in label, and use description only for a concise source-grounded annotation. Return lists as an empty array when the source does not actually contain a list. For long lists split across frames/slides, inspect every attached image and reconcile transcription carefully before returning the list.
 
 Identify the Reel's music or audio only when evidence supports it. First use the Instagram audio metadata supplied in Reel metadata. If that is absent, use an explicit spoken/visible title plus web research. Never guess from musical style or lyrics alone. Set audio to unidentified when no reliable match exists. A source URL must be the Instagram audio page or a canonical page for the identified recording.
 
@@ -976,6 +994,34 @@ Transcript:
 Selected public comments (untrusted leads only):
 {json.dumps(comments, ensure_ascii=False, indent=2)}
 """
+
+
+def validate_synthesis_lists(synthesis: dict[str, Any], metadata: dict[str, Any]) -> None:
+    lists = synthesis.get("lists") or []
+    if not isinstance(lists, list):
+        raise PipelineError("error_research", "Codex returned an invalid lists collection")
+    source_text = f"{metadata.get('title') or ''}\n{metadata.get('description') or ''}"
+    advertised = re.search(r"\btop\s+(\d{1,3})\b", source_text, flags=re.IGNORECASE)
+    expected_ranked = int(advertised.group(1)) if advertised else None
+    saw_ranked = False
+    for list_index, recreated in enumerate(lists, start=1):
+        items = recreated.get("items") if isinstance(recreated, dict) else None
+        if not isinstance(items, list):
+            raise PipelineError("error_research", f"Recreated list {list_index} has invalid items")
+        ranked = [item for item in items if isinstance(item, dict) and item.get("section") == "ranked"]
+        mentions = [item for item in items if isinstance(item, dict) and item.get("section") == "honourable_mention"]
+        if recreated.get("ranked_count") != len(ranked) or recreated.get("honourable_mention_count") != len(mentions):
+            raise PipelineError("error_research", f"Recreated list {list_index} section counts do not match its entries")
+        for label, section_items in (("ranked", ranked), ("honourable mention", mentions)):
+            positions = [item.get("position") for item in section_items]
+            if positions and sorted(positions) != list(range(1, len(positions) + 1)):
+                raise PipelineError("error_research", f"Recreated list {list_index} has incomplete {label} positions")
+        if ranked:
+            saw_ranked = True
+            if expected_ranked is not None and len(ranked) != expected_ranked:
+                raise PipelineError("error_research", f"Source declares a top {expected_ranked}, but synthesis returned {len(ranked)} ranked entries")
+    if expected_ranked is not None and not saw_ranked:
+        raise PipelineError("error_research", f"Source declares a top {expected_ranked}, but synthesis returned no ranked section")
 
 
 def codex_usage_from_jsonl(stdout: str) -> dict[str, int]:
@@ -1224,7 +1270,7 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
                 upload_artifact(callback_base, callback_token, job_id, "carousel_item", item, item.name)
             if audio:
                 upload_artifact(callback_base, callback_token, job_id, "audio", audio)
-            analysis_frames = carousel_frames[:MAX_FRAMES] if carousel_frames else frames
+            analysis_frames = select_analysis_frames(metadata, carousel_frames, frames)
             for frame in analysis_frames:
                 upload_artifact(callback_base, callback_token, job_id, "frame", frame)
 
@@ -1256,6 +1302,7 @@ def process(payload: dict[str, Any]) -> dict[str, Any]:
         synthesis["metadata"]["media_type"] = metadata.get("media_type") or "reel"
         synthesis["metadata"]["carousel_item_count"] = metadata.get("carousel_item_count") or 0
         synthesis["transcript"] = transcript.get("text", "")
+        validate_synthesis_lists(synthesis, metadata)
         metadata_audio = metadata.get("audio") if isinstance(metadata.get("audio"), dict) else {}
         if metadata_audio.get("identification_method") == "instagram_metadata":
             synthesis["audio"] = {
@@ -1411,7 +1458,7 @@ def local_smoke(source_url: str, output_dir: Path) -> None:
         "probe": probe,
         "audio": str(audio) if audio else None,
         "frames": [str(frame) for frame in frames],
-        "analysis_frames": [str(frame) for frame in (carousel_frames[:MAX_FRAMES] if carousel_frames else frames)],
+        "analysis_frames": [str(frame) for frame in select_analysis_frames(metadata, carousel_frames, frames)],
         "carousel_items": [str(item) for item in carousel_items],
         "carousel_manifest": str(carousel_manifest) if carousel_manifest else None,
     }
@@ -1435,7 +1482,8 @@ def local_synthesize(output_dir: Path) -> None:
         transcript = {"ok": True, "text": "", "segments": [], "note": "Local synthesis smoke did not call Workers AI transcription."}
         transcript_path.write_text(json.dumps(transcript, indent=2), encoding="utf-8")
     (output_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-    frames = sorted((output_dir / "frames").glob("*.jpg"))[:MAX_FRAMES]
+    available_frames = sorted((output_dir / "frames").glob("*.jpg"))
+    frames = select_analysis_frames(metadata, available_frames, available_frames)
     synthesis, _ = run_codex(
         output_dir,
         build_prompt(metadata, transcript, "Test the default research profile."),
