@@ -937,6 +937,8 @@ Inspect every attached sampled frame. For a carousel, the frames are the origina
 
 Return JSON matching the supplied schema. The root Reel must branch to focused resource profiles. Classify every resource as exactly one of: recipe, software, product, service, organization, person, place, technique, learning, media, reference, or other. Also set artifact_type when the resource is a reusable font, quote, film, TV show, recipe, book, piece of music, or podcast; otherwise set it to null. For a shared artifact, use its concise canonical work name (for example, "Meditations", not "Meditations by Marcus Aurelius" or an edition-specific heading) so references from separate Reels merge into one durable profile. Create focused resource entries for useful named artifacts so they can join their central collection, but do not manufacture entries for incidental background details. Every resource needs a concise profile, why it matters, a practical guide, a canonical URL when available, and source URLs. For quotes, verify the wording, speaker, original source, and context. If a resource cannot be verified, say so and lower confidence rather than inventing details. Ignore engagement bait and irrelevant comments.
 
+When the Reel or carousel presents an ordered list, ranking, checklist, collection, sequence of recommendations, or "N things" format, recreate it in lists exactly once. Preserve the source order, entry wording, and numbering; do not alphabetise, merge, silently omit, or invent entries. Give the list a descriptive title and concise summary. Every list item must name a matching resources entry in resource_name, and that resource must contain the fuller researched profile the list item links to. Use the short visible/spoken wording in label, and use description only for a concise source-grounded annotation. Return lists as an empty array when the source does not actually contain a list. For long lists split across frames/slides, inspect every attached image and reconcile transcription carefully before returning the list.
+
 Identify the Reel's music or audio only when evidence supports it. First use the Instagram audio metadata supplied in Reel metadata. If that is absent, use an explicit spoken/visible title plus web research. Never guess from musical style or lyrics alone. Set audio to unidentified when no reliable match exists. A source URL must be the Instagram audio page or a canonical page for the identified recording.
 
 For every mentioned film, TV programme, YouTube video, song, album, podcast, or article, resolve the real canonical work rather than treating promotional overlay copy as its title. Thumbnail slogans such as "THEY TRIED" are visual observations, not canonical titles. Read the platform title, creator/channel, publisher, byline, and other visible metadata separately. When a title is truncated, research the visible title fragment together with the creator/channel and subject. Never silently promote a thumbnail slogan into a resource name.
@@ -1050,6 +1052,7 @@ def run_codex(
             },
             "claims": [],
             "resources": [],
+            "lists": [],
         }, auth_json or None)
     codex_home = workdir / "codex-home"
     write_codex_auth(auth_json, codex_home)

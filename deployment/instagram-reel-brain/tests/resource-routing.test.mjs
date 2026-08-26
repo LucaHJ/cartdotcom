@@ -94,6 +94,42 @@ test("renders bidirectional artifact collection and source Reel links", () => {
   assert.match(collection, /data-gallery-action/);
 });
 
+test("renders ordered list pages with linked resource profiles and source Reel preview", () => {
+  const detail = domain.renderListHtml({
+    id: "job-list",
+    title: "Five typefaces for editorial design",
+    summary: "The source Reel's recommendations in their original order.",
+    rootPath: "reels/designer/type-list/index.html",
+    author: "designer",
+    description: "Five useful typefaces.",
+    mediaType: "reel",
+    comments: [{ author: "reader", text: "Number two is excellent.", like_count: 4 }],
+    items: [
+      { position: 1, label: "Inter", description: "A neutral interface sans.", resourcePath: "fonts/inter.html" },
+      { position: 2, label: "EB Garamond", description: "An open-source serif.", resourcePath: "fonts/eb-garamond.html" },
+    ],
+  });
+  assert.match(detail, /data-document-kind="list"/);
+  assert.match(detail, /data-reel-preview="true"/);
+  assert.match(detail, /data-job-id="job-list"/);
+  assert.match(detail, /data-library-path="reels\/designer\/type-list\/index\.html"/);
+  assert.match(detail, /data-library-path="fonts\/inter\.html"/);
+  assert.match(detail, /data-library-path="fonts\/eb-garamond\.html"/);
+  assert.ok(detail.indexOf("Inter") < detail.indexOf("EB Garamond"));
+  assert.match(detail, /data-reel-sidecar/);
+
+  const collection = domain.renderListCollectionHtml({ items: [{
+    title: "Five typefaces for editorial design",
+    libraryPath: "lists/five-typefaces-type-list.html",
+    summary: "Ordered recommendations.",
+    author: "designer",
+    itemCount: 5,
+  }] });
+  assert.match(collection, /data-library-path="lists\/five-typefaces-type-list\.html"/);
+  assert.match(collection, /5 entries/);
+  assert.match(collection, /@designer/);
+});
+
 test("renders verified media links, artwork, and selectable YouTube candidates", () => {
   const detail = domain.renderResourceHtml({
     rootId: "job-media",

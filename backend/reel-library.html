@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Reel Research Library</title>
-    <link rel="stylesheet" href="/reel-library.css?v=20260818-mobile-dark-folders">
+    <link rel="stylesheet" href="/reel-library.css?v=20260826-lists">
 </head>
 <body>
     <main class="library-app">
@@ -578,7 +578,7 @@
             if (documentActions && !documentActions.querySelector("[data-gallery-action]")) {
                 documentActions.insertAdjacentHTML("afterbegin", '<button type="button" data-gallery-action>Back to gallery</button>');
             }
-            const reelArticle = readerContent.querySelector('.reel-document[data-document-kind="reel"]');
+            const reelArticle = readerContent.querySelector('.reel-document[data-document-kind="reel"], .reel-document[data-reel-preview="true"]');
             const sidecar = reelArticle?.querySelector("[data-reel-sidecar]");
             if (!reelArticle || !sidecar) {
                 readerWorkspace.classList.remove("has-reel-media");
@@ -627,7 +627,7 @@
                 enhanceFolderIndexPage(selectedPath);
                 readerStatus.textContent = payload.file.metadata?.kind === "resource"
                     ? `${payload.file.metadata?.resource_kind || "Resource"} profile`
-                    : "Reel research";
+                    : payload.file.metadata?.kind === "list" ? "Recreated list" : "Reel research";
                 markTreeSelection();
                 if (!options.preserveHash) history.replaceState(null, "", `#${encodeURIComponent(selectedPath)}`);
                 readerScroll.scrollTop = 0;

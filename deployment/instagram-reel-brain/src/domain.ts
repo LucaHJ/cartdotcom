@@ -248,6 +248,19 @@ export const ARTIFACT_TYPES = [
 
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
 
+export type SynthesisListItem = {
+  position: number;
+  label: string;
+  description: string;
+  resource_name: string;
+};
+
+export type SynthesisList = {
+  title: string;
+  summary: string;
+  items: SynthesisListItem[];
+};
+
 export const ARTIFACT_COLLECTION_DEFINITIONS: Record<ArtifactType, {
   folder: string;
   title: string;
@@ -862,6 +875,7 @@ export function renderRootHtml(input: {
   instructions?: string | null;
   rootPath: string;
   resources: Array<{ name: string; slug: string; summary: string; libraryPath: string; kind?: string | null }>;
+  lists?: Array<{ title: string; summary: string; libraryPath: string; itemCount: number }>;
   claims: Array<{ claim: string; confidence: string; evidence: string[] }>;
   comments?: CapturedComment[];
   reportedCommentCount?: number | null;
@@ -895,6 +909,7 @@ export function renderRootHtml(input: {
       return `<li><span class="resource-type">${escapeHtml(definition.label)}</span><a href="#${encodeURIComponent(resource.libraryPath)}" data-library-path="${escapeHtml(resource.libraryPath)}">${escapeHtml(resource.name)}</a><p>${escapeHtml(resource.summary)}</p></li>`;
     }).join("")
     : "<li>No external resources identified.</li>";
+  const listItems = (input.lists || []).map((list) => `<li><a href="#${encodeURIComponent(list.libraryPath)}" data-library-path="${escapeHtml(list.libraryPath)}">${escapeHtml(list.title)}</a><p>${escapeHtml(list.summary)}</p><span>${escapeHtml(list.itemCount)} ordered entr${list.itemCount === 1 ? "y" : "ies"}</span></li>`).join("");
   const claimItems = input.claims.length
     ? input.claims.map((claim) => `<li><strong>${escapeHtml(claim.claim)}</strong><span class="confidence">${escapeHtml(claim.confidence)}</span>${claim.evidence?.length ? `<ul>${claim.evidence.map((evidence) => `<li>${escapeHtml(evidence)}</li>`).join("")}</ul>` : ""}</li>`).join("")
     : "<li>No claims extracted.</li>";
@@ -932,10 +947,65 @@ export function renderRootHtml(input: {
   </section>` : ""}
   <section><h2>${visualLabel}</h2>${renderProse(input.visualSummary, "No visual summary returned.")}</section>
   <section><h2>Synthesis</h2>${renderProse(input.summary)}</section>
+  ${listItems ? `<section><h2>Recreated lists</h2><ul class="list-index-list">${listItems}</ul></section>` : ""}
   <section><h2>Research files</h2><ul class="resource-list">${resourceItems}</ul></section>
   <section><h2>Claims and evidence</h2><ul class="claim-list">${claimItems}</ul></section>
   <section><h2>Transcript</h2><div class="transcript">${renderProse(input.transcript, "No speech transcript was available.", true)}</div></section>
   <section><h2>Handling instructions</h2>${renderProse(input.instructions, "Default research profile.", true)}</section>
+</article>`;
+}
+
+export function renderListHtml(input: {
+  id: string;
+  title: string;
+  summary: string;
+  rootPath: string;
+  author: string;
+  description: string;
+  mediaType?: "reel" | "carousel" | "post" | null;
+  carouselItemCount?: number | null;
+  comments?: CapturedComment[];
+  reportedCommentCount?: number | null;
+  items: Array<{ position: number; label: string; description: string; resourcePath: string }>;
+}): string {
+  const comments = (input.comments || []).filter((comment) => String(comment.text || "").trim());
+  const commentItems = comments.length
+    ? comments.map((comment) => {
+      const author = String(comment.author || "Instagram user").trim();
+      const likeCount = typeof comment.like_count === "number" ? `${comment.like_count} like${comment.like_count === 1 ? "" : "s"}` : "";
+      const timestamp = formatCommentTimestamp(comment.timestamp);
+      const meta = [likeCount, timestamp].filter(Boolean).join(" · ");
+      return `<li class="captured-comment"><header><strong>${escapeHtml(author.startsWith("@") ? author : `@${author}`)}</strong>${meta ? `<span>${escapeHtml(meta)}</span>` : ""}</header>${renderProse(comment.text, "Not recorded.", true)}</li>`;
+    }).join("")
+    : `<li class="captured-comment empty-comment"><p>No public comments were captured for this Reel.</p></li>`;
+  const reportedCommentCount = typeof input.reportedCommentCount === "number" ? input.reportedCommentCount : "";
+  const mediaType = input.mediaType || "reel";
+  const entries = input.items.map((item) => `<li value="${escapeHtml(item.position)}"><a href="#${encodeURIComponent(item.resourcePath)}" data-library-path="${escapeHtml(item.resourcePath)}">${escapeHtml(item.label)}</a>${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}</li>`).join("");
+  return `<article class="reel-document list-document" data-document-kind="list" data-reel-preview="true" data-job-id="${escapeHtml(input.id)}">
+  <header class="document-header">
+    <p class="document-kicker">Recreated list · lists/</p>
+    <h1>${escapeHtml(input.title)}</h1>
+    <p>${escapeHtml(input.summary)}</p>
+    <div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button><a href="#${encodeURIComponent(input.rootPath)}" data-library-path="${escapeHtml(input.rootPath)}">Source Reel</a><a href="#${encodeURIComponent("lists/index.html")}" data-library-path="lists/index.html">View all lists</a></div>
+  </header>
+  <aside class="reel-sidecar-data" data-reel-sidecar data-media-type="${escapeHtml(mediaType)}" data-carousel-item-count="${escapeHtml(input.carouselItemCount || 0)}" hidden>
+    <p data-sidecar-username>@${escapeHtml(String(input.author || "unknown").replace(/^@/, ""))}</p>
+    <div data-sidecar-description>${renderProse(input.description, "No creator description was captured.", true)}</div>
+    <div data-sidecar-comments data-reported-comment-count="${escapeHtml(reportedCommentCount)}"><ol>${commentItems}</ol></div>
+  </aside>
+  <section><h2>${escapeHtml(input.items.length)} entries, in source order</h2><ol class="recreated-list">${entries}</ol></section>
+</article>`;
+}
+
+export function renderListCollectionHtml(input: {
+  items: Array<{ title: string; libraryPath: string; summary?: string; author?: string; itemCount?: number }>;
+}): string {
+  const items = input.items.length
+    ? input.items.map((item) => `<li><a href="#${encodeURIComponent(item.libraryPath)}" data-library-path="${escapeHtml(item.libraryPath)}">${escapeHtml(item.title)}</a>${item.summary ? `<p>${escapeHtml(item.summary)}</p>` : ""}<div class="artifact-source"><span>${escapeHtml(item.itemCount || 0)} entries</span>${item.author ? `<span>@${escapeHtml(String(item.author).replace(/^@/, ""))}</span>` : ""}</div></li>`).join("")
+    : `<li class="empty-artifact"><p>No lists have been recorded yet.</p></li>`;
+  return `<article class="reel-document list-index-document" data-document-kind="list-index">
+  <header class="document-header"><p class="document-kicker">Central collection</p><h1>Lists</h1><p>Ordered lists recreated from synthesised Reels and carousels. Every entry opens its researched profile.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button></div></header>
+  <section><h2>${escapeHtml(input.items.length)} saved list${input.items.length === 1 ? "" : "s"}</h2><ul class="artifact-index-list list-index-list">${items}</ul></section>
 </article>`;
 }
 

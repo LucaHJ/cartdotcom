@@ -572,6 +572,15 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .artifact-index-list > li { padding: 20px 0; border-bottom: 1px solid var(--line); }
 .artifact-index-list h3 { margin: 0 0 7px; font-family: Georgia, "Times New Roman", serif; font-size: 24px; font-weight: 500; }
 .artifact-index-list p { margin: 0 0 8px; color: var(--muted); font-size: 15px; }
+.list-index-list { margin: 0; padding: 0 !important; list-style: none; }
+.list-index-list > li { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.list-index-list > li > a { font-family: Georgia, "Times New Roman", serif; font-size: 22px; }
+.list-index-list > li > p { margin: 6px 0; color: var(--muted); }
+.list-index-list > li > span { color: var(--muted); font: 700 11px/1.4 Inter, ui-sans-serif, sans-serif; letter-spacing: .04em; text-transform: uppercase; }
+.recreated-list { margin: 0; padding-left: 34px !important; counter-reset: recreated-list; }
+.recreated-list > li { padding: 15px 0 15px 8px; border-bottom: 1px solid var(--line); }
+.recreated-list > li > a { font-family: Georgia, "Times New Roman", serif; font-size: 22px; }
+.recreated-list > li > p { margin: 6px 0 0; color: var(--muted); }
 .artifact-source { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; font-family: Inter, ui-sans-serif, sans-serif; font-size: 12px; }
 .empty-artifact { color: var(--muted); font-style: italic; }
 

@@ -95,6 +95,8 @@ import {
   ARTIFACT_COLLECTION_DEFINITIONS,
   RESOURCE_KIND_DEFINITIONS,
   renderArtifactCollectionHtml,
+  renderListCollectionHtml,
+  renderListHtml,
   renderYoutubeCollectionHtml,
   renderYoutubeVideoHtml,
   renderResourceHtml,
@@ -114,6 +116,7 @@ import {
   type ArtifactType,
   type ResourceKind,
   type ResourceMedia,
+  type SynthesisList,
   type YoutubeVideoProfile,
 } from "./domain";
 
@@ -224,6 +227,7 @@ type SynthesisPayload = {
   visual_summary: string;
   claims: Array<{ claim: string; confidence: string; evidence: string[] }>;
   resources: SynthesisResource[];
+  lists?: SynthesisList[];
   comments?: CapturedComment[];
   reported_comment_count?: number | null;
   audio?: {
@@ -1578,6 +1582,39 @@ async function refreshArtifactCollectionPages(env: Env): Promise<void> {
   }
 }
 
+async function refreshListCollectionPage(env: Env): Promise<void> {
+  if (!env.REEL_LIBRARY_KV) return;
+  const items: Array<{ title: string; libraryPath: string; summary?: string; author?: string; itemCount?: number }> = [];
+  let cursor: string | undefined;
+  do {
+    const result = await env.REEL_LIBRARY_KV.list({ prefix: REEL_LIBRARY_FILE_PREFIX, cursor });
+    for (const key of result.keys) {
+      const metadata = (key.metadata || {}) as Record<string, unknown>;
+      if (metadata.kind !== "list" || typeof metadata.path !== "string") continue;
+      items.push({
+        title: String(metadata.title || metadata.path),
+        libraryPath: metadata.path,
+        summary: String(metadata.summary || ""),
+        author: String(metadata.author || ""),
+        itemCount: Number(metadata.source_count || 0),
+      });
+    }
+    cursor = result.list_complete ? undefined : result.cursor;
+  } while (cursor);
+  items.sort((left, right) => left.title.localeCompare(right.title));
+  await putReelLibraryHtml(env, "lists/index.html", renderListCollectionHtml({ items }), {
+    kind: "list-index",
+    job_id: "",
+    parent_path: "",
+    title: "Lists",
+    author: "",
+    video_available: false,
+    resource_folder: "lists",
+    summary: `${items.length} ordered list${items.length === 1 ? "" : "s"} recreated from Instagram sources`,
+    source_count: items.length,
+  });
+}
+
 async function refreshYoutubeCollectionPages(env: Env, onlyVideoIds?: Set<string>): Promise<{ videos: number; published: number; removed: number }> {
   if (!env.REEL_LIBRARY_KV) return { videos: 0, published: 0, removed: 0 };
   const rows = await env.REEL_DB.prepare(
@@ -1690,6 +1727,43 @@ function routeSynthesisResources(job: JobRow, payload: SynthesisPayload): Routed
       ? highResolutionMusicArtworkUrl(resource.hero_image_url)
       : resource.hero_image_url;
     return { ...resource, hero_image_url: heroImageUrl, slug, kind, artifactType, canonicalKey, documentSlug: artifactType ? slug : `${slug}-${sourceSuffix}` };
+  });
+}
+
+type RoutedSynthesisList = Omit<SynthesisList, "items"> & {
+  libraryPath: string;
+  items: Array<SynthesisList["items"][number] & { resourcePath: string }>;
+};
+
+function routeSynthesisLists(job: JobRow, payload: SynthesisPayload, resources: RoutedSynthesisResource[], resourcePaths: Map<string, string>): RoutedSynthesisList[] {
+  const sourceSuffix = slugify(payload.metadata.shortcode || job.shortcode || job.id.slice(0, 8));
+  const resourceByName = new Map(resources.map((resource) => [slugify(resource.name), resource]));
+  const usedPaths = new Set<string>();
+  return (Array.isArray(payload.lists) ? payload.lists : []).slice(0, 20).flatMap((list, listIndex) => {
+    const title = String(list?.title || "").trim();
+    const summary = String(list?.summary || "").trim();
+    if (!title || !Array.isArray(list?.items)) return [];
+    const items = list.items.slice(0, 200).flatMap((item, itemIndex) => {
+      const label = String(item?.label || "").trim();
+      const resource = resourceByName.get(slugify(String(item?.resource_name || label)));
+      const resourcePath = resource ? resourcePaths.get(resource.slug) : null;
+      if (!label || !resourcePath) return [];
+      const requestedPosition = Number(item?.position);
+      return [{
+        position: Number.isInteger(requestedPosition) && requestedPosition > 0 ? requestedPosition : itemIndex + 1,
+        label,
+        description: String(item?.description || "").trim(),
+        resource_name: resource!.name,
+        resourcePath,
+      }];
+    }).sort((left, right) => left.position - right.position);
+    if (items.length !== list.items.length || items.length < 2) {
+      throw new Error(`List ${title} has an item without a matching researched resource profile`);
+    }
+    let libraryPath = `lists/${slugify(title)}-${sourceSuffix}.html`;
+    if (usedPaths.has(libraryPath)) libraryPath = `lists/${slugify(title)}-${sourceSuffix}-${listIndex + 1}.html`;
+    usedPaths.add(libraryPath);
+    return [{ title, summary, items, libraryPath }];
   });
 }
 
@@ -2039,6 +2113,7 @@ async function publishSynthesisHtml(
     resource.slug,
     `${resource.artifactType ? ARTIFACT_COLLECTION_DEFINITIONS[resource.artifactType].folder : RESOURCE_KIND_DEFINITIONS[resource.kind].folder}/${resource.documentSlug}.html`,
   ]));
+  const lists = routeSynthesisLists(job, payload, resources, resourcePaths);
   const rootHtml = renderRootHtml({
     id: job.id,
     canonicalUrl: payload.metadata.canonical_url || job.canonical_url || job.source_url,
@@ -2056,6 +2131,12 @@ async function publishSynthesisHtml(
       summary: resource.summary,
       libraryPath: resourcePaths.get(resource.slug) || "",
       kind: resource.kind,
+    })),
+    lists: lists.map((list) => ({
+      title: list.title,
+      summary: list.summary,
+      libraryPath: list.libraryPath,
+      itemCount: list.items.length,
     })),
     claims: payload.claims || [],
     comments: commentBundle.comments,
@@ -2128,10 +2209,43 @@ async function publishSynthesisHtml(
         .bind(resource.canonicalKey, resource.guide, JSON.stringify({ hero_image_url: resource.hero_image_url || null, hero_image_alt: resource.hero_image_alt || null, spotify_url: resource.spotify_url || null, youtube_candidates: resource.youtube_candidates || [], article_links: resource.article_links || [] }), key, path, job.id, resource.slug),
     );
   }
+  for (const list of lists) {
+    const html = renderListHtml({
+      id: job.id,
+      title: list.title,
+      summary: list.summary,
+      rootPath: paths.root,
+      author: payload.metadata.author_username,
+      description: payload.metadata.description || "",
+      mediaType: payload.metadata.media_type || (payload.metadata.canonical_url.includes("/p/") ? "post" : "reel"),
+      carouselItemCount: payload.metadata.carousel_item_count || null,
+      comments: commentBundle.comments,
+      reportedCommentCount: commentBundle.reportedCommentCount,
+      items: list.items.map((item) => ({
+        position: item.position,
+        label: item.label,
+        description: item.description,
+        resourcePath: item.resourcePath,
+      })),
+    });
+    await env.REEL_ARCHIVE.put(`library/${list.libraryPath}`, html, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
+    await putReelLibraryHtml(env, list.libraryPath, html, {
+      kind: "list",
+      job_id: job.id,
+      parent_path: paths.root,
+      title: list.title,
+      author: payload.metadata.author_username,
+      video_available: Boolean(job.original_video_key),
+      media_type: payload.metadata.media_type || (payload.metadata.canonical_url.includes("/p/") ? "post" : "reel"),
+      resource_folder: "lists",
+      summary: list.summary,
+      source_count: list.items.length,
+    });
+  }
   await removeSupersededReelLibraryFiles(
     env,
     job.id,
-    new Set([paths.root, ...resourcePaths.values()]),
+    new Set([paths.root, ...resourcePaths.values(), ...lists.map((list) => list.libraryPath)]),
     `${paths.directory}/resources/`,
   );
   await env.REEL_DB.batch(statements);
@@ -2140,6 +2254,7 @@ async function publishSynthesisHtml(
     const youtubeIds = new Set(resources.flatMap((resource) => (resource.youtube_candidates || []).map((candidate) => youtubeVideoId(candidate.url)).filter((id): id is string => Boolean(id))));
     await refreshYoutubeCollectionPages(env, youtubeIds);
     await refreshArtifactCollectionPages(env);
+    await refreshListCollectionPage(env);
     await refreshReelLibraryManifest(env);
   }
   return { rootKey, rootPath: paths.root, resourceCount: resources.length };
@@ -2800,8 +2915,44 @@ async function handleMediaEnrich(request: Request, env: Env): Promise<Response> 
   }
   await refreshYoutubeCollectionPages(env);
   await refreshArtifactCollectionPages(env);
+  await refreshListCollectionPage(env);
   await refreshReelLibraryManifest(env);
   return json({ ok: true, results });
+}
+
+async function handleListBackfill(request: Request, env: Env): Promise<Response> {
+  const input = await readJson<{ job_id?: string; lists?: SynthesisList[]; confirm_backfill?: string }>(request);
+  const jobId = String(input.job_id || "").trim();
+  if (!jobId || input.confirm_backfill !== "BACKFILL_RECREATED_LISTS") {
+    return json({ error: "job_id and exact confirm_backfill are required" }, { status: 400 });
+  }
+  if (!Array.isArray(input.lists) || !input.lists.length || input.lists.length > 20) {
+    return json({ error: "lists must contain between 1 and 20 lists" }, { status: 400 });
+  }
+  const job = await env.REEL_DB.prepare("SELECT * FROM jobs WHERE id=? AND status='complete' AND synthesis_json_key IS NOT NULL")
+    .bind(jobId).first<JobRow>();
+  if (!job?.synthesis_json_key) return json({ error: "Completed synthesis is unavailable" }, { status: 409 });
+  const object = await env.REEL_ARCHIVE.get(job.synthesis_json_key);
+  const payload = object ? await object.json<SynthesisPayload>().catch(() => null) : null;
+  if (!payload?.metadata?.title || !Array.isArray(payload.resources)) return json({ error: "Stored synthesis is invalid" }, { status: 500 });
+  const resourceNames = new Set(payload.resources.map((resource) => slugify(resource.name)));
+  for (const list of input.lists) {
+    if (!String(list?.title || "").trim() || !Array.isArray(list?.items) || list.items.length < 2 || list.items.length > 200) {
+      return json({ error: "Every list requires a title and 2-200 items" }, { status: 400 });
+    }
+    for (const item of list.items) {
+      if (!String(item?.label || "").trim() || !resourceNames.has(slugify(String(item?.resource_name || "")))) {
+        return json({ error: `List item ${String(item?.label || "(untitled)")} does not match a stored resource` }, { status: 409 });
+      }
+    }
+  }
+  payload.lists = input.lists;
+  const serialised = JSON.stringify(payload, null, 2);
+  await putPhase7MirroredObject(env, job.synthesis_json_key, serialised, { httpMetadata: { contentType: "application/json" } });
+  const published = await publishSynthesisHtml(env, job, payload);
+  await env.REEL_DB.prepare("INSERT INTO job_events(job_id,stage,status,detail) VALUES (?,'published','complete',?)")
+    .bind(jobId, `list_backfill:${input.lists.length}`).run();
+  return json({ ok: true, job_id: jobId, lists: input.lists.length, root_path: published.rootPath });
 }
 
 async function handleConfirmLiveMode(env: Env): Promise<Response> {
@@ -5737,6 +5888,7 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
   }
   const youtubeCollection = await refreshYoutubeCollectionPages(env);
   await refreshArtifactCollectionPages(env);
+  await refreshListCollectionPage(env);
   await refreshReelLibraryManifest(env);
   const repaired = results.filter((result) => result.ok).length;
   return json({ ok: repaired === results.length, repaired, artwork_upgraded: artworkUpgraded, youtube_profiles_rebuilt: profileKeys.length + youtubeResourceRows.results.length, youtube_videos: youtubeCollection.videos, youtube_video_pages_rebuilt: youtubeCollection.published, youtube_video_pages_removed: youtubeCollection.removed, failed: results.length - repaired, results });
@@ -6306,6 +6458,12 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       return handleSearchQuery(env, url.searchParams.get("q") || "", Number(url.searchParams.get("limit") || 10));
     }
     return json({ error: "Not found" }, { status: 404 });
+  }
+  if (url.pathname === "/api/admin/reel-library/backfill-lists") {
+    const libraryUnauthorized = requirePhase5Control(request, env);
+    if (libraryUnauthorized) return libraryUnauthorized;
+    if (request.method === "POST") return handleListBackfill(request, env);
+    return json({ error: "Method not allowed" }, { status: 405 });
   }
   const unauthorized = requireAdmin(request, env);
   if (unauthorized) return unauthorized;

@@ -40,6 +40,20 @@ class FakeJsonResponse:
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_synthesis_contract_preserves_ordered_lists_and_resource_links(self):
+        schema = json.loads(app.SCHEMA_PATH.read_text(encoding="utf-8"))
+        self.assertIn("lists", schema["required"])
+        list_schema = schema["properties"]["lists"]["items"]
+        self.assertEqual(list_schema["properties"]["items"]["minItems"], 2)
+        self.assertIn("resource_name", list_schema["properties"]["items"]["items"]["required"])
+        prompt = app.build_prompt(
+            {"media_type": "reel", "comments": []},
+            {"text": "First Inter, then EB Garamond."},
+            "",
+        )
+        self.assertIn("Preserve the source order, entry wording, and numbering", prompt)
+        self.assertIn("matching resources entry in resource_name", prompt)
+
     def test_selects_largest_image_candidate_instead_of_last_thumbnail(self):
         candidates = [
             {"url": "https://example.test/original.jpg", "width": 1170, "height": 1560},
