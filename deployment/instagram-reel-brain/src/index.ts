@@ -1387,16 +1387,21 @@ async function putPhase7Origin(
   contentType: string,
   byteSize: number,
   contentSha256: string,
+  libraryMetadata?: Record<string, unknown>,
 ): Promise<void> {
   if (!env.PHASE7_ORIGIN_URL || !env.PHASE7_ORIGIN_TOKEN) return;
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${env.PHASE7_ORIGIN_TOKEN}`,
+    "content-type": contentType,
+    "content-length": String(byteSize),
+    "x-content-sha256": contentSha256,
+  };
+  if (kind === "library" && libraryMetadata) {
+    headers["x-phase7-library-metadata"] = toBase64Url(JSON.stringify(libraryMetadata));
+  }
   const request = new Request(phase7OriginPath(env.PHASE7_ORIGIN_URL, kind, path), {
     method: "PUT",
-    headers: {
-      authorization: `Bearer ${env.PHASE7_ORIGIN_TOKEN}`,
-      "content-type": contentType,
-      "content-length": String(byteSize),
-      "x-content-sha256": contentSha256,
-    },
+    headers,
     body,
   });
   const response = env.REEL_ORIGIN ? await env.REEL_ORIGIN.fetch(request) : await fetch(request);
@@ -1452,7 +1457,21 @@ async function putReelLibraryHtml(
 ): Promise<void> {
   const encoded = new TextEncoder().encode(html);
   const digest = await sha256(html);
-  await putPhase7Origin(env, "library", path, html, "text/html; charset=utf-8", encoded.byteLength, digest);
+  const phase7Metadata = {
+    kind: String(metadata.kind || "file").slice(0, 80),
+    job_id: String(metadata.job_id || "").slice(0, 120),
+    parent_path: String(metadata.parent_path || "").slice(0, 500),
+    title: String(metadata.title || path).slice(0, 500),
+    author: String(metadata.author || "").slice(0, 240),
+    video_available: Boolean(metadata.video_available),
+    media_type: String(metadata.media_type || "").slice(0, 80),
+    resource_kind: String(metadata.resource_kind || "").slice(0, 120),
+    resource_folder: String(metadata.resource_folder || "").slice(0, 240),
+    artifact_type: String(metadata.artifact_type || "").slice(0, 120),
+    summary: String(metadata.summary || "").slice(0, 1200),
+    source_count: Math.max(0, Number(metadata.source_count) || 0),
+  };
+  await putPhase7Origin(env, "library", path, html, "text/html; charset=utf-8", encoded.byteLength, digest, phase7Metadata);
   if (!env.REEL_LIBRARY_KV) return;
   await env.REEL_LIBRARY_KV.put(`${REEL_LIBRARY_FILE_PREFIX}${toBase64Url(path)}`, html, {
     metadata: {

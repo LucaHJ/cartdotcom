@@ -15,3 +15,20 @@ test("Phase 7 migration object surface is authenticated, GET-only, and read-only
   assert.doesNotMatch(body, /REEL_ARCHIVE\.(?:put|delete|createMultipartUpload)/);
   assert.match(body, /segment === "\.\."/);
 });
+
+test("Phase 7 library writes carry bounded gallery metadata to the private origin", () => {
+  const start = source.indexOf("async function putPhase7Origin(");
+  const end = source.indexOf("async function putPhase7MirroredObject", start);
+  assert.ok(start > 0 && end > start);
+  const body = source.slice(start, end);
+  assert.match(body, /x-phase7-library-metadata/);
+  assert.match(body, /toBase64Url\(JSON\.stringify\(libraryMetadata\)\)/);
+
+  const libraryStart = source.indexOf("async function putReelLibraryHtml(");
+  const libraryEnd = source.indexOf("async function refreshReelLibraryManifest", libraryStart);
+  const libraryBody = source.slice(libraryStart, libraryEnd);
+  assert.match(libraryBody, /kind: String\(metadata\.kind \|\| "file"\)/);
+  assert.match(libraryBody, /job_id: String\(metadata\.job_id/);
+  assert.match(libraryBody, /media_type: String\(metadata\.media_type/);
+  assert.match(libraryBody, /encoded\.byteLength, digest, phase7Metadata\);/);
+});

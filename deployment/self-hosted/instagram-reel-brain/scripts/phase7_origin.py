@@ -9,6 +9,7 @@ verified before atomic placement; divergent existing files are never replaced.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -26,6 +27,7 @@ from urllib.parse import unquote, urlparse
 
 MAX_JSON_BYTES = 16 * 1024
 MAX_OBJECT_BYTES = 2 * 1024 * 1024 * 1024
+MAX_LIBRARY_METADATA_BYTES = 8 * 1024
 
 
 def utc_now() -> str:
@@ -48,6 +50,22 @@ def safe_relative(value: str) -> Path:
     if not decoded or any(part in {"", ".", ".."} for part in parts):
         raise ValueError("invalid path")
     return Path(*parts)
+
+
+def decode_library_metadata(value: str | None) -> dict[str, object] | None:
+    if not value:
+        return None
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        if not raw or len(raw) > MAX_LIBRARY_METADATA_BYTES:
+            raise ValueError("invalid metadata size")
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid metadata shape")
+        return payload
+    except (UnicodeEncodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("invalid library metadata") from error
 
 
 class OriginState:
@@ -78,11 +96,14 @@ class OriginState:
                 );
                 CREATE TABLE IF NOT EXISTS file_receipts(
                   kind TEXT NOT NULL, path TEXT NOT NULL, byte_size INTEGER NOT NULL,
-                  sha256 TEXT NOT NULL, updated_at TEXT NOT NULL,
+                  sha256 TEXT NOT NULL, updated_at TEXT NOT NULL, metadata_json TEXT,
                   PRIMARY KEY(kind,path)
                 );
                 """
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(file_receipts)")}
+            if "metadata_json" not in columns:
+                db.execute("ALTER TABLE file_receipts ADD COLUMN metadata_json TEXT")
         os.chmod(self.db_path, 0o600)
 
     def authorised(self, header: str | None) -> bool:
@@ -141,7 +162,15 @@ class OriginState:
                 continue
         return count
 
-    def put_file(self, kind: str, relative: Path, body, content_length: int, expected_sha: str | None) -> dict[str, object]:
+    def put_file(
+        self,
+        kind: str,
+        relative: Path,
+        body,
+        content_length: int,
+        expected_sha: str | None,
+        metadata: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         if content_length < 0 or content_length > MAX_OBJECT_BYTES:
             raise ValueError("invalid content length")
         root = self.object_root if kind == "object" else self.library_root
@@ -182,9 +211,10 @@ class OriginState:
                 os.chmod(target, 0o600)
             with self._connect() as db:
                 db.execute(
-                    "INSERT INTO file_receipts(kind,path,byte_size,sha256,updated_at) VALUES(?,?,?,?,?) "
-                    "ON CONFLICT(kind,path) DO UPDATE SET byte_size=excluded.byte_size,sha256=excluded.sha256,updated_at=excluded.updated_at",
-                    (kind, relative.as_posix(), received, actual_sha, utc_now()),
+                    "INSERT INTO file_receipts(kind,path,byte_size,sha256,updated_at,metadata_json) VALUES(?,?,?,?,?,?) "
+                    "ON CONFLICT(kind,path) DO UPDATE SET byte_size=excluded.byte_size,sha256=excluded.sha256,"
+                    "updated_at=excluded.updated_at,metadata_json=COALESCE(excluded.metadata_json,file_receipts.metadata_json)",
+                    (kind, relative.as_posix(), received, actual_sha, utc_now(), json.dumps(metadata, separators=(",", ":")) if metadata else None),
                 )
             return {"ok": True, "path": relative.as_posix(), "bytes": received, "sha256": actual_sha}
         except Exception:
@@ -195,12 +225,17 @@ class OriginState:
     def manifest(self) -> dict[str, object]:
         with self._connect() as db:
             rows = db.execute(
-                "SELECT path,byte_size,sha256,updated_at FROM file_receipts WHERE kind='library' ORDER BY path"
+                "SELECT path,byte_size,sha256,updated_at,metadata_json FROM file_receipts WHERE kind='library' ORDER BY path"
             ).fetchall()
-        files = [
-            {"path": path, "bytes": size, "sha256": sha, "updated_at": updated}
-            for path, size, sha, updated in rows
-        ]
+        files = []
+        for path, size, sha, updated, metadata_json in rows:
+            try:
+                metadata = json.loads(metadata_json) if metadata_json else {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+            except json.JSONDecodeError:
+                metadata = {}
+            files.append({**metadata, "path": path, "bytes": size, "sha256": sha, "updated_at": updated})
         return {"generated_at": utc_now(), "file_count": len(files), "files": files}
 
 
@@ -300,7 +335,8 @@ class Handler(BaseHTTPRequestHandler):
             prefix = "/v1/object/" if kind == "object" else "/v1/library/file/"
             relative = safe_relative(parsed.removeprefix(prefix))
             length = self.request_content_length(-1)
-            result = self.state.put_file(kind, relative, self.rfile, length, self.headers.get("X-Content-Sha256"))
+            metadata = decode_library_metadata(self.headers.get("X-Phase7-Library-Metadata")) if kind == "library" else None
+            result = self.state.put_file(kind, relative, self.rfile, length, self.headers.get("X-Content-Sha256"), metadata)
             self.respond_json(200, result)
         except FileExistsError as error:
             self.respond_json(409, {"ok": False, "error": str(error)})

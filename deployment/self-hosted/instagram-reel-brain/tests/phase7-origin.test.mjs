@@ -46,8 +46,9 @@ test("phase7 origin authenticates and atomically verifies local library/object w
   assert.equal(denied.status, 401);
   const html = Buffer.from("<h1>Phase 7</h1>");
   const sha = createHash("sha256").update(html).digest("hex");
+  const metadata = Buffer.from(JSON.stringify({ kind: "reel", job_id: "job-1", title: "Test Reel", author: "tester", media_type: "reel" })).toString("base64url");
   const written = await fetch(`${base}/v1/library/file/reels/test/index.html`, {
-    method: "PUT", headers: { authorization: `Bearer ${token}`, "x-content-sha256": sha, "content-length": String(html.length) }, body: html,
+    method: "PUT", headers: { authorization: `Bearer ${token}`, "x-content-sha256": sha, "x-phase7-library-metadata": metadata, "content-length": String(html.length) }, body: html,
   });
   assert.equal(written.status, 200);
   assert.equal(readFileSync(join(root, "library", "reels", "test", "index.html"), "utf8"), html.toString());
@@ -57,6 +58,11 @@ test("phase7 origin authenticates and atomically verifies local library/object w
   assert.equal(await file.text(), html.toString());
   const manifest = await fetch(`${base}/v1/library/manifest`, { headers: { authorization: `Bearer ${token}` } }).then((response) => response.json());
   assert.equal(manifest.file_count, 1);
+  assert.equal(manifest.files[0].kind, "reel");
+  assert.equal(manifest.files[0].job_id, "job-1");
+  assert.equal(manifest.files[0].title, "Test Reel");
+  assert.equal(manifest.files[0].path, "reels/test/index.html");
+  assert.equal(manifest.files[0].sha256, sha);
 
   const conflict = await fetch(`${base}/v1/library/file/reels/test/index.html`, {
     method: "PUT", headers: { authorization: `Bearer ${token}`, "x-content-sha256": createHash("sha256").update("different").digest("hex"), "content-length": "9" }, body: "different",

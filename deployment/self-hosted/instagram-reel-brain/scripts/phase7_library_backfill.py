@@ -83,17 +83,19 @@ def main() -> int:
         raise SystemExit("invalid library manifest")
     root = Path(args.library_root).resolve()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    work: list[Path] = []
+    work: list[tuple[Path, dict[str, object]]] = []
     for item in files:
         if not isinstance(item, dict) or not str(item.get("path") or "").endswith(".html"):
             continue
-        work.append(safe_path(str(item["path"])))
+        work.append((safe_path(str(item["path"])), item))
 
-    def copy_or_verify(relative: Path) -> tuple[str, int, str]:
+    def copy_or_verify(work_item: tuple[Path, dict[str, object]]) -> tuple[str, int, str, str]:
+        relative, metadata = work_item
         url = f"{args.base_url.rstrip('/')}/api/phase7/library/file?{urllib.parse.urlencode({'path': relative.as_posix()})}"
         file_headers, body = request(url, token)
         sha = atomic_verified_write(root, relative, body, file_headers.get("x-content-sha256", ""))
-        return relative.as_posix(), len(body), sha
+        metadata_json = json.dumps(metadata, separators=(",", ":"), ensure_ascii=False)
+        return relative.as_posix(), len(body), sha, metadata_json
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         receipts = list(pool.map(copy_or_verify, work))
@@ -101,11 +103,12 @@ def main() -> int:
     if args.receipt_db:
         with sqlite3.connect(args.receipt_db, timeout=30) as connection:
             connection.executemany(
-                """INSERT INTO file_receipts(kind,path,byte_size,sha256,updated_at)
-                   VALUES('library',?,?,?,?)
+                """INSERT INTO file_receipts(kind,path,byte_size,sha256,updated_at,metadata_json)
+                   VALUES('library',?,?,?,?,?)
                    ON CONFLICT(kind,path) DO UPDATE SET
-                     byte_size=excluded.byte_size,sha256=excluded.sha256,updated_at=excluded.updated_at""",
-                [(path, byte_size, sha, datetime.now(timezone.utc).isoformat()) for path, byte_size, sha in receipts],
+                     byte_size=excluded.byte_size,sha256=excluded.sha256,updated_at=excluded.updated_at,
+                     metadata_json=excluded.metadata_json""",
+                [(path, byte_size, sha, datetime.now(timezone.utc).isoformat(), metadata_json) for path, byte_size, sha, metadata_json in receipts],
             )
     report = {"ok": True, "manifest_file_count": int(manifest.get("file_count") or len(files)), "copied_or_verified": copied}
     Path(args.report).write_text(json.dumps(report, indent=2), encoding="utf-8")
