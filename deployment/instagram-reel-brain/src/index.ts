@@ -2977,7 +2977,12 @@ async function handleListBackfill(request: Request, env: Env): Promise<Response>
   const marker = `list_backfill:${digest.slice(0, 12)}`;
   const prior = await env.REEL_DB.prepare("SELECT id FROM job_events WHERE job_id=? AND detail=? LIMIT 1")
     .bind(jobId, marker).first<{ id: string }>();
-  if (prior) return json({ ok: true, idempotent: true, job_id: jobId, lists: input.lists.length, root_path: job.library_path });
+  if (prior) {
+    // Re-publish on an idempotent retry so a briefly stale KV listing cannot leave
+    // the durable list page absent from the central Lists index indefinitely.
+    const published = await publishSynthesisHtml(env, job, payload);
+    return json({ ok: true, idempotent: true, job_id: jobId, lists: input.lists.length, root_path: published.rootPath });
+  }
   const existing = await env.REEL_ARCHIVE.head(listKey);
   if (!existing) await putPhase7MirroredObject(env, listKey, serialised, { httpMetadata: { contentType: "application/json" } });
   await env.REEL_DB.prepare(

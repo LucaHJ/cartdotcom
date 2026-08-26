@@ -1,0 +1,1285 @@
+{
+  "created_at": "2026-08-26T16:32:43.8710597+10:00",
+  "purpose": "Curated, no-Codex backfill of app-launch preparation lists from existing synthesis evidence.",
+  "backfills": [
+    {
+      "job_id": "5c23cc76-4568-4957-97de-f7d4d179ac06",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "20-point app pre-launch checklist",
+          "summary": "The creator’s complete pre-launch sequence for testing, observability, compliance, cost control, recovery, payments and release timing.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Run a real beta",
+              "description": "Test the app with real users before public release.",
+              "resource_name": "Google Play testing and staged rollout"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Wire up crash reporting",
+              "description": "Capture crashes and exceptions before launch.",
+              "resource_name": "Sentry"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Build account deletion",
+              "description": "Provide a user-accessible account-deletion path.",
+              "resource_name": "Account deletion requirements"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Host the privacy policy",
+              "description": "Publish the privacy notice before review and release.",
+              "resource_name": "App Store Review Guidelines"
+            },
+            {
+              "position": 5,
+              "section": "main",
+              "label": "Declare what SDKs collect",
+              "description": "Make platform privacy disclosures match actual SDK behaviour.",
+              "resource_name": "App Store Review Guidelines"
+            },
+            {
+              "position": 6,
+              "section": "main",
+              "label": "Configure SPF, DKIM and DMARC",
+              "description": "Authenticate the app’s email domain.",
+              "resource_name": "SPF, DKIM, and DMARC"
+            },
+            {
+              "position": 7,
+              "section": "main",
+              "label": "Test signup with a fresh Gmail account",
+              "description": "Verify onboarding outside the developer’s existing account state.",
+              "resource_name": "Pre-launch app release checklist"
+            },
+            {
+              "position": 8,
+              "section": "main",
+              "label": "Set hard spend caps on every API",
+              "description": "Bound third-party API cost exposure.",
+              "resource_name": "Pre-launch app release checklist"
+            },
+            {
+              "position": 9,
+              "section": "main",
+              "label": "Monitor LLM credit balances",
+              "description": "Track paid model usage before balances interrupt production.",
+              "resource_name": "Pre-launch app release checklist"
+            },
+            {
+              "position": 10,
+              "section": "main",
+              "label": "Move off a pausing free tier",
+              "description": "Use infrastructure that will not unexpectedly pause the production app.",
+              "resource_name": "Pre-launch app release checklist"
+            },
+            {
+              "position": 11,
+              "section": "main",
+              "label": "Rehearse a database restore",
+              "description": "Prove that backups can actually restore service.",
+              "resource_name": "Pre-launch app release checklist"
+            },
+            {
+              "position": 12,
+              "section": "main",
+              "label": "Ship a kill switch",
+              "description": "Provide an emergency control for unsafe or costly functionality.",
+              "resource_name": "Pre-launch app release checklist"
+            },
+            {
+              "position": 13,
+              "section": "main",
+              "label": "Provide an over-the-air hotfix path",
+              "description": "Prepare a bounded way to deliver urgent fixes.",
+              "resource_name": "Pre-launch app release checklist"
+            },
+            {
+              "position": 14,
+              "section": "main",
+              "label": "Move support email to your own domain",
+              "description": "Use a domain-controlled support channel.",
+              "resource_name": "SPF, DKIM, and DMARC"
+            },
+            {
+              "position": 15,
+              "section": "main",
+              "label": "Use an agent or business address, not your home",
+              "description": "Avoid exposing a personal home address in reviewer or business contact details.",
+              "resource_name": "App Store Connect review information"
+            },
+            {
+              "position": 16,
+              "section": "main",
+              "label": "Put a demo account in review notes",
+              "description": "Give app reviewers working access and instructions.",
+              "resource_name": "App Store Connect review information"
+            },
+            {
+              "position": 17,
+              "section": "main",
+              "label": "Test restore purchases after reinstall",
+              "description": "Verify entitlement recovery in a clean install.",
+              "resource_name": "App Store Connect sandbox testing"
+            },
+            {
+              "position": 18,
+              "section": "main",
+              "label": "Swap test payment credentials for production",
+              "description": "Confirm production billing configuration before release.",
+              "resource_name": "Google Play Billing test purchases"
+            },
+            {
+              "position": 19,
+              "section": "main",
+              "label": "Turn on phased release",
+              "description": "Roll out gradually so faults can be detected before full distribution.",
+              "resource_name": "App Store Connect phased release"
+            },
+            {
+              "position": 20,
+              "section": "main",
+              "label": "Do not submit on a Friday",
+              "description": "The creator recommends avoiding release timing with limited support coverage.",
+              "resource_name": "Pre-launch app release checklist"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "2f307553-9b66-499c-b012-04d9ca137b22",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "Niche security checks for a vibe-coded app",
+          "summary": "Ten specific production-security checks covering data access, deployment integrity, webhooks, identifiers, logs and privileged access.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Review SECURITY DEFINER functions against RLS",
+              "description": "Ensure privileged database functions do not bypass intended row-level policies.",
+              "resource_name": "Row-level security and SECURITY DEFINER review"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Keep logged-in pages out of shared CDN caches",
+              "description": "Prevent personalised content from being served across users.",
+              "resource_name": "Private caching for authenticated pages"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Remove dangling DNS records",
+              "description": "Delete records pointing to decommissioned services.",
+              "resource_name": "Dangling DNS record cleanup"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Pin GitHub Actions to full commit hashes",
+              "description": "Avoid mutable action tags in CI/CD workflows.",
+              "resource_name": "GitHub Actions"
+            },
+            {
+              "position": 5,
+              "section": "main",
+              "label": "Reject stale webhook timestamps",
+              "description": "Combine signature checks with replay protection.",
+              "resource_name": "Webhook signature and replay protection"
+            },
+            {
+              "position": 6,
+              "section": "main",
+              "label": "Keep production source maps private",
+              "description": "Retain debugging value without publicly exposing source mappings.",
+              "resource_name": "Production source-map handling"
+            },
+            {
+              "position": 7,
+              "section": "main",
+              "label": "Add integrity hashes to third-party scripts",
+              "description": "Use Subresource Integrity for externally hosted assets.",
+              "resource_name": "Subresource Integrity (SRI)"
+            },
+            {
+              "position": 8,
+              "section": "main",
+              "label": "Use opaque identifiers",
+              "description": "Prefer UUIDs while still enforcing object-level authorisation.",
+              "resource_name": "UUIDs (RFC 9562)"
+            },
+            {
+              "position": 9,
+              "section": "main",
+              "label": "Scrub tokens and passwords from logs",
+              "description": "Exclude or redact credentials and secrets.",
+              "resource_name": "Secure logging and secret redaction"
+            },
+            {
+              "position": 10,
+              "section": "main",
+              "label": "Put the admin panel behind MFA",
+              "description": "Require multiple factors for privileged access.",
+              "resource_name": "Multi-factor authentication for admin access"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "e8187e39-b821-435c-9814-fe6320db031e",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "20 application-security checks before launch",
+          "summary": "The Reel’s complete pre-launch application-security checklist, preserved in spoken order.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Hide privileged API keys",
+              "description": "Keep secret and privileged keys out of client code.",
+              "resource_name": "GitHub Secret Scanning"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Purge committed secrets",
+              "description": "Remove exposed credentials and rotate them when necessary.",
+              "resource_name": "GitHub Secret Scanning"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Use only deliberately public database keys in clients",
+              "description": "Public keys must be scoped and backed by server-side policy.",
+              "resource_name": "Supabase Row Level Security (RLS)"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Enable row-level security",
+              "description": "Apply explicit database policies to exposed tables.",
+              "resource_name": "Supabase Row Level Security (RLS)"
+            },
+            {
+              "position": 5,
+              "section": "main",
+              "label": "Encrypt sensitive data",
+              "description": "Protect sensitive information in storage and transit.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 6,
+              "section": "main",
+              "label": "Enforce server-side authentication",
+              "description": "Do not rely on interface visibility as an access boundary.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 7,
+              "section": "main",
+              "label": "Lock record access",
+              "description": "Enforce per-user and per-tenant authorisation.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 8,
+              "section": "main",
+              "label": "Block field tampering",
+              "description": "Allow only intended fields and values to be changed.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 9,
+              "section": "main",
+              "label": "Secure session cookies",
+              "description": "Use secure cookie attributes and session controls.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 10,
+              "section": "main",
+              "label": "Hash passwords",
+              "description": "Store passwords using an appropriate password-hashing design.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 11,
+              "section": "main",
+              "label": "Rate-limit login",
+              "description": "Bound repeated authentication attempts.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 12,
+              "section": "main",
+              "label": "Add bot protection",
+              "description": "Detect and limit automated abuse where appropriate.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 13,
+              "section": "main",
+              "label": "Parameterise database queries",
+              "description": "Keep untrusted input out of executable query structure.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 14,
+              "section": "main",
+              "label": "Validate every input",
+              "description": "Apply allowlisted, context-aware input validation.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 15,
+              "section": "main",
+              "label": "Escape user-controlled content",
+              "description": "Encode output for its rendering context.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 16,
+              "section": "main",
+              "label": "Restrict file uploads",
+              "description": "Validate, isolate and safely serve uploaded files.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 17,
+              "section": "main",
+              "label": "Trim API responses",
+              "description": "Return only data the caller needs and may access.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 18,
+              "section": "main",
+              "label": "Add security headers",
+              "description": "Apply browser security controls appropriate to the app.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 19,
+              "section": "main",
+              "label": "Force HTTPS",
+              "description": "Protect network traffic with TLS.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 20,
+              "section": "main",
+              "label": "Scan dependencies",
+              "description": "Check third-party packages for known vulnerabilities.",
+              "resource_name": "OWASP Dependency-Check"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "c14da3ee-c346-45c2-b276-ede5bb47a939",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "18 security risks to check in an AI-built app",
+          "summary": "Eighteen application-security risks spanning browser attacks, authentication, APIs, payments, logging and production exposure.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Cross-site scripting",
+              "description": "Test untrusted content handling and contextual output encoding.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Cross-site request forgery",
+              "description": "Protect state-changing browser requests.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Insecure file uploads",
+              "description": "Validate and isolate user-uploaded content.",
+              "resource_name": "OWASP File Upload Cheat Sheet"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Path traversal",
+              "description": "Prevent file paths from escaping authorised roots.",
+              "resource_name": "OWASP Web Security Testing Guide"
+            },
+            {
+              "position": 5,
+              "section": "main",
+              "label": "Server-side request forgery",
+              "description": "Restrict server-side network requests influenced by users.",
+              "resource_name": "OWASP SSRF Prevention Cheat Sheet"
+            },
+            {
+              "position": 6,
+              "section": "main",
+              "label": "Broken password-reset flows",
+              "description": "Review reset tokens, enumeration and recovery behaviour.",
+              "resource_name": "OWASP Authentication and Session Management Cheat Sheets"
+            },
+            {
+              "position": 7,
+              "section": "main",
+              "label": "Weak session management",
+              "description": "Harden session creation, storage, rotation and expiry.",
+              "resource_name": "OWASP Authentication and Session Management Cheat Sheets"
+            },
+            {
+              "position": 8,
+              "section": "main",
+              "label": "Weak JWT secrets",
+              "description": "Use safe signing, verification and key management.",
+              "resource_name": "JSON Web Token (JWT)"
+            },
+            {
+              "position": 9,
+              "section": "main",
+              "label": "Overly permissive CORS",
+              "description": "Allow only intended cross-origin access.",
+              "resource_name": "MDN Web Docs: CORS"
+            },
+            {
+              "position": 10,
+              "section": "main",
+              "label": "Missing rate limits",
+              "description": "Bound resource consumption and repeated abuse.",
+              "resource_name": "OWASP API Security Top 10"
+            },
+            {
+              "position": 11,
+              "section": "main",
+              "label": "Exposed test or staging environments",
+              "description": "Keep non-production services and credentials inaccessible.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 12,
+              "section": "main",
+              "label": "Default credentials left unchanged",
+              "description": "Remove or replace vendor and development defaults.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 13,
+              "section": "main",
+              "label": "Unsigned webhooks",
+              "description": "Verify provider signatures on webhook payloads.",
+              "resource_name": "Stripe Webhook Signature Verification"
+            },
+            {
+              "position": 14,
+              "section": "main",
+              "label": "Payment checks only on the front end",
+              "description": "Verify purchases and entitlements server-side.",
+              "resource_name": "Stripe Webhook Signature Verification"
+            },
+            {
+              "position": 15,
+              "section": "main",
+              "label": "IDOR and BOLA",
+              "description": "Enforce object-level authorisation on every request.",
+              "resource_name": "OWASP API Security Top 10"
+            },
+            {
+              "position": 16,
+              "section": "main",
+              "label": "APIs trusting user-controlled input",
+              "description": "Validate and authorise all client-supplied values.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 17,
+              "section": "main",
+              "label": "Sensitive data in logs",
+              "description": "Exclude secrets and private data from operational logs.",
+              "resource_name": "OWASP Logging Cheat Sheet"
+            },
+            {
+              "position": 18,
+              "section": "main",
+              "label": "Exposed production source maps",
+              "description": "Review whether source maps are publicly reachable.",
+              "resource_name": "OWASP Web Security Testing Guide"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "1df5529a-fe29-4fa9-986d-346ac04f278a",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "Advanced security checks for AI-built apps",
+          "summary": "The Reel’s numbered advanced checklist for identity, workflows, CI/CD, AI features and real-time interfaces.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Add MFA",
+              "description": "Protect sensitive and administrative accounts with multiple factors.",
+              "resource_name": "OWASP Multifactor Authentication Cheat Sheet"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Prevent account enumeration",
+              "description": "Avoid revealing whether an account exists through login or recovery flows.",
+              "resource_name": "OWASP Forgot Password Cheat Sheet"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Test business-logic abuse",
+              "description": "Look beyond input validation to workflow and economic abuse.",
+              "resource_name": "OWASP Application Security Verification Standard (ASVS)"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Test race conditions in critical operations",
+              "description": "Make concurrent state changes safe and idempotent.",
+              "resource_name": "OWASP Secure Coding Practices - Quick Reference Guide"
+            },
+            {
+              "position": 5,
+              "section": "main",
+              "label": "Reject webhook replays",
+              "description": "Verify freshness and idempotency as well as signatures.",
+              "resource_name": "OWASP Webhook Security Cheat Sheet"
+            },
+            {
+              "position": 6,
+              "section": "main",
+              "label": "Restrict CI/CD permissions and deployment credentials",
+              "description": "Use least privilege in automation and deployment.",
+              "resource_name": "GitHub Actions Security Hardening"
+            },
+            {
+              "position": 7,
+              "section": "main",
+              "label": "Review third-party GitHub Actions",
+              "description": "Treat external workflow code as a supply-chain dependency.",
+              "resource_name": "GitHub Actions Security Hardening"
+            },
+            {
+              "position": 8,
+              "section": "main",
+              "label": "Pin and review build dependencies",
+              "description": "Detect vulnerable or unexpected dependency changes.",
+              "resource_name": "GitHub Actions dependency review action"
+            },
+            {
+              "position": 9,
+              "section": "main",
+              "label": "Make security checks fail closed",
+              "description": "Do not continue sensitive operations when validation fails.",
+              "resource_name": "OWASP Secure Coding Practices - Quick Reference Guide"
+            },
+            {
+              "position": 10,
+              "section": "main",
+              "label": "Set timeouts",
+              "description": "Bound external calls and long-running operations.",
+              "resource_name": "OWASP Secure Coding Practices - Quick Reference Guide"
+            },
+            {
+              "position": 11,
+              "section": "main",
+              "label": "Stop AI features leaking sensitive information",
+              "description": "Control data supplied to and returned by models.",
+              "resource_name": "OWASP Top 10 for Large Language Model Applications"
+            },
+            {
+              "position": 12,
+              "section": "main",
+              "label": "Safely handle AI-generated output",
+              "description": "Treat model output as untrusted data.",
+              "resource_name": "OWASP Top 10 for Large Language Model Applications"
+            },
+            {
+              "position": 13,
+              "section": "main",
+              "label": "Limit AI-agent permissions",
+              "description": "Give agents only the tools and data needed for their task.",
+              "resource_name": "OWASP Top 10 for Large Language Model Applications"
+            },
+            {
+              "position": 14,
+              "section": "main",
+              "label": "Keep sensitive data out of local storage",
+              "description": "Use appropriate session and storage controls.",
+              "resource_name": "OWASP Session Management Cheat Sheet"
+            },
+            {
+              "position": 15,
+              "section": "main",
+              "label": "Block open redirects",
+              "description": "Restrict user-controlled redirect destinations.",
+              "resource_name": "OWASP Unvalidated Redirects and Forwards Cheat Sheet"
+            },
+            {
+              "position": 16,
+              "section": "main",
+              "label": "Secure GraphQL",
+              "description": "Apply limits, authorisation and trusted-query controls.",
+              "resource_name": "GraphQL Security"
+            },
+            {
+              "position": 17,
+              "section": "main",
+              "label": "Secure WebSocket and real-time endpoints",
+              "description": "Authenticate, authorise and validate real-time messages.",
+              "resource_name": "OWASP WebSocket Security Cheat Sheet"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "c88f5574-3067-4d5f-a7ad-259211f5731c",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "18 security review checks for AI-assisted apps",
+          "summary": "Eighteen checks covering supply chain, LLM use, permissions, monitoring, recovery, tenant isolation and OAuth.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Find vulnerable dependencies",
+              "description": "Audit dependencies for disclosed vulnerabilities.",
+              "resource_name": "GitHub Dependabot"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Detect malicious packages",
+              "description": "Review package provenance and supply-chain risk.",
+              "resource_name": "NIST Secure Software Development Framework"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Defend against prompt injection",
+              "description": "Treat instructions embedded in untrusted data as hostile.",
+              "resource_name": "OWASP GenAI LLM Top 10"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Prevent unpermissioned AI access",
+              "description": "Authorise model features and protect model credentials.",
+              "resource_name": "OWASP GenAI LLM Top 10"
+            },
+            {
+              "position": 5,
+              "section": "main",
+              "label": "Reduce excessive database permissions",
+              "description": "Apply least privilege to data access.",
+              "resource_name": "OWASP Application Security Verification Standard"
+            },
+            {
+              "position": 6,
+              "section": "main",
+              "label": "Add audit logs",
+              "description": "Record security-relevant events without exposing secrets.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 7,
+              "section": "main",
+              "label": "Add security monitoring",
+              "description": "Detect and respond to anomalous security events.",
+              "resource_name": "NIST Secure Software Development Framework"
+            },
+            {
+              "position": 8,
+              "section": "main",
+              "label": "Test backups and recovery",
+              "description": "Ensure production data can be restored.",
+              "resource_name": "NIST Secure Software Development Framework"
+            },
+            {
+              "position": 9,
+              "section": "main",
+              "label": "Protect internal dashboards",
+              "description": "Keep administrative interfaces private and authorised.",
+              "resource_name": "OWASP Application Security Verification Standard"
+            },
+            {
+              "position": 10,
+              "section": "main",
+              "label": "Add security headers",
+              "description": "Configure browser-facing defensive headers.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 11,
+              "section": "main",
+              "label": "Harden cookie settings",
+              "description": "Use secure cookie and session attributes.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 12,
+              "section": "main",
+              "label": "Encrypt sensitive data",
+              "description": "Protect sensitive stored and transmitted information.",
+              "resource_name": "OWASP Application Security Verification Standard"
+            },
+            {
+              "position": 13,
+              "section": "main",
+              "label": "Enforce tenant isolation",
+              "description": "Prevent data access across tenants.",
+              "resource_name": "OWASP Application Security Verification Standard"
+            },
+            {
+              "position": 14,
+              "section": "main",
+              "label": "Review AI-generated code",
+              "description": "Apply human security review to generated changes.",
+              "resource_name": "Security review of AI-generated application code"
+            },
+            {
+              "position": 15,
+              "section": "main",
+              "label": "Prevent mass assignment",
+              "description": "Allowlist mutable fields.",
+              "resource_name": "OWASP Top 10:2025"
+            },
+            {
+              "position": 16,
+              "section": "main",
+              "label": "Prevent command injection",
+              "description": "Keep untrusted input out of system-command construction.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 17,
+              "section": "main",
+              "label": "Avoid insecure deserialisation",
+              "description": "Use safe formats and validate deserialised data.",
+              "resource_name": "OWASP Top 10:2025"
+            },
+            {
+              "position": 18,
+              "section": "main",
+              "label": "Harden OAuth configuration",
+              "description": "Follow current OAuth security best practices.",
+              "resource_name": "OAuth 2.0 Security Best Current Practice"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "c6bec670-a711-4e42-9528-eef2cb2517c9",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "20 security checks for a vibe-coded website",
+          "summary": "The creator’s full website-security triage sequence, preserved in spoken order.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Hide API keys",
+              "description": "Keep privileged credentials out of browser code.",
+              "resource_name": "GitHub Secret Scanning"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Check environment-variable handling",
+              "description": "Keep secrets out of source and unsafe runtime output.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Check Git history for leaked keys",
+              "description": "Remember that deleted working-tree secrets may remain in history.",
+              "resource_name": "Git"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Protect admin routes",
+              "description": "Authorise every privileged endpoint.",
+              "resource_name": "OWASP Authorization Cheat Sheet"
+            },
+            {
+              "position": 5,
+              "section": "main",
+              "label": "Add authentication",
+              "description": "Require verified identity for protected functionality.",
+              "resource_name": "OWASP Authentication Cheat Sheet"
+            },
+            {
+              "position": 6,
+              "section": "main",
+              "label": "Check user permissions",
+              "description": "Test horizontal and vertical access control.",
+              "resource_name": "OWASP Authorization Cheat Sheet"
+            },
+            {
+              "position": 7,
+              "section": "main",
+              "label": "Sanitise and validate user input",
+              "description": "Validate untrusted data for its intended use.",
+              "resource_name": "OWASP Input Validation, XSS and SQL Injection guidance"
+            },
+            {
+              "position": 8,
+              "section": "main",
+              "label": "Protect against XSS",
+              "description": "Encode rendered content for its browser context.",
+              "resource_name": "OWASP Input Validation, XSS and SQL Injection guidance"
+            },
+            {
+              "position": 9,
+              "section": "main",
+              "label": "Protect against SQL injection",
+              "description": "Use parameterised database operations.",
+              "resource_name": "OWASP Input Validation, XSS and SQL Injection guidance"
+            },
+            {
+              "position": 10,
+              "section": "main",
+              "label": "Check database rules",
+              "description": "Verify data-layer authorisation and policy.",
+              "resource_name": "OWASP Application Security Verification Standard"
+            },
+            {
+              "position": 11,
+              "section": "main",
+              "label": "Add rate limiting",
+              "description": "Bound repeated and expensive requests.",
+              "resource_name": "OWASP Top 10"
+            },
+            {
+              "position": 12,
+              "section": "main",
+              "label": "Set a spend cap",
+              "description": "Limit the financial impact of abusive or accidental usage.",
+              "resource_name": "Production configuration review"
+            },
+            {
+              "position": 13,
+              "section": "main",
+              "label": "Secure file uploads",
+              "description": "Validate, isolate and safely serve uploaded content.",
+              "resource_name": "OWASP File Upload Cheat Sheet"
+            },
+            {
+              "position": 14,
+              "section": "main",
+              "label": "Add CSRF protection",
+              "description": "Protect state-changing browser requests.",
+              "resource_name": "OWASP Cheat Sheet Series"
+            },
+            {
+              "position": 15,
+              "section": "main",
+              "label": "Check CORS settings",
+              "description": "Allow only required cross-origin access.",
+              "resource_name": "MDN HTTP security guidance"
+            },
+            {
+              "position": 16,
+              "section": "main",
+              "label": "Enable HTTPS",
+              "description": "Serve the production site over TLS.",
+              "resource_name": "Let’s Encrypt"
+            },
+            {
+              "position": 17,
+              "section": "main",
+              "label": "Add security headers",
+              "description": "Configure browser security controls.",
+              "resource_name": "MDN HTTP security guidance"
+            },
+            {
+              "position": 18,
+              "section": "main",
+              "label": "Secure cookies",
+              "description": "Apply appropriate Secure, HttpOnly and SameSite settings.",
+              "resource_name": "MDN HTTP security guidance"
+            },
+            {
+              "position": 19,
+              "section": "main",
+              "label": "Disable debug mode",
+              "description": "Remove verbose development behaviour from production.",
+              "resource_name": "Production configuration review"
+            },
+            {
+              "position": 20,
+              "section": "main",
+              "label": "Review production settings",
+              "description": "Check for unsafe defaults and environment drift.",
+              "resource_name": "Production configuration review"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "b4334bed-51e2-4ce3-b3d1-93ac4eafb363",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "20 additions before launching a website",
+          "summary": "Twenty launch additions covering conversion, trust, navigation, search, accessibility, local discovery, privacy and analytics.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Create a custom 404 page",
+              "description": "Help visitors recover from missing URLs while returning an appropriate status.",
+              "resource_name": "404 page and HTTP 404 handling"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Put clear calls to action above the fold",
+              "description": "Make the primary next action immediately understandable.",
+              "resource_name": "Google Search Central SEO starter guide"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Add internal links",
+              "description": "Connect related pages and help visitors and crawlers navigate.",
+              "resource_name": "Google Search Central SEO starter guide"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Add a thank-you page after enquiries",
+              "description": "Confirm successful form submission and define the next step.",
+              "resource_name": "Google Analytics"
+            },
+            {
+              "position": 5,
+              "section": "main",
+              "label": "Add breadcrumbs",
+              "description": "Expose page hierarchy to users and search systems.",
+              "resource_name": "Breadcrumb structured data"
+            },
+            {
+              "position": 6,
+              "section": "main",
+              "label": "Add a case-study section",
+              "description": "Provide concrete evidence of prior work.",
+              "resource_name": "Google Search Central SEO starter guide"
+            },
+            {
+              "position": 7,
+              "section": "main",
+              "label": "Answer five frequently asked questions",
+              "description": "Address common objections and information needs.",
+              "resource_name": "Google Search Central SEO starter guide"
+            },
+            {
+              "position": 8,
+              "section": "main",
+              "label": "State a response-time promise",
+              "description": "Set expectations for enquiries.",
+              "resource_name": "Google Search Central SEO starter guide"
+            },
+            {
+              "position": 9,
+              "section": "main",
+              "label": "Add a sticky mobile call to action",
+              "description": "Keep the primary conversion action accessible on small screens.",
+              "resource_name": "Web Content Accessibility Guidelines (WCAG)"
+            },
+            {
+              "position": 10,
+              "section": "main",
+              "label": "Create robots.txt",
+              "description": "Declare crawler access preferences without treating it as security.",
+              "resource_name": "robots.txt"
+            },
+            {
+              "position": 11,
+              "section": "main",
+              "label": "Use unique page titles",
+              "description": "Give each page a descriptive title.",
+              "resource_name": "Title links and snippets"
+            },
+            {
+              "position": 12,
+              "section": "main",
+              "label": "Write meta descriptions",
+              "description": "Provide useful page summaries while allowing search engines to rewrite snippets.",
+              "resource_name": "Title links and snippets"
+            },
+            {
+              "position": 13,
+              "section": "main",
+              "label": "Add social-share images",
+              "description": "Provide preview artwork for shared links.",
+              "resource_name": "Schema.org"
+            },
+            {
+              "position": 14,
+              "section": "main",
+              "label": "Add maps and directions",
+              "description": "Help customers find an eligible physical location.",
+              "resource_name": "Google Maps Platform"
+            },
+            {
+              "position": 15,
+              "section": "main",
+              "label": "Show real customer reviews",
+              "description": "Use authentic, supportable testimonials.",
+              "resource_name": "Google Search Central SEO starter guide"
+            },
+            {
+              "position": 16,
+              "section": "main",
+              "label": "Add alt text to images",
+              "description": "Provide text alternatives for meaningful images.",
+              "resource_name": "Web Content Accessibility Guidelines (WCAG)"
+            },
+            {
+              "position": 17,
+              "section": "main",
+              "label": "Add LocalBusiness schema",
+              "description": "Describe eligible local-business details in structured data.",
+              "resource_name": "LocalBusiness structured data"
+            },
+            {
+              "position": 18,
+              "section": "main",
+              "label": "Publish a privacy-policy page",
+              "description": "Align the notice with actual collection and handling practices.",
+              "resource_name": "Privacy policy and privacy-by-design review"
+            },
+            {
+              "position": 19,
+              "section": "main",
+              "label": "Configure analytics",
+              "description": "Measure behaviour while accounting for consent and privacy.",
+              "resource_name": "Google Analytics"
+            },
+            {
+              "position": 20,
+              "section": "main",
+              "label": "Use a real photo of the team",
+              "description": "Give visitors authentic information about the people behind the service.",
+              "resource_name": "Google Search Central SEO starter guide"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "b687960e-a518-4ab8-9f13-085a10922c38",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "10 legal and compliance checks for a quickly built app",
+          "summary": "Ten creator-identified legal and compliance risks. The Reel’s monetary figures are unverified and jurisdiction-dependent.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Publish a privacy policy",
+              "description": "Document actual data practices before release.",
+              "resource_name": "General Data Protection Regulation"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Disclose collection of user data",
+              "description": "Make privacy disclosures match actual collection.",
+              "resource_name": "General Data Protection Regulation"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Disclose use of AI",
+              "description": "Avoid misleading users about AI-enabled functionality.",
+              "resource_name": "Federal Trade Commission"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Name third parties receiving data",
+              "description": "Disclose relevant processors and recipients where required.",
+              "resource_name": "General Data Protection Regulation"
+            },
+            {
+              "position": 5,
+              "section": "main",
+              "label": "Actually delete uploads when promised",
+              "description": "Make retention behaviour match user-facing promises.",
+              "resource_name": "Supabase Storage Access Control"
+            },
+            {
+              "position": 6,
+              "section": "main",
+              "label": "Keep storage buckets private by default",
+              "description": "Enforce explicit storage access policies.",
+              "resource_name": "Supabase Storage Access Control"
+            },
+            {
+              "position": 7,
+              "section": "main",
+              "label": "Do not use fake testimonials",
+              "description": "Use authentic, properly disclosed reviews.",
+              "resource_name": "FTC Reviews and Testimonials Rule"
+            },
+            {
+              "position": 8,
+              "section": "main",
+              "label": "Make subscription cancellation straightforward",
+              "description": "Avoid obstructive negative-option cancellation flows.",
+              "resource_name": "FTC Negative Option Rule"
+            },
+            {
+              "position": 9,
+              "section": "main",
+              "label": "Warn before a free trial auto-charges",
+              "description": "Make renewal and charging terms clear.",
+              "resource_name": "FTC Negative Option Rule"
+            },
+            {
+              "position": 10,
+              "section": "main",
+              "label": "Add a self-harm response for AI chatbots",
+              "description": "Provide safe handling for high-risk distress content.",
+              "resource_name": "OpenAI self-harm safety guidance"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "011a84b0-6fc3-49a6-a506-0677da62f3c9",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "Four legal risk mitigations before app launch",
+          "summary": "Four legal/compliance measures from the Reel, with its categorical penalty claims treated as unverified rather than universal law.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Disclose material AI use",
+              "description": "Make AI-related claims and disclosures accurate and supportable.",
+              "resource_name": "FTC AI disclosure and substantiation guidance"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Review terms and dispute-resolution provisions",
+              "description": "Use properly drafted terms with valid user assent; arbitration enforceability varies.",
+              "resource_name": "Terms of service arbitration provision"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Complete Apple and Google privacy disclosures accurately",
+              "description": "List collected and shared data consistently with real app behaviour.",
+              "resource_name": "App Privacy Details"
+            },
+            {
+              "position": 4,
+              "section": "main",
+              "label": "Implement copyright takedown procedures for user-generated content",
+              "description": "Provide notices, processes and designated-agent registration where applicable.",
+              "resource_name": "DMCA Designated Agent Directory"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "4c31ec5f-9001-4b0d-802e-8b9bd579b2a3",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "Three email channels to set up before app launch",
+          "summary": "The creator’s three-channel email setup separating automated, human-support and marketing traffic.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Transactional email",
+              "description": "Use a dedicated stream for billing, verification and password resets.",
+              "resource_name": "Transactional, support, and marketing email separation"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Human support inbox",
+              "description": "Keep person-to-person support on a protected main-domain mailbox.",
+              "resource_name": "Transactional, support, and marketing email separation"
+            },
+            {
+              "position": 3,
+              "section": "main",
+              "label": "Marketing email",
+              "description": "Separate newsletters and promotions from transactional and support reputation.",
+              "resource_name": "Transactional, support, and marketing email separation"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "job_id": "4f4e7a6c-7c9d-469c-9825-accee035c240",
+      "confirm_backfill": "BACKFILL_RECREATED_LISTS",
+      "lists": [
+        {
+          "title": "Two essential security controls for a first app",
+          "summary": "Two foundational checks from the Reel: server-side data authorisation and API cost/abuse controls.",
+          "items": [
+            {
+              "position": 1,
+              "section": "main",
+              "label": "Lock down database access",
+              "description": "Enforce database-level authorisation rather than relying on hidden interface elements.",
+              "resource_name": "Supabase Row Level Security"
+            },
+            {
+              "position": 2,
+              "section": "main",
+              "label": "Rate-limit APIs",
+              "description": "Bound repeated requests, especially endpoints that trigger paid AI usage.",
+              "resource_name": "API rate limiting"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+
