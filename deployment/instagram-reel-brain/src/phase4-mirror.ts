@@ -272,7 +272,12 @@ function phase4LiveCorrectiveJobScope(scope: Phase4MirrorScope | undefined, wate
       SELECT 1 FROM job_events
       WHERE job_events.job_id = jobs.id
         AND datetime(job_events.created_at) >= datetime(?)
-        AND instr(COALESCE(job_events.detail, ''), 'corrective-resynthesis:') = 1
+        AND COALESCE(
+          CASE WHEN json_valid(job_events.detail)
+            THEN CAST(json_extract(job_events.detail, '$.marker') AS TEXT)
+          END,
+          ''
+        ) LIKE 'corrective-resynthesis:%'
     ))`,
     binds: [watermark, watermark],
   };

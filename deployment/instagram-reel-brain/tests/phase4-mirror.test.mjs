@@ -204,7 +204,7 @@ test("Phase 4 live scope admits only explicitly audited post-watermark correctio
       ('new-normal', 'queued', '2026-08-26 05:59:59', '2026-08-26 06:00:02', 'new-normal', 'library/new-normal.html');
     INSERT INTO job_events(id, job_id, stage, status, detail, created_at) VALUES
       ('ordinary-event', 'old-ordinary', 'queued', 'queued', 'manual status update', '2026-08-26 05:59:58'),
-      ('corrective-event', 'old-corrected', 'queued', 'queued', 'corrective-resynthesis:brad-pitt-full-ranking-and-hm-v1', '2026-08-26 05:59:59');
+      ('corrective-event', 'old-corrected', 'queued', 'queued', '{"marker":"corrective-resynthesis:brad-pitt-full-ranking-and-hm-v1"}', '2026-08-26 05:59:59');
     INSERT INTO artifacts(id, job_id, kind, object_key, content_type, byte_size, sha256, created_at) VALUES
       ('ordinary-artifact', 'old-ordinary', 'html', 'library/old-ordinary.html', 'text/html', '1', 'sha-a', '2026-08-26 06:00:00'),
       ('corrected-artifact', 'old-corrected', 'html', 'library/old-corrected.html', 'text/html', '1', 'sha-b', '2026-08-26 06:00:01');
