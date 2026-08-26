@@ -36,7 +36,7 @@ def request(url: str, token: str) -> tuple[dict[str, str], bytes]:
         return {key.lower(): value for key, value in response.headers.items()}, response.read()
 
 
-def atomic_verified_write(root: Path, relative: Path, body: bytes, expected_sha: str) -> str:
+def atomic_verified_write(root: Path, relative: Path, body: bytes, expected_sha: str) -> tuple[str, str]:
     target = (root / relative).resolve(strict=False)
     if root not in target.parents:
         raise ValueError("path escape")
@@ -45,9 +45,11 @@ def atomic_verified_write(root: Path, relative: Path, body: bytes, expected_sha:
         raise RuntimeError(f"checksum mismatch: {relative.as_posix()}")
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if target.exists():
-        if target.stat().st_size != len(body) or hashlib.sha256(target.read_bytes()).hexdigest() != actual:
-            raise RuntimeError(f"existing library divergence: {relative.as_posix()}")
-        return actual
+        if target.stat().st_size == len(body) and hashlib.sha256(target.read_bytes()).hexdigest() == actual:
+            return actual, "verified"
+        disposition = "replaced"
+    else:
+        disposition = "copied"
     descriptor, temporary = tempfile.mkstemp(prefix=".phase7-library-", dir=target.parent)
     try:
         with os.fdopen(descriptor, "wb") as output:
@@ -59,7 +61,7 @@ def atomic_verified_write(root: Path, relative: Path, body: bytes, expected_sha:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    return actual
+    return actual, disposition
 
 
 def main() -> int:
@@ -89,13 +91,13 @@ def main() -> int:
             continue
         work.append((safe_path(str(item["path"])), item))
 
-    def copy_or_verify(work_item: tuple[Path, dict[str, object]]) -> tuple[str, int, str, str]:
+    def copy_or_verify(work_item: tuple[Path, dict[str, object]]) -> tuple[str, int, str, str, str]:
         relative, metadata = work_item
         url = f"{args.base_url.rstrip('/')}/api/phase7/library/file?{urllib.parse.urlencode({'path': relative.as_posix()})}"
         file_headers, body = request(url, token)
-        sha = atomic_verified_write(root, relative, body, file_headers.get("x-content-sha256", ""))
+        sha, disposition = atomic_verified_write(root, relative, body, file_headers.get("x-content-sha256", ""))
         metadata_json = json.dumps(metadata, separators=(",", ":"), ensure_ascii=False)
-        return relative.as_posix(), len(body), sha, metadata_json
+        return relative.as_posix(), len(body), sha, metadata_json, disposition
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         receipts = list(pool.map(copy_or_verify, work))
@@ -108,9 +110,15 @@ def main() -> int:
                    ON CONFLICT(kind,path) DO UPDATE SET
                      byte_size=excluded.byte_size,sha256=excluded.sha256,updated_at=excluded.updated_at,
                      metadata_json=excluded.metadata_json""",
-                [(path, byte_size, sha, datetime.now(timezone.utc).isoformat(), metadata_json) for path, byte_size, sha, metadata_json in receipts],
+                [(path, byte_size, sha, datetime.now(timezone.utc).isoformat(), metadata_json) for path, byte_size, sha, metadata_json, _ in receipts],
             )
-    report = {"ok": True, "manifest_file_count": int(manifest.get("file_count") or len(files)), "copied_or_verified": copied}
+    dispositions = {name: sum(1 for receipt in receipts if receipt[4] == name) for name in ("copied", "verified", "replaced")}
+    report = {
+        "ok": True,
+        "manifest_file_count": int(manifest.get("file_count") or len(files)),
+        "copied_or_verified": copied,
+        **dispositions,
+    }
     Path(args.report).write_text(json.dumps(report, indent=2), encoding="utf-8")
     os.chmod(args.report, 0o600)
     print(json.dumps(report))
