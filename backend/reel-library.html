@@ -202,7 +202,7 @@
             const processingTime = payload.processing_time || {};
             const carouselResolver = payload.carousel_resolver || {};
             readerContent.innerHTML = `<article class="status-document">
-                <header class="document-header"><p class="document-kicker">Live system health</p><h1>Reel Brain status</h1><p>Generated ${escapeHtml(formatBrisbaneDateTime(payload.generated_at))}. Backlog processing is <strong>${payload.service?.backlog_processing ? "on" : "off"}</strong>; ingest mode is <strong>${escapeHtml(payload.service?.ingest_mode || "unknown")}</strong>.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button><button id="runLiveChecks" type="button">Run live checks</button><button id="runSelfTest" type="button">Run command self-test</button><button id="repairArtifacts" type="button">Rebuild shared artefacts</button><button id="reconcileResourceProfiles" type="button">Reconcile duplicate pages</button><button id="refreshStreamingProfiles" type="button">Refresh film/TV links</button><button id="connectInstagramBrowser" type="button">${carouselResolver.connected ? "Reconnect Instagram" : "Connect Instagram"}</button><button id="finishInstagramBrowser" type="button" hidden>Finish Instagram connection</button><button id="refreshStatus" type="button">Refresh</button></div><div id="instagramBrowserResults" class="self-test-results" hidden></div><div id="selfTestResults" class="self-test-results" hidden></div></header>
+                <header class="document-header"><p class="document-kicker">Live system health</p><h1>Reel Brain status</h1><p>Generated ${escapeHtml(formatBrisbaneDateTime(payload.generated_at))}. Backlog processing is <strong>${payload.service?.backlog_processing ? "on" : "off"}</strong>; ingest mode is <strong>${escapeHtml(payload.service?.ingest_mode || "unknown")}</strong>.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button><button id="runLiveChecks" type="button">Run live checks</button><button id="runSelfTest" type="button">Run command self-test</button><button id="repairArtifacts" type="button">Rebuild shared artefacts</button><button id="reconcileResourceProfiles" type="button">Reconcile duplicate pages</button><button id="repairOrphanResourceAliases" type="button">Repair superseded resource files</button><button id="refreshStreamingProfiles" type="button">Refresh film/TV links</button><button id="connectInstagramBrowser" type="button">${carouselResolver.connected ? "Reconnect Instagram" : "Connect Instagram"}</button><button id="finishInstagramBrowser" type="button" hidden>Finish Instagram connection</button><button id="refreshStatus" type="button">Refresh</button></div><div id="instagramBrowserResults" class="self-test-results" hidden></div><div id="selfTestResults" class="self-test-results" hidden></div></header>
                 <section><h2>Core checks</h2><div class="health-list">${checks.map(([name, check]) => {
                     const actual = name === "instagram" ? (check.live_probe_run ? check.ok : check.configured) : check.ok;
                     const detail = name === "instagram" ? (check.live_probe_run ? (check.ok ? `Connected as @${check.username || "account"}` : check.error || "Probe failed") : check.configured ? "Configured; run live checks to validate the token" : "Instagram credentials are missing") : check.detail;
@@ -223,6 +223,7 @@
             document.getElementById("runSelfTest")?.addEventListener("click", runCommandSelfTest);
             document.getElementById("repairArtifacts")?.addEventListener("click", rebuildSharedArtifacts);
             document.getElementById("reconcileResourceProfiles")?.addEventListener("click", reconcileResourceProfiles);
+            document.getElementById("repairOrphanResourceAliases")?.addEventListener("click", repairOrphanResourceAliases);
             document.getElementById("refreshStreamingProfiles")?.addEventListener("click", refreshStreamingProfiles);
             document.getElementById("connectInstagramBrowser")?.addEventListener("click", startInstagramBrowserConnection);
             document.getElementById("finishInstagramBrowser")?.addEventListener("click", finishInstagramBrowserConnection);
@@ -328,24 +329,44 @@
                     else sessionStorage.removeItem(cursorKey);
                     readerStatus.textContent = `${refreshed} canonical profiles reconciled…`;
                 } while (after);
-                let cursor = "";
-                let orphanAliases = 0;
-                do {
-                    const payload = await api("/api/reel-library/repair-orphan-resource-aliases", {
-                        method: "POST",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({ cursor })
-                    });
-                    orphanAliases += Number(payload.repaired || 0);
-                    cursor = payload.next_cursor || "";
-                    readerStatus.textContent = `${refreshed} profiles reconciled; checking superseded files…`;
-                } while (cursor);
+                const orphanAliases = await runOrphanResourceAliasRepair(`${refreshed} profiles reconciled; `);
                 readerStatus.textContent = `${refreshed} profiles reconciled; ${aliases + orphanAliases} old paths retained as hidden aliases`;
                 await loadLibrary();
             } catch (error) {
                 readerStatus.textContent = `${refreshed} profiles reconciled before failure: ${error.message}`;
                 button.disabled = false;
                 button.textContent = "Reconcile duplicate pages";
+            }
+        }
+
+        async function runOrphanResourceAliasRepair(prefix = "") {
+            let cursor = "";
+            let repaired = 0;
+            do {
+                const payload = await api("/api/reel-library/repair-orphan-resource-aliases", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ cursor })
+                });
+                repaired += Number(payload.repaired || 0);
+                cursor = payload.next_cursor || "";
+                readerStatus.textContent = `${prefix}${repaired} superseded resource files repaired…`;
+            } while (cursor);
+            return repaired;
+        }
+
+        async function repairOrphanResourceAliases() {
+            const button = document.getElementById("repairOrphanResourceAliases");
+            button.disabled = true;
+            button.textContent = "Repairing…";
+            try {
+                const repaired = await runOrphanResourceAliasRepair();
+                readerStatus.textContent = `${repaired} superseded resource files repaired`;
+                await loadLibrary();
+            } catch (error) {
+                readerStatus.textContent = error.message;
+                button.disabled = false;
+                button.textContent = "Repair superseded resource files";
             }
         }
 

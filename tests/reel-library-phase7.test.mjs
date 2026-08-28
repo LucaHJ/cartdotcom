@@ -60,6 +60,7 @@ test("resource reconciliation is authenticated, resumable, and hides legacy alia
   assert.match(libraryShell, /file\.kind !== "resource-alias"/);
   assert.match(libraryShell, /payload\.file\.metadata\?\.kind === "resource-alias"/);
   assert.match(libraryShell, /\/api\/reel-library\/repair-orphan-resource-aliases/);
+  assert.match(libraryShell, /id="repairOrphanResourceAliases"/);
 });
 
 test("orphan resource repair is authenticated and cursor bounded", () => {
