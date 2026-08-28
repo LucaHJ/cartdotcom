@@ -6106,11 +6106,15 @@ async function handleReelLibraryResourceReconciliation(request: Request, env: En
   ).bind(after, limit).all<{ canonical_key: string }>();
   const refreshed: string[] = [];
   let aliases = 0;
-  for (const row of rows.results) {
-    const result = await refreshCanonicalResourcePage(env, row.canonical_key);
-    if (result) {
-      refreshed.push(row.canonical_key);
-      aliases += result.aliases;
+  for (let offset = 0; offset < rows.results.length; offset += 8) {
+    const batch = rows.results.slice(offset, offset + 8);
+    const results = await Promise.all(batch.map((row) => refreshCanonicalResourcePage(env, row.canonical_key)));
+    for (let index = 0; index < batch.length; index += 1) {
+      const result = results[index];
+      if (result) {
+        refreshed.push(batch[index].canonical_key);
+        aliases += result.aliases;
+      }
     }
   }
   const nextAfter = rows.results.length === limit ? rows.results.at(-1)?.canonical_key || null : null;
