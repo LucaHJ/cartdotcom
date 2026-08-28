@@ -6140,10 +6140,27 @@ async function handleReelLibraryOrphanAliasRepair(request: Request, env: Env): P
   }
   if (!env.REEL_LIBRARY_KV) return json({ error: "Reel Library KV unavailable" }, { status: 503 });
   const input: { cursor?: string } = await request.json<{ cursor?: string }>().catch(() => ({}));
-  const cursor = String(input.cursor || "").trim().slice(0, 4000) || undefined;
-  const result = await env.REEL_LIBRARY_KV.list({ prefix: REEL_LIBRARY_FILE_PREFIX, cursor, limit: 1000 });
-  const candidates = result.keys.flatMap((key) => {
-    const metadata = (key.metadata || {}) as Record<string, unknown>;
+  const requestedOffset = Number(String(input.cursor || "0"));
+  const offset = Number.isInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
+  let manifestFiles: Array<Record<string, unknown>> = [];
+  if (env.PHASE7_ORIGIN_URL && env.PHASE7_ORIGIN_TOKEN) {
+    const originRequest = new Request(`${env.PHASE7_ORIGIN_URL.replace(/\/$/, "")}/v1/library/manifest`, {
+      headers: { authorization: `Bearer ${env.PHASE7_ORIGIN_TOKEN}` },
+    });
+    const response = env.REEL_ORIGIN ? await env.REEL_ORIGIN.fetch(originRequest) : await fetch(originRequest);
+    const payload = response.ok ? await response.json<{ files?: Array<Record<string, unknown>> }>() : {};
+    manifestFiles = Array.isArray(payload.files) ? payload.files : [];
+  }
+  if (!manifestFiles.length) {
+    let kvCursor: string | undefined;
+    do {
+      const listed = await env.REEL_LIBRARY_KV.list({ prefix: REEL_LIBRARY_FILE_PREFIX, cursor: kvCursor });
+      manifestFiles.push(...listed.keys.map((key) => ({ ...((key.metadata || {}) as Record<string, unknown>) })));
+      kvCursor = listed.list_complete ? undefined : listed.cursor;
+    } while (kvCursor);
+  }
+  const page = manifestFiles.slice(offset, offset + 1000);
+  const candidates = page.flatMap((metadata) => {
     const path = String(metadata.path || "");
     const title = String(metadata.title || "").trim();
     if (metadata.kind !== "resource" || metadata.artifact_type || !path || !title) return [];
@@ -6178,9 +6195,10 @@ async function handleReelLibraryOrphanAliasRepair(request: Request, env: Env): P
       repaired += 1;
     }
   }
-  const nextCursor = result.list_complete ? null : result.cursor;
+  const nextOffset = offset + page.length;
+  const nextCursor = nextOffset < manifestFiles.length ? String(nextOffset) : null;
   if (!nextCursor) await refreshReelLibraryManifest(env);
-  return json({ ok: true, scanned: result.keys.length, candidates: candidates.length, repaired, next_cursor: nextCursor, complete: !nextCursor });
+  return json({ ok: true, scanned: page.length, candidates: candidates.length, repaired, next_cursor: nextCursor, complete: !nextCursor });
 }
 
 async function handleSignedThumbnailDownload(request: Request, env: Env, jobId: string): Promise<Response> {
