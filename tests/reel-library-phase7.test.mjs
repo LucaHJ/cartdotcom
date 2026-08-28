@@ -38,8 +38,11 @@ test("Reel Library loads the official JustWatch widget only for generated widget
 
 test("streaming-profile maintenance proxy remains authenticated and bounded", () => {
   const source = readFileSync(new URL("../functions/api/reel-library/refresh-streaming.js", import.meta.url), "utf8");
+  const libraryShell = readFileSync(new URL("../backend/reel-library.html", import.meta.url), "utf8");
   assert.match(source, /requireBackendSession/);
   assert.match(source, /REEL_LIBRARY_SHARED_TOKEN/);
   assert.match(source, /\/integration\/reel-library\/refresh-streaming/);
-  assert.match(source, /limit: 48/);
+  assert.match(source, /limit: 12/);
+  assert.match(libraryShell, /id="refreshStreamingProfiles"/);
+  assert.match(libraryShell, /function refreshStreamingProfiles\(\)/);
 });

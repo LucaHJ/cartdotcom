@@ -202,7 +202,7 @@
             const processingTime = payload.processing_time || {};
             const carouselResolver = payload.carousel_resolver || {};
             readerContent.innerHTML = `<article class="status-document">
-                <header class="document-header"><p class="document-kicker">Live system health</p><h1>Reel Brain status</h1><p>Generated ${escapeHtml(formatBrisbaneDateTime(payload.generated_at))}. Backlog processing is <strong>${payload.service?.backlog_processing ? "on" : "off"}</strong>; ingest mode is <strong>${escapeHtml(payload.service?.ingest_mode || "unknown")}</strong>.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button><button id="runLiveChecks" type="button">Run live checks</button><button id="runSelfTest" type="button">Run command self-test</button><button id="repairArtifacts" type="button">Rebuild shared artefacts</button><button id="connectInstagramBrowser" type="button">${carouselResolver.connected ? "Reconnect Instagram" : "Connect Instagram"}</button><button id="finishInstagramBrowser" type="button" hidden>Finish Instagram connection</button><button id="refreshStatus" type="button">Refresh</button></div><div id="instagramBrowserResults" class="self-test-results" hidden></div><div id="selfTestResults" class="self-test-results" hidden></div></header>
+                <header class="document-header"><p class="document-kicker">Live system health</p><h1>Reel Brain status</h1><p>Generated ${escapeHtml(formatBrisbaneDateTime(payload.generated_at))}. Backlog processing is <strong>${payload.service?.backlog_processing ? "on" : "off"}</strong>; ingest mode is <strong>${escapeHtml(payload.service?.ingest_mode || "unknown")}</strong>.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button><button id="runLiveChecks" type="button">Run live checks</button><button id="runSelfTest" type="button">Run command self-test</button><button id="repairArtifacts" type="button">Rebuild shared artefacts</button><button id="refreshStreamingProfiles" type="button">Refresh film/TV links</button><button id="connectInstagramBrowser" type="button">${carouselResolver.connected ? "Reconnect Instagram" : "Connect Instagram"}</button><button id="finishInstagramBrowser" type="button" hidden>Finish Instagram connection</button><button id="refreshStatus" type="button">Refresh</button></div><div id="instagramBrowserResults" class="self-test-results" hidden></div><div id="selfTestResults" class="self-test-results" hidden></div></header>
                 <section><h2>Core checks</h2><div class="health-list">${checks.map(([name, check]) => {
                     const actual = name === "instagram" ? (check.live_probe_run ? check.ok : check.configured) : check.ok;
                     const detail = name === "instagram" ? (check.live_probe_run ? (check.ok ? `Connected as @${check.username || "account"}` : check.error || "Probe failed") : check.configured ? "Configured; run live checks to validate the token" : "Instagram credentials are missing") : check.detail;
@@ -222,6 +222,7 @@
             document.getElementById("runLiveChecks")?.addEventListener("click", () => showStatusDashboard(true));
             document.getElementById("runSelfTest")?.addEventListener("click", runCommandSelfTest);
             document.getElementById("repairArtifacts")?.addEventListener("click", rebuildSharedArtifacts);
+            document.getElementById("refreshStreamingProfiles")?.addEventListener("click", refreshStreamingProfiles);
             document.getElementById("connectInstagramBrowser")?.addEventListener("click", startInstagramBrowserConnection);
             document.getElementById("finishInstagramBrowser")?.addEventListener("click", finishInstagramBrowserConnection);
             document.getElementById("refreshStatus")?.addEventListener("click", () => showStatusDashboard(false));
@@ -264,25 +265,39 @@
             button.textContent = "Rebuilding…";
             try {
                 const payload = await api("/api/reel-library/repair-artifacts", { method: "POST" });
-                let after = "";
-                let streamingProfiles = 0;
-                do {
-                    const streaming = await api("/api/reel-library/refresh-streaming", {
-                        method: "POST",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({ after })
-                    });
-                    if (streaming.refreshed !== streaming.requested) throw new Error("A film or television profile could not be rebuilt.");
-                    streamingProfiles += Number(streaming.refreshed || 0);
-                    after = streaming.next_after || "";
-                    readerStatus.textContent = `${streamingProfiles} film and television profiles rebuilt…`;
-                } while (after);
-                readerStatus.textContent = `${payload.repaired || 0} Reel research files and ${streamingProfiles} film/TV profiles rebuilt`;
+                readerStatus.textContent = `${payload.repaired || 0} Reel research files rebuilt`;
                 await loadLibrary();
             } catch (error) {
                 readerStatus.textContent = error.message;
                 button.disabled = false;
                 button.textContent = "Rebuild shared artefacts";
+            }
+        }
+
+        async function refreshStreamingProfiles() {
+            const button = document.getElementById("refreshStreamingProfiles");
+            button.disabled = true;
+            button.textContent = "Refreshing…";
+            let after = "";
+            let refreshed = 0;
+            try {
+                do {
+                    const payload = await api("/api/reel-library/refresh-streaming", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ after })
+                    });
+                    if (payload.refreshed !== payload.requested) throw new Error("A film or television profile could not be rebuilt.");
+                    refreshed += Number(payload.refreshed || 0);
+                    after = payload.next_after || "";
+                    readerStatus.textContent = `${refreshed} film and television profiles refreshed…`;
+                } while (after);
+                readerStatus.textContent = `${refreshed} film and television profiles refreshed`;
+                await loadLibrary();
+            } catch (error) {
+                readerStatus.textContent = `${refreshed} profiles refreshed before failure: ${error.message}`;
+                button.disabled = false;
+                button.textContent = "Refresh film/TV links";
             }
         }
 
