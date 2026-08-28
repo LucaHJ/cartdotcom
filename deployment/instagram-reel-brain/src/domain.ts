@@ -731,6 +731,44 @@ export function justWatchReleaseYear(name: string, summary = ""): string {
     || "";
 }
 
+export function boundedLibraryKvMetadata(input: {
+  path: string;
+  bytes: number;
+  sha256: string;
+  updatedAt: string;
+  metadata: Record<string, unknown>;
+}): Record<string, unknown> {
+  const value = input.metadata;
+  const result: Record<string, unknown> = {
+    path: input.path,
+    content_type: "text/html; charset=utf-8",
+    bytes: input.bytes,
+    sha256: input.sha256,
+    updated_at: input.updatedAt,
+    source: "instagram-reel-brain",
+    kind: String(value.kind || "file").slice(0, 80),
+    job_id: String(value.job_id || "").slice(0, 120),
+    parent_path: String(value.parent_path || "").slice(0, 240),
+    title: String(value.title || input.path).slice(0, 240),
+    author: String(value.author || "").slice(0, 120),
+    video_available: Boolean(value.video_available),
+    media_type: String(value.media_type || "").slice(0, 80),
+    resource_kind: String(value.resource_kind || "").slice(0, 80),
+    resource_folder: String(value.resource_folder || "").slice(0, 120),
+    artifact_type: String(value.artifact_type || "").slice(0, 80),
+    summary: String(value.summary || "").slice(0, 240),
+    source_count: Math.max(0, Number(value.source_count) || 0),
+  };
+  const optionalKeys = ["summary", "parent_path", "author", "job_id", "resource_kind", "resource_folder", "media_type", "artifact_type"];
+  const encodedSize = () => new TextEncoder().encode(JSON.stringify(result)).byteLength;
+  for (const key of optionalKeys) {
+    if (encodedSize() <= 900) break;
+    delete result[key];
+  }
+  if (encodedSize() > 900) throw new Error("Reel Library KV metadata exceeds the bounded limit");
+  return result;
+}
+
 export function canonicalArtifactKey(artifactType: ArtifactType, name: string): string {
   return `${artifactType}:${slugify(name)}`;
 }

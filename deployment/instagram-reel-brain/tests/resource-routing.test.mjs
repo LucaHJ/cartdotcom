@@ -299,6 +299,28 @@ test("derives Australian JustWatch paths and release years deterministically", (
   assert.equal(domain.justWatchReleaseYear("Severance", "A television series first released in 2022."), "2022");
 });
 
+test("bounds legacy Reel Library KV metadata without losing the canonical path", () => {
+  const path = "films/film-and-set-index-from-the-carousel.html";
+  const metadata = domain.boundedLibraryKvMetadata({
+    path,
+    bytes: 12345,
+    sha256: "a".repeat(64),
+    updatedAt: "2026-08-28T08:00:00.000Z",
+    metadata: {
+      kind: "resource",
+      title: "Film and set index from the carousel",
+      summary: "Long summary ".repeat(400),
+      parent_path: "reels/example/".repeat(50),
+      resource_kind: "media",
+      resource_folder: "films",
+      artifact_type: "film",
+    },
+  });
+  assert.equal(metadata.path, path);
+  assert.equal(metadata.title, "Film and set index from the carousel");
+  assert.ok(new TextEncoder().encode(JSON.stringify(metadata)).byteLength <= 900);
+});
+
 test("adds deterministic YouTube, Spotify, and article fallbacks", () => {
   const youtube = domain.applyMediaLinkFallbacks({
     name: "Exact video",

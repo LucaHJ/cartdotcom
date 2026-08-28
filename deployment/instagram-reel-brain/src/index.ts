@@ -76,6 +76,7 @@ import {
 import {
   DEFAULT_STAGE_REACTIONS,
   applyMediaLinkFallbacks,
+  boundedLibraryKvMetadata,
   completionSynthesisObjectKey,
   canonicalArtifactKey,
   canonicalizeInstagramUrl,
@@ -1479,16 +1480,15 @@ async function putReelLibraryHtml(
   };
   await putPhase7Origin(env, "library", path, html, "text/html; charset=utf-8", encoded.byteLength, digest, phase7Metadata);
   if (!env.REEL_LIBRARY_KV) return;
+  const kvMetadata = boundedLibraryKvMetadata({
+    path,
+    bytes: encoded.byteLength,
+    sha256: digest,
+    updatedAt: new Date().toISOString(),
+    metadata,
+  });
   await env.REEL_LIBRARY_KV.put(`${REEL_LIBRARY_FILE_PREFIX}${toBase64Url(path)}`, html, {
-    metadata: {
-      path,
-      content_type: "text/html; charset=utf-8",
-      bytes: encoded.byteLength,
-      sha256: digest,
-      updated_at: new Date().toISOString(),
-      source: "instagram-reel-brain",
-      ...metadata,
-    },
+    metadata: kvMetadata,
   });
 }
 
