@@ -6050,8 +6050,8 @@ async function handleReelLibraryStreamingRepair(request: Request, env: Env): Pro
      ORDER BY canonical_key LIMIT ?`,
   ).bind(after, limit).all<{ canonical_key: string }>();
   const refreshed: string[] = [];
-  for (let offset = 0; offset < rows.results.length; offset += 12) {
-    const batch = rows.results.slice(offset, offset + 12);
+  for (let offset = 0; offset < rows.results.length; offset += 24) {
+    const batch = rows.results.slice(offset, offset + 24);
     const paths = await Promise.all(batch.map((row) => refreshCanonicalArtifactPage(env, row.canonical_key)));
     for (let index = 0; index < batch.length; index += 1) {
       if (paths[index]) refreshed.push(batch[index].canonical_key);

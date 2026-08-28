@@ -42,7 +42,7 @@ test("streaming-profile maintenance proxy remains authenticated and bounded", ()
   assert.match(source, /requireBackendSession/);
   assert.match(source, /REEL_LIBRARY_SHARED_TOKEN/);
   assert.match(source, /\/integration\/reel-library\/refresh-streaming/);
-  assert.match(source, /limit: 12/);
+  assert.match(source, /limit: 24/);
   assert.match(libraryShell, /id="refreshStreamingProfiles"/);
   assert.match(libraryShell, /function refreshStreamingProfiles\(\)/);
 });

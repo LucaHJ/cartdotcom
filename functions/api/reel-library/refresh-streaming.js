@@ -13,7 +13,7 @@ export async function onRequestPost(context) {
     const response = await fetch(`${workerUrl}/integration/reel-library/refresh-streaming`, {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ after, limit: 12 })
+        body: JSON.stringify({ after, limit: 24 })
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.error) return json({ error: payload.error || "Streaming profiles could not be rebuilt." }, response.status || 502);
