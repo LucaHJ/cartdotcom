@@ -328,7 +328,19 @@
                     else sessionStorage.removeItem(cursorKey);
                     readerStatus.textContent = `${refreshed} canonical profiles reconciled…`;
                 } while (after);
-                readerStatus.textContent = `${refreshed} profiles reconciled; ${aliases} old paths retained as hidden aliases`;
+                let cursor = "";
+                let orphanAliases = 0;
+                do {
+                    const payload = await api("/api/reel-library/repair-orphan-resource-aliases", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ cursor })
+                    });
+                    orphanAliases += Number(payload.repaired || 0);
+                    cursor = payload.next_cursor || "";
+                    readerStatus.textContent = `${refreshed} profiles reconciled; checking superseded files…`;
+                } while (cursor);
+                readerStatus.textContent = `${refreshed} profiles reconciled; ${aliases + orphanAliases} old paths retained as hidden aliases`;
                 await loadLibrary();
             } catch (error) {
                 readerStatus.textContent = `${refreshed} profiles reconciled before failure: ${error.message}`;

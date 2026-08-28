@@ -6134,6 +6134,55 @@ async function handleReelLibraryResourceReconciliation(request: Request, env: En
   });
 }
 
+async function handleReelLibraryOrphanAliasRepair(request: Request, env: Env): Promise<Response> {
+  if (!env.REEL_LIBRARY_SHARED_TOKEN || !timingSafeEqual(bearer(request), env.REEL_LIBRARY_SHARED_TOKEN)) {
+    return json({ error: "Unauthorised" }, { status: 401 });
+  }
+  if (!env.REEL_LIBRARY_KV) return json({ error: "Reel Library KV unavailable" }, { status: 503 });
+  const input: { cursor?: string } = await request.json<{ cursor?: string }>().catch(() => ({}));
+  const cursor = String(input.cursor || "").trim().slice(0, 4000) || undefined;
+  const result = await env.REEL_LIBRARY_KV.list({ prefix: REEL_LIBRARY_FILE_PREFIX, cursor, limit: 1000 });
+  const candidates = result.keys.flatMap((key) => {
+    const metadata = (key.metadata || {}) as Record<string, unknown>;
+    const path = String(metadata.path || "");
+    const title = String(metadata.title || "").trim();
+    if (metadata.kind !== "resource" || metadata.artifact_type || !path || !title) return [];
+    const canonicalBasename = `${slugify(title)}.html`;
+    if (path.split("/").at(-1) === canonicalBasename) return [];
+    return [{ path, title, canonicalKey: canonicalResourceKey(normalizeResourceKind(String(metadata.resource_kind || ""), title, String(metadata.summary || "")), title, null) }];
+  });
+  let repaired = 0;
+  for (let offset = 0; offset < candidates.length; offset += 8) {
+    const batch = candidates.slice(offset, offset + 8);
+    const canonicalRows = await Promise.all(batch.map((candidate) => env.REEL_DB.prepare(
+      "SELECT name,kind,library_path FROM resources WHERE canonical_key=? AND library_path IS NOT NULL ORDER BY id LIMIT 1",
+    ).bind(candidate.canonicalKey).first<{ name: string; kind: string | null; library_path: string }>()))
+    for (let index = 0; index < batch.length; index += 1) {
+      const candidate = batch[index];
+      const canonical = canonicalRows[index];
+      if (!canonical?.library_path || canonical.library_path === candidate.path) continue;
+      const aliasHtml = renderResourceAliasHtml(canonical.name || candidate.title, canonical.library_path);
+      await env.REEL_ARCHIVE.put(`library/${candidate.path}`, aliasHtml, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
+      await putReelLibraryHtml(env, candidate.path, aliasHtml, {
+        kind: "resource-alias",
+        job_id: "",
+        parent_path: canonical.library_path,
+        title: canonical.name || candidate.title,
+        author: "",
+        video_available: false,
+        resource_kind: canonical.kind || "other",
+        resource_folder: canonical.library_path.split("/", 1)[0],
+        artifact_type: "",
+        summary: `Consolidated into ${canonical.library_path}`,
+      });
+      repaired += 1;
+    }
+  }
+  const nextCursor = result.list_complete ? null : result.cursor;
+  if (!nextCursor) await refreshReelLibraryManifest(env);
+  return json({ ok: true, scanned: result.keys.length, candidates: candidates.length, repaired, next_cursor: nextCursor, complete: !nextCursor });
+}
+
 async function handleSignedThumbnailDownload(request: Request, env: Env, jobId: string): Promise<Response> {
   if (!env.DOWNLOAD_SIGNING_KEY) return json({ error: "Downloads are not configured" }, { status: 503 });
   const url = new URL(request.url);
@@ -6813,6 +6862,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/integration/reel-library/repair-artifacts" && request.method === "POST") return handleReelLibraryArtifactRepair(request, env);
     if (url.pathname === "/integration/reel-library/refresh-streaming" && request.method === "POST") return handleReelLibraryStreamingRepair(request, env);
     if (url.pathname === "/integration/reel-library/reconcile-resources" && request.method === "POST") return handleReelLibraryResourceReconciliation(request, env);
+    if (url.pathname === "/integration/reel-library/repair-orphan-resource-aliases" && request.method === "POST") return handleReelLibraryOrphanAliasRepair(request, env);
     const libraryMedia = url.pathname.match(/^\/integration\/reel-library\/jobs\/([^/]+)\/(video|audio)$/);
     if (libraryMedia && request.method === "POST") return handleReelLibraryMediaLink(request, env, libraryMedia[1], libraryMedia[2] as "video" | "audio");
     const libraryCarousel = url.pathname.match(/^\/integration\/reel-library\/jobs\/([^/]+)\/carousel$/);

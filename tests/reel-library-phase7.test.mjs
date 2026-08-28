@@ -59,4 +59,13 @@ test("resource reconciliation is authenticated, resumable, and hides legacy alia
   assert.match(libraryShell, /reelLibraryResourceReconciliationCursor/);
   assert.match(libraryShell, /file\.kind !== "resource-alias"/);
   assert.match(libraryShell, /payload\.file\.metadata\?\.kind === "resource-alias"/);
+  assert.match(libraryShell, /\/api\/reel-library\/repair-orphan-resource-aliases/);
+});
+
+test("orphan resource repair is authenticated and cursor bounded", () => {
+  const source = readFileSync(new URL("../functions/api/reel-library/repair-orphan-resource-aliases.js", import.meta.url), "utf8");
+  assert.match(source, /requireBackendSession/);
+  assert.match(source, /REEL_LIBRARY_SHARED_TOKEN/);
+  assert.match(source, /\/integration\/reel-library\/repair-orphan-resource-aliases/);
+  assert.match(source, /normalizeString\(input\.cursor, 4000\)/);
 });
