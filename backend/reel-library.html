@@ -264,7 +264,20 @@
             button.textContent = "Rebuilding…";
             try {
                 const payload = await api("/api/reel-library/repair-artifacts", { method: "POST" });
-                readerStatus.textContent = `${payload.repaired || 0} Reel research files rebuilt`;
+                let after = "";
+                let streamingProfiles = 0;
+                do {
+                    const streaming = await api("/api/reel-library/refresh-streaming", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ after })
+                    });
+                    if (streaming.refreshed !== streaming.requested) throw new Error("A film or television profile could not be rebuilt.");
+                    streamingProfiles += Number(streaming.refreshed || 0);
+                    after = streaming.next_after || "";
+                    readerStatus.textContent = `${streamingProfiles} film and television profiles rebuilt…`;
+                } while (after);
+                readerStatus.textContent = `${payload.repaired || 0} Reel research files and ${streamingProfiles} film/TV profiles rebuilt`;
                 await loadLibrary();
             } catch (error) {
                 readerStatus.textContent = error.message;
@@ -511,6 +524,24 @@
             return template.innerHTML;
         }
 
+        function hydrateJustWatchWidgets(root = readerContent) {
+            const widgets = [...root.querySelectorAll("[data-jw-widget]")];
+            if (!widgets.length) return;
+            const theme = document.documentElement.classList.contains("dark-mode") ? "dark" : "light";
+            widgets.forEach(widget => widget.dataset.theme = theme);
+            if (window.JustWatch?.reloadWidgets) {
+                window.JustWatch.reloadWidgets();
+                return;
+            }
+            if (document.querySelector("script[data-justwatch-widget-loader]")) return;
+            const script = document.createElement("script");
+            script.async = true;
+            script.src = "https://widget.justwatch.com/justwatch_widget.js";
+            script.dataset.justwatchWidgetLoader = "true";
+            script.addEventListener("error", () => { readerStatus.textContent = "JustWatch availability could not load"; }, { once: true });
+            document.body.append(script);
+        }
+
         function folderPages(folderPath) {
             const prefix = `${folderPath.replace(/\/+$/, "")}/`;
             return files
@@ -574,6 +605,7 @@
             closeVideoPlayer();
             closeAudioPlayer();
             hydrateThumbnails();
+            hydrateJustWatchWidgets();
             const documentActions = readerContent.querySelector(".document-actions");
             if (documentActions && !documentActions.querySelector("[data-gallery-action]")) {
                 documentActions.insertAdjacentHTML("afterbegin", '<button type="button" data-gallery-action>Back to gallery</button>');

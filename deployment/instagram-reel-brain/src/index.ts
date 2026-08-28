@@ -278,6 +278,7 @@ export interface Env {
   REEL_LIBRARY_SHARED_TOKEN?: string;
   PHASE7_ORIGIN_URL?: string;
   PHASE7_ORIGIN_TOKEN?: string;
+  JUSTWATCH_WIDGET_API_KEY?: string;
   REEL_ORIGIN?: Fetcher;
 }
 
@@ -2019,6 +2020,7 @@ async function refreshCanonicalArtifactPage(env: Env, canonicalKey: string): Pro
     artifactType,
     sourceReels,
     media,
+    justWatchWidgetKey: env.JUSTWATCH_WIDGET_API_KEY,
   });
   const key = `library/${path}`;
   await env.REEL_ARCHIVE.put(key, html, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
@@ -2212,6 +2214,7 @@ async function publishSynthesisHtml(
         sources: resource.sources || [],
         artifactType: resource.artifactType,
         media: resource,
+        justWatchWidgetKey: env.JUSTWATCH_WIDGET_API_KEY,
       });
       await env.REEL_ARCHIVE.put(key, html, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
       await putReelLibraryHtml(env, path, html, {
@@ -6013,6 +6016,7 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
       guide: row.guide_text || "Not recorded.",
       sources,
       media,
+      justWatchWidgetKey: env.JUSTWATCH_WIDGET_API_KEY,
     });
     const key = `library/${row.library_path}`;
     await Promise.all([
@@ -6030,6 +6034,41 @@ async function handleReelLibraryArtifactRepair(request: Request, env: Env): Prom
   await refreshReelLibraryManifest(env);
   const repaired = results.filter((result) => result.ok).length;
   return json({ ok: repaired === results.length, repaired, artwork_upgraded: artworkUpgraded, youtube_profiles_rebuilt: profileKeys.length + youtubeResourceRows.results.length, youtube_videos: youtubeCollection.videos, youtube_video_pages_rebuilt: youtubeCollection.published, youtube_video_pages_removed: youtubeCollection.removed, failed: results.length - repaired, results });
+}
+
+async function handleReelLibraryStreamingRepair(request: Request, env: Env): Promise<Response> {
+  if (!env.REEL_LIBRARY_SHARED_TOKEN || !timingSafeEqual(bearer(request), env.REEL_LIBRARY_SHARED_TOKEN)) {
+    return json({ error: "Unauthorised" }, { status: 401 });
+  }
+  const input: { after?: string; limit?: number } = await request.json<{ after?: string; limit?: number }>().catch(() => ({}));
+  const after = String(input.after || "").trim().slice(0, 300);
+  const requestedLimit = Number(input.limit || 48);
+  const limit = Number.isInteger(requestedLimit) ? Math.max(1, Math.min(48, requestedLimit)) : 48;
+  const rows = await env.REEL_DB.prepare(
+    `SELECT DISTINCT canonical_key FROM resources
+     WHERE artifact_type IN ('film','tv_show') AND canonical_key IS NOT NULL AND canonical_key>?
+     ORDER BY canonical_key LIMIT ?`,
+  ).bind(after, limit).all<{ canonical_key: string }>();
+  const refreshed: string[] = [];
+  for (let offset = 0; offset < rows.results.length; offset += 12) {
+    const batch = rows.results.slice(offset, offset + 12);
+    const paths = await Promise.all(batch.map((row) => refreshCanonicalArtifactPage(env, row.canonical_key)));
+    for (let index = 0; index < batch.length; index += 1) {
+      if (paths[index]) refreshed.push(batch[index].canonical_key);
+    }
+  }
+  const nextAfter = rows.results.length === limit ? rows.results.at(-1)?.canonical_key || null : null;
+  if (!nextAfter) {
+    await refreshArtifactCollectionPages(env);
+    await refreshReelLibraryManifest(env);
+  }
+  return json({
+    ok: refreshed.length === rows.results.length,
+    refreshed: refreshed.length,
+    requested: rows.results.length,
+    next_after: nextAfter,
+    complete: !nextAfter,
+  });
 }
 
 async function handleSignedThumbnailDownload(request: Request, env: Env, jobId: string): Promise<Response> {
@@ -6709,6 +6748,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/integration/reel-library/instagram-browser/complete" && request.method === "POST") return handleInstagramBrowserAuthComplete(request, env);
     if (url.pathname === "/integration/reel-library/self-test" && request.method === "POST") return handleReelLibrarySelfTest(request, env);
     if (url.pathname === "/integration/reel-library/repair-artifacts" && request.method === "POST") return handleReelLibraryArtifactRepair(request, env);
+    if (url.pathname === "/integration/reel-library/refresh-streaming" && request.method === "POST") return handleReelLibraryStreamingRepair(request, env);
     const libraryMedia = url.pathname.match(/^\/integration\/reel-library\/jobs\/([^/]+)\/(video|audio)$/);
     if (libraryMedia && request.method === "POST") return handleReelLibraryMediaLink(request, env, libraryMedia[1], libraryMedia[2] as "video" | "audio");
     const libraryCarousel = url.pathname.match(/^\/integration\/reel-library\/jobs\/([^/]+)\/carousel$/);

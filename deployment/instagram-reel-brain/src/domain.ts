@@ -709,6 +709,28 @@ export function slugify(value: string): string {
     .slice(0, 80) || "resource";
 }
 
+export function justWatchTitleUrl(name: string, artifactType: ArtifactType, canonicalUrl?: string | null): string {
+  const canonical = safeHttpUrl(canonicalUrl);
+  if (canonical) {
+    try {
+      const url = new URL(canonical);
+      if (/^(?:www\.)?justwatch\.com$/i.test(url.hostname) && /^\/au\/(?:movie|tv-show)\//i.test(url.pathname)) {
+        return canonical;
+      }
+    } catch {
+      // The canonical URL was already validated; fall back to the title path.
+    }
+  }
+  const title = String(name || "").replace(/\s*\((?:19|20)\d{2}\)\s*$/, "").trim();
+  return `https://www.justwatch.com/au/${artifactType === "tv_show" ? "tv-show" : "movie"}/${slugify(title)}`;
+}
+
+export function justWatchReleaseYear(name: string, summary = ""): string {
+  return String(name || "").match(/\(((?:19|20)\d{2})\)\s*$/)?.[1]
+    || String(summary || "").match(/\b((?:19|20)\d{2})\b/)?.[1]
+    || "";
+}
+
 export function canonicalArtifactKey(artifactType: ArtifactType, name: string): string {
   return `${artifactType}:${slugify(name)}`;
 }
@@ -1052,6 +1074,7 @@ export function renderResourceHtml(input: {
   sources: string[];
   media?: ResourceMedia | null;
   artifactType?: string | null;
+  justWatchWidgetKey?: string | null;
   sourceReels?: Array<{
     jobId: string;
     rootPath: string;
@@ -1064,8 +1087,15 @@ export function renderResourceHtml(input: {
   const definition = RESOURCE_KIND_DEFINITIONS[resourceKind];
   const artifactType = normalizeArtifactType(input.artifactType, resourceKind, input.name, input.summary);
   const artifactCollection = artifactType ? ARTIFACT_COLLECTION_DEFINITIONS[artifactType] : null;
+  const isStreamingTitle = artifactType === "film" || artifactType === "tv_show";
   const collectionPath = artifactCollection ? `${artifactCollection.folder}/index.html` : "";
   const canonicalUrl = safeHttpUrl(input.canonicalUrl);
+  const justWatchUrl = isStreamingTitle ? justWatchTitleUrl(input.name, artifactType!, canonicalUrl) : "";
+  const justWatchYear = isStreamingTitle ? justWatchReleaseYear(input.name, input.summary) : "";
+  const justWatchWidgetKey = String(input.justWatchWidgetKey || "").trim().slice(0, 500);
+  const justWatchPanel = isStreamingTitle
+    ? `<section class="justwatch-panel" aria-label="Where to watch ${escapeHtml(input.name)} in Australia">${justWatchWidgetKey ? `<div class="justwatch-widget-shell"><div data-jw-widget data-api-key="${escapeHtml(justWatchWidgetKey)}" data-object-type="${artifactType === "tv_show" ? "show" : "movie"}" data-title="${escapeHtml(input.name.replace(/\s*\((?:19|20)\d{2}\)\s*$/, ""))}"${justWatchYear ? ` data-year="${escapeHtml(justWatchYear)}"` : ""} data-theme="light"></div></div>` : ""}<div class="justwatch-panel-copy"><span>Where to watch in Australia</span><a class="justwatch-brand-link" href="${escapeHtml(justWatchUrl)}" target="_blank" rel="noopener noreferrer">JustWatch</a>${justWatchWidgetKey ? "" : "<small>Current streaming, rental and purchase options open on JustWatch.</small>"}</div></section>`
+    : "";
   const heroImageUrl = safeHttpUrl(input.media?.hero_image_url);
   const spotifyUrl = safeHttpUrl(input.media?.spotify_url);
   const spotifyUri = spotifyUriFromUrl(spotifyUrl);
@@ -1090,7 +1120,7 @@ export function renderResourceHtml(input: {
     const url = safeHttpUrl(article.url);
     return url ? [{ ...article, url }] : [];
   });
-  const articles = articleLinks.length
+  const articles = !isStreamingTitle && articleLinks.length
     ? `<section class="resource-media-section"><h2>Mentioned articles</h2><ul class="article-link-list">${articleLinks.map((article) => `<li><a href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.title)}</a><span>${escapeHtml(article.publisher)}</span></li>`).join("")}</ul></section>`
     : "";
   const sources = input.sources.length
@@ -1110,14 +1140,15 @@ export function renderResourceHtml(input: {
   <header class="document-header">
     <p class="document-kicker">${escapeHtml(definition.label)} · ${escapeHtml(definition.folder)}/</p>
     <h1>${escapeHtml(input.name)}</h1>
-    <div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button>${collectionPath ? `<a href="#${encodeURIComponent(collectionPath)}" data-library-path="${escapeHtml(collectionPath)}">View all ${escapeHtml(artifactCollection!.title.toLowerCase())}</a>` : ""}${youtubeNativeIds.size ? `<a href="#${encodeURIComponent("youtube/index.html")}" data-library-path="youtube/index.html">View all YouTube videos</a>` : ""}${backToReel}${canonicalUrl ? `<a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noopener noreferrer">Official or canonical link</a>` : ""}${spotifyUrl ? `<a class="spotify-brand-link" href="${escapeHtml(spotifyUrl)}"${spotifyUri ? ` data-spotify-uri="${escapeHtml(spotifyUri)}"` : ""} aria-label="Open ${escapeHtml(input.name)} in Spotify" title="Open in Spotify"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="12"></circle><path d="M6.4 8.6c3.7-1.1 8.2-.8 11.4 1a1 1 0 0 1-.9 1.8c-2.8-1.6-6.7-1.9-9.9-.9a1 1 0 1 1-.6-1.9Zm.5 3.2c3.1-.9 6.9-.6 9.6.9a.84.84 0 0 1-.8 1.5c-2.3-1.3-5.6-1.6-8.3-.8a.84.84 0 1 1-.5-1.6Zm.5 2.9c2.7-.7 5.8-.5 8.1.8a.7.7 0 0 1-.7 1.3c-1.9-1.1-4.7-1.3-7-.7a.7.7 0 1 1-.4-1.4Z"></path></svg></a>` : ""}</div>
+    <div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button>${collectionPath ? `<a href="#${encodeURIComponent(collectionPath)}" data-library-path="${escapeHtml(collectionPath)}">View all ${escapeHtml(artifactCollection!.title.toLowerCase())}</a>` : ""}${youtubeNativeIds.size ? `<a href="#${encodeURIComponent("youtube/index.html")}" data-library-path="youtube/index.html">View all YouTube videos</a>` : ""}${backToReel}${canonicalUrl && !isStreamingTitle ? `<a href="${escapeHtml(canonicalUrl)}" target="_blank" rel="noopener noreferrer">Official or canonical link</a>` : ""}${spotifyUrl ? `<a class="spotify-brand-link" href="${escapeHtml(spotifyUrl)}"${spotifyUri ? ` data-spotify-uri="${escapeHtml(spotifyUri)}"` : ""} aria-label="Open ${escapeHtml(input.name)} in Spotify" title="Open in Spotify"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="12"></circle><path d="M6.4 8.6c3.7-1.1 8.2-.8 11.4 1a1 1 0 0 1-.9 1.8c-2.8-1.6-6.7-1.9-9.9-.9a1 1 0 1 1-.6-1.9Zm.5 3.2c3.1-.9 6.9-.6 9.6.9a.84.84 0 0 1-.8 1.5c-2.3-1.3-5.6-1.6-8.3-.8a.84.84 0 1 1-.5-1.6Zm.5 2.9c2.7-.7 5.8-.5 8.1.8a.7.7 0 0 1-.7 1.3c-1.9-1.1-4.7-1.3-7-.7a.7.7 0 1 1-.4-1.4Z"></path></svg></a>` : ""}</div>
+    ${justWatchPanel}
   </header>
   ${heroImageUrl ? `<figure class="resource-hero"><img src="${escapeHtml(heroImageUrl)}" alt="${escapeHtml(input.media?.hero_image_alt || `${input.name} artwork`)}" loading="lazy" referrerpolicy="no-referrer"><figcaption>${escapeHtml(input.media?.hero_image_alt || input.name)}</figcaption></figure>` : ""}
   <section><h2>Profile</h2>${renderProse(input.summary)}</section>
   <section><h2>Why it is useful</h2>${renderProse(input.whyUseful)}</section>
   <section><h2>Practical guide</h2>${renderProse(input.guide)}</section>
   <section><h2>Research standard</h2><ul>${definition.rules.map((rule) => `<li>${escapeHtml(rule)}</li>`).join("")}</ul></section>
-  <section><h2>Research sources</h2><ul class="source-list">${sources}</ul></section>
+  ${isStreamingTitle ? "" : `<section><h2>Research sources</h2><ul class="source-list">${sources}</ul></section>`}
   ${youtubeMatches}
   ${articles}
   ${artifactType ? `<section><h2>Source Reels</h2>${sourceReelCards}</section>` : ""}

@@ -241,6 +241,62 @@ test("keeps trailers, film, television, and music out of the creator-made YouTub
   });
   assert.doesNotMatch(film, /youtube-match/);
   assert.doesNotMatch(film, /View all YouTube videos/);
+  assert.doesNotMatch(film, /Official or canonical link/);
+  assert.doesNotMatch(film, /<h2>Research sources<\/h2>/);
+  assert.match(film, /href="https:\/\/www\.justwatch\.com\/au\/movie\/the-notebook"/);
+  assert.match(film, />JustWatch<\/a>/);
+});
+
+test("renders the official JustWatch all-offers widget at the top of film and television profiles", () => {
+  const film = domain.renderResourceHtml({
+    rootId: "film-job",
+    rootPath: "reels/example/index.html",
+    name: "The Master (2012)",
+    kind: "media",
+    artifactType: "film",
+    canonicalUrl: "https://www.criterion.com/films/2857-the-master",
+    summary: "A 2012 Paul Thomas Anderson film.",
+    whyUseful: "Reference.",
+    guide: "Watch the film.",
+    sources: ["https://www.criterion.com/films/2857-the-master"],
+    media: { article_links: [{ title: "Review", publisher: "Example", url: "https://example.com/review" }] },
+    justWatchWidgetKey: "synthetic-widget-key",
+  });
+  assert.match(film, /class="justwatch-panel"/);
+  assert.match(film, /data-jw-widget/);
+  assert.match(film, /data-api-key="synthetic-widget-key"/);
+  assert.match(film, /data-object-type="movie"/);
+  assert.match(film, /data-title="The Master"/);
+  assert.match(film, /data-year="2012"/);
+  assert.match(film, /www\.justwatch\.com\/au\/movie\/the-master/);
+  assert.ok(film.indexOf("justwatch-panel") < film.indexOf("resource-hero") || !film.includes("resource-hero"));
+  assert.doesNotMatch(film, /Official or canonical link/);
+  assert.doesNotMatch(film, /Mentioned articles/);
+  assert.doesNotMatch(film, /Research sources/);
+
+  const show = domain.renderResourceHtml({
+    rootId: "show-job",
+    rootPath: "reels/example/index.html",
+    name: "Severance",
+    kind: "media",
+    artifactType: "tv_show",
+    canonicalUrl: "https://www.justwatch.com/au/tv-show/severance",
+    summary: "A television series first released in 2022.",
+    whyUseful: "Reference.",
+    guide: "Watch the show.",
+    sources: [],
+    justWatchWidgetKey: "synthetic-widget-key",
+  });
+  assert.match(show, /data-object-type="show"/);
+  assert.match(show, /data-year="2022"/);
+  assert.match(show, /href="https:\/\/www\.justwatch\.com\/au\/tv-show\/severance"/);
+});
+
+test("derives Australian JustWatch paths and release years deterministically", () => {
+  assert.equal(domain.justWatchTitleUrl("It’s a Wonderful Life (1946)", "film"), "https://www.justwatch.com/au/movie/it-s-a-wonderful-life");
+  assert.equal(domain.justWatchTitleUrl("Kaiju No. 8", "tv_show"), "https://www.justwatch.com/au/tv-show/kaiju-no-8");
+  assert.equal(domain.justWatchReleaseYear("The Master (2012)", ""), "2012");
+  assert.equal(domain.justWatchReleaseYear("Severance", "A television series first released in 2022."), "2022");
 });
 
 test("adds deterministic YouTube, Spotify, and article fallbacks", () => {

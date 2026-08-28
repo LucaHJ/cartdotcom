@@ -26,3 +26,20 @@ test("Reel Library handler falls back to the immutable cloud copy on origin fail
   assert.ok(liveCall > 0 && fallback > liveCall);
   assert.match(source.slice(liveCall, fallback), /catch \(_error\)/);
 });
+
+test("Reel Library loads the official JustWatch widget only for generated widget placeholders", () => {
+  const source = readFileSync(new URL("../backend/reel-library.html", import.meta.url), "utf8");
+  assert.match(source, /function hydrateJustWatchWidgets/);
+  assert.match(source, /window\.JustWatch\?\.reloadWidgets/);
+  assert.match(source, /https:\/\/widget\.justwatch\.com\/justwatch_widget\.js/);
+  assert.match(source, /widgets\.forEach\(widget => widget\.dataset\.theme = theme\)/);
+  assert.match(source, /hydrateJustWatchWidgets\(\)/);
+});
+
+test("streaming-profile maintenance proxy remains authenticated and bounded", () => {
+  const source = readFileSync(new URL("../functions/api/reel-library/refresh-streaming.js", import.meta.url), "utf8");
+  assert.match(source, /requireBackendSession/);
+  assert.match(source, /REEL_LIBRARY_SHARED_TOKEN/);
+  assert.match(source, /\/integration\/reel-library\/refresh-streaming/);
+  assert.match(source, /limit: 48/);
+});
