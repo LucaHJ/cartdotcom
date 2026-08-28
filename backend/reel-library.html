@@ -278,7 +278,8 @@
             const button = document.getElementById("refreshStreamingProfiles");
             button.disabled = true;
             button.textContent = "Refreshing…";
-            let after = "";
+            const cursorKey = "reelLibraryStreamingRefreshCursor";
+            let after = sessionStorage.getItem(cursorKey) || "";
             let refreshed = 0;
             try {
                 do {
@@ -290,6 +291,8 @@
                     if (payload.refreshed !== payload.requested) throw new Error("A film or television profile could not be rebuilt.");
                     refreshed += Number(payload.refreshed || 0);
                     after = payload.next_after || "";
+                    if (after) sessionStorage.setItem(cursorKey, after);
+                    else sessionStorage.removeItem(cursorKey);
                     readerStatus.textContent = `${refreshed} film and television profiles refreshed…`;
                 } while (after);
                 readerStatus.textContent = `${refreshed} film and television profiles refreshed`;

@@ -45,4 +45,6 @@ test("streaming-profile maintenance proxy remains authenticated and bounded", ()
   assert.match(source, /limit: 24/);
   assert.match(libraryShell, /id="refreshStreamingProfiles"/);
   assert.match(libraryShell, /function refreshStreamingProfiles\(\)/);
+  assert.match(libraryShell, /reelLibraryStreamingRefreshCursor/);
+  assert.match(libraryShell, /sessionStorage\.setItem\(cursorKey, after\)/);
 });
