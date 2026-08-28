@@ -202,7 +202,7 @@
             const processingTime = payload.processing_time || {};
             const carouselResolver = payload.carousel_resolver || {};
             readerContent.innerHTML = `<article class="status-document">
-                <header class="document-header"><p class="document-kicker">Live system health</p><h1>Reel Brain status</h1><p>Generated ${escapeHtml(formatBrisbaneDateTime(payload.generated_at))}. Backlog processing is <strong>${payload.service?.backlog_processing ? "on" : "off"}</strong>; ingest mode is <strong>${escapeHtml(payload.service?.ingest_mode || "unknown")}</strong>.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button><button id="runLiveChecks" type="button">Run live checks</button><button id="runSelfTest" type="button">Run command self-test</button><button id="repairArtifacts" type="button">Rebuild shared artefacts</button><button id="refreshStreamingProfiles" type="button">Refresh film/TV links</button><button id="connectInstagramBrowser" type="button">${carouselResolver.connected ? "Reconnect Instagram" : "Connect Instagram"}</button><button id="finishInstagramBrowser" type="button" hidden>Finish Instagram connection</button><button id="refreshStatus" type="button">Refresh</button></div><div id="instagramBrowserResults" class="self-test-results" hidden></div><div id="selfTestResults" class="self-test-results" hidden></div></header>
+                <header class="document-header"><p class="document-kicker">Live system health</p><h1>Reel Brain status</h1><p>Generated ${escapeHtml(formatBrisbaneDateTime(payload.generated_at))}. Backlog processing is <strong>${payload.service?.backlog_processing ? "on" : "off"}</strong>; ingest mode is <strong>${escapeHtml(payload.service?.ingest_mode || "unknown")}</strong>.</p><div class="document-actions"><button type="button" data-gallery-action>Back to gallery</button><button id="runLiveChecks" type="button">Run live checks</button><button id="runSelfTest" type="button">Run command self-test</button><button id="repairArtifacts" type="button">Rebuild shared artefacts</button><button id="reconcileResourceProfiles" type="button">Reconcile duplicate pages</button><button id="refreshStreamingProfiles" type="button">Refresh film/TV links</button><button id="connectInstagramBrowser" type="button">${carouselResolver.connected ? "Reconnect Instagram" : "Connect Instagram"}</button><button id="finishInstagramBrowser" type="button" hidden>Finish Instagram connection</button><button id="refreshStatus" type="button">Refresh</button></div><div id="instagramBrowserResults" class="self-test-results" hidden></div><div id="selfTestResults" class="self-test-results" hidden></div></header>
                 <section><h2>Core checks</h2><div class="health-list">${checks.map(([name, check]) => {
                     const actual = name === "instagram" ? (check.live_probe_run ? check.ok : check.configured) : check.ok;
                     const detail = name === "instagram" ? (check.live_probe_run ? (check.ok ? `Connected as @${check.username || "account"}` : check.error || "Probe failed") : check.configured ? "Configured; run live checks to validate the token" : "Instagram credentials are missing") : check.detail;
@@ -222,6 +222,7 @@
             document.getElementById("runLiveChecks")?.addEventListener("click", () => showStatusDashboard(true));
             document.getElementById("runSelfTest")?.addEventListener("click", runCommandSelfTest);
             document.getElementById("repairArtifacts")?.addEventListener("click", rebuildSharedArtifacts);
+            document.getElementById("reconcileResourceProfiles")?.addEventListener("click", reconcileResourceProfiles);
             document.getElementById("refreshStreamingProfiles")?.addEventListener("click", refreshStreamingProfiles);
             document.getElementById("connectInstagramBrowser")?.addEventListener("click", startInstagramBrowserConnection);
             document.getElementById("finishInstagramBrowser")?.addEventListener("click", finishInstagramBrowserConnection);
@@ -301,6 +302,38 @@
                 readerStatus.textContent = `${refreshed} profiles refreshed before failure: ${error.message}`;
                 button.disabled = false;
                 button.textContent = "Refresh film/TV links";
+            }
+        }
+
+        async function reconcileResourceProfiles() {
+            const button = document.getElementById("reconcileResourceProfiles");
+            button.disabled = true;
+            button.textContent = "Reconciling…";
+            const cursorKey = "reelLibraryResourceReconciliationCursor";
+            let after = sessionStorage.getItem(cursorKey) || "";
+            let refreshed = 0;
+            let aliases = 0;
+            try {
+                do {
+                    const payload = await api("/api/reel-library/reconcile-resources", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ after })
+                    });
+                    if (payload.refreshed !== payload.requested) throw new Error("A canonical resource profile could not be rebuilt.");
+                    refreshed += Number(payload.refreshed || 0);
+                    aliases += Number(payload.aliases || 0);
+                    after = payload.next_after || "";
+                    if (after) sessionStorage.setItem(cursorKey, after);
+                    else sessionStorage.removeItem(cursorKey);
+                    readerStatus.textContent = `${refreshed} canonical profiles reconciled…`;
+                } while (after);
+                readerStatus.textContent = `${refreshed} profiles reconciled; ${aliases} old paths retained as hidden aliases`;
+                await loadLibrary();
+            } catch (error) {
+                readerStatus.textContent = `${refreshed} profiles reconciled before failure: ${error.message}`;
+                button.disabled = false;
+                button.textContent = "Reconcile duplicate pages";
             }
         }
 
@@ -669,6 +702,9 @@
             readerStatus.textContent = "Loading…";
             try {
                 const payload = await api(`/api/reel-library/file?path=${encodeURIComponent(path)}`);
+                if (payload.file.metadata?.kind === "resource-alias" && payload.file.metadata?.parent_path && payload.file.metadata.parent_path !== path) {
+                    return loadFile(payload.file.metadata.parent_path, options);
+                }
                 selectedPath = payload.file.path;
                 galleryButton.hidden = false;
                 readerPath.textContent = selectedPath;
@@ -692,7 +728,7 @@
             readerStatus.textContent = "Refreshing…";
             try {
                 const payload = await api("/api/reel-library/files");
-                files = Array.isArray(payload.files) ? payload.files : [];
+                files = Array.isArray(payload.files) ? payload.files.filter(file => file.kind !== "resource-alias") : [];
                 renderTree();
                 readerStatus.textContent = `${files.length} HTML files`;
                 const requested = decodeURIComponent(location.hash.replace(/^#/, ""));

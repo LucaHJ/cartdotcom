@@ -4,6 +4,7 @@ import test from "node:test";
 import ts from "typescript";
 
 const source = await readFile(new URL("../src/domain.ts", import.meta.url), "utf8");
+const canonicalResourceMigration = await readFile(new URL("../migrations/0027_canonical_resource_profiles.sql", import.meta.url), "utf8");
 const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
@@ -35,6 +36,50 @@ test("routes common artifacts into durable central collections", () => {
   assert.equal(domain.ARTIFACT_COLLECTION_DEFINITIONS.font.folder, "fonts");
   assert.equal(domain.ARTIFACT_COLLECTION_DEFINITIONS.tv_show.folder, "tv-shows");
   assert.equal(domain.canonicalArtifactKey("book", "Meditations"), "book:meditations");
+  assert.equal(domain.canonicalResourceKey("person", "Brad Pitt", null), "entity:brad-pitt");
+  assert.equal(domain.canonicalResourceKey("media", "Meditations", "book"), "book:meditations");
+  assert.equal(domain.canonicalResourcePath("entity:brad-pitt", "person"), "people/brad-pitt.html");
+  assert.equal(domain.canonicalResourcePath("tv_show:severance"), "tv-shows/severance.html");
+  assert.equal(domain.canonicalResourcePath("unknown:thing"), null);
+});
+
+test("backfills ordinary resources to kind-independent entity identities", () => {
+  assert.match(canonicalResourceMigration, /ELSE 'entity:' \|\| slug/);
+  assert.match(canonicalResourceMigration, /WHERE canonical_key IS NULL OR canonical_key = ''/);
+  assert.match(canonicalResourceMigration, /artifact_type \|\| ':' \|\| slug/);
+});
+
+test("renders ordinary entity profiles with related pages and all source Reels", () => {
+  const detail = domain.renderResourceHtml({
+    rootId: "job-1",
+    rootPath: "",
+    name: "Brad Pitt",
+    kind: "person",
+    summary: "An actor and producer.",
+    whyUseful: "Connects the films mentioned by source Reels.",
+    guide: "Open a related film profile.",
+    sources: [],
+    relatedResources: [
+      { name: "Fight Club", libraryPath: "films/fight-club.html", kind: "Film", sourceCount: 2 },
+      { name: "Friends", libraryPath: "tv-shows/friends.html", kind: "TV show", sourceCount: 1 },
+    ],
+    sourceReels: [
+      { jobId: "job-1", rootPath: "reels/one/index.html", title: "One", author: "one" },
+      { jobId: "job-2", rootPath: "reels/two/index.html", title: "Two", author: "two", mediaType: "carousel" },
+      { jobId: "job-3", rootPath: "reels/three/index.html", title: "Three", author: "three" },
+    ],
+  });
+  assert.match(detail, /<h2>Related pages<\/h2>/);
+  assert.match(detail, /data-library-path="films\/fight-club\.html"/);
+  assert.match(detail, /data-library-path="tv-shows\/friends\.html"/);
+  assert.match(detail, /<h2>Source Reels<\/h2>/);
+  assert.equal((detail.match(/data-thumbnail-job-id=/g) || []).length, 3);
+});
+
+test("renders legacy duplicate paths as navigational aliases", () => {
+  const alias = domain.renderResourceAliasHtml("Brad Pitt", "people/brad-pitt.html");
+  assert.match(alias, /data-document-kind="resource-alias"/);
+  assert.match(alias, /data-library-path="people\/brad-pitt\.html"/);
 });
 
 test("renders one canonical artifact page with every source Reel in a three-wide-ready grid", () => {

@@ -576,6 +576,12 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .artifact-reel-card .reel-card-copy { gap: 4px; padding: 12px; }
 .artifact-reel-card strong { overflow-wrap: anywhere; font-family: Georgia, "Times New Roman", serif; font-size: 16px; font-weight: 500; line-height: 1.18; }
 .artifact-reel-card .reel-card-copy > span { overflow: hidden; color: rgba(255,255,255,.86); font-family: Inter, ui-sans-serif, sans-serif; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.related-resource-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.related-resource-card { display: grid; align-content: start; gap: 5px; min-width: 0; min-height: 94px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); text-decoration: none; }
+.related-resource-card:hover, .related-resource-card:focus-visible { border-color: var(--accent); transform: translateY(-1px); outline: none; }
+.related-resource-card small { color: var(--muted); font: 800 9px/1.3 Inter, ui-sans-serif, sans-serif; letter-spacing: .09em; text-transform: uppercase; }
+.related-resource-card strong { overflow-wrap: anywhere; color: var(--ink); font-family: Georgia, "Times New Roman", serif; font-size: 18px; font-weight: 500; line-height: 1.18; }
+.related-resource-card span { color: var(--muted); font: 600 10px/1.4 Inter, ui-sans-serif, sans-serif; }
 .artifact-index-list { margin: 0; padding: 0 !important; list-style: none; }
 .artifact-index-list > li { padding: 20px 0; border-bottom: 1px solid var(--line); }
 .artifact-index-list h3 { margin: 0 0 7px; font-family: Georgia, "Times New Roman", serif; font-size: 24px; font-weight: 500; }
@@ -651,7 +657,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
     .reader-content { padding: 28px 18px 70px; }
     .reel-gallery-grid { grid-template-columns: 1fr; }
     .youtube-library-grid { grid-template-columns: 1fr; }
-    .artifact-reel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .artifact-reel-grid, .related-resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .reel-document { font-size: 16px; }
     .reel-document h1 { font-size: 34px; }
     .document-meta { grid-template-columns: 1fr; gap: 10px; }

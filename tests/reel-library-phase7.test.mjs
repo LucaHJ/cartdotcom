@@ -48,3 +48,15 @@ test("streaming-profile maintenance proxy remains authenticated and bounded", ()
   assert.match(libraryShell, /reelLibraryStreamingRefreshCursor/);
   assert.match(libraryShell, /sessionStorage\.setItem\(cursorKey, after\)/);
 });
+
+test("resource reconciliation is authenticated, resumable, and hides legacy aliases", () => {
+  const source = readFileSync(new URL("../functions/api/reel-library/reconcile-resources.js", import.meta.url), "utf8");
+  const libraryShell = readFileSync(new URL("../backend/reel-library.html", import.meta.url), "utf8");
+  assert.match(source, /requireBackendSession/);
+  assert.match(source, /REEL_LIBRARY_SHARED_TOKEN/);
+  assert.match(source, /\/integration\/reel-library\/reconcile-resources/);
+  assert.match(source, /limit: 24/);
+  assert.match(libraryShell, /reelLibraryResourceReconciliationCursor/);
+  assert.match(libraryShell, /file\.kind !== "resource-alias"/);
+  assert.match(libraryShell, /payload\.file\.metadata\?\.kind === "resource-alias"/);
+});

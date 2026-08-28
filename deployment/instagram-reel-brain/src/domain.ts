@@ -773,6 +773,23 @@ export function canonicalArtifactKey(artifactType: ArtifactType, name: string): 
   return `${artifactType}:${slugify(name)}`;
 }
 
+export function canonicalResourceKey(kind: ResourceKind, name: string, artifactType?: ArtifactType | null): string {
+  return `${artifactType || "entity"}:${slugify(name)}`;
+}
+
+export function canonicalResourcePath(canonicalKey: string, entityKind?: ResourceKind | null): string | null {
+  const separator = canonicalKey.indexOf(":");
+  if (separator < 1) return null;
+  const prefix = canonicalKey.slice(0, separator);
+  const slug = slugify(canonicalKey.slice(separator + 1));
+  if (!slug) return null;
+  const artifact = ARTIFACT_COLLECTION_DEFINITIONS[prefix as ArtifactType];
+  if (artifact) return `${artifact.folder}/${slug}.html`;
+  if (prefix === "entity" && entityKind) return `${RESOURCE_KIND_DEFINITIONS[entityKind].folder}/${slug}.html`;
+  const resource = RESOURCE_KIND_DEFINITIONS[prefix as ResourceKind];
+  return resource ? `${resource.folder}/${slug}.html` : null;
+}
+
 export function parseEmojiCommand(value: string): { stage: string; display: string } | null {
   const text = value.trim();
   const match = text.match(/^change\s+(?:the\s+)?(?:emoji|icon)\s+for\s+([a-z0-9 _-]+?)\s+to\s+(.+)$/i)
@@ -1120,6 +1137,12 @@ export function renderResourceHtml(input: {
     author: string;
     mediaType?: "reel" | "carousel" | "post";
   }>;
+  relatedResources?: Array<{
+    name: string;
+    libraryPath: string;
+    kind: string;
+    sourceCount?: number;
+  }>;
 }): string {
   const resourceKind = normalizeResourceKind(input.kind, input.name, input.summary);
   const definition = RESOURCE_KIND_DEFINITIONS[resourceKind];
@@ -1171,6 +1194,10 @@ export function renderResourceHtml(input: {
   const sourceReelCards = sourceReels.length
     ? `<div class="artifact-reel-grid">${sourceReels.map((reel) => `<button class="artifact-reel-card" type="button" data-library-path="${escapeHtml(reel.rootPath)}" data-thumbnail-job-id="${escapeHtml(reel.jobId)}"><img alt="" loading="lazy"><span class="reel-card-shade" aria-hidden="true"></span><span class="reel-card-copy"><small>${escapeHtml(reel.mediaType === "carousel" ? "Carousel" : reel.mediaType === "post" ? "Post" : "Reel")}</small><strong>${escapeHtml(reel.title || "Untitled Instagram research")}</strong><span>@${escapeHtml(String(reel.author || "unknown").replace(/^@/, ""))}</span></span></button>`).join("")}</div>`
     : "<p>No source Reels recorded.</p>";
+  const relatedResources = input.relatedResources || [];
+  const relatedResourceCards = relatedResources.length
+    ? `<div class="related-resource-grid">${relatedResources.map((resource) => `<a class="related-resource-card" href="#${encodeURIComponent(resource.libraryPath)}" data-library-path="${escapeHtml(resource.libraryPath)}"><small>${escapeHtml(resource.kind)}</small><strong>${escapeHtml(resource.name)}</strong>${resource.sourceCount ? `<span>${escapeHtml(resource.sourceCount)} source Reel${resource.sourceCount === 1 ? "" : "s"}</span>` : ""}</a>`).join("")}</div>`
+    : "";
   const backToReel = input.rootPath && !sourceReels.length
     ? `<a href="#${encodeURIComponent(input.rootPath)}" data-library-path="${escapeHtml(input.rootPath)}">Back to Reel</a>`
     : "";
@@ -1189,7 +1216,14 @@ export function renderResourceHtml(input: {
   ${isStreamingTitle ? "" : `<section><h2>Research sources</h2><ul class="source-list">${sources}</ul></section>`}
   ${youtubeMatches}
   ${articles}
-  ${artifactType ? `<section><h2>Source Reels</h2>${sourceReelCards}</section>` : ""}
+  ${relatedResourceCards ? `<section><h2>Related pages</h2><p>People, films, television shows and other resources connected through the same source Reels.</p>${relatedResourceCards}</section>` : ""}
+  <section><h2>Source Reels</h2>${sourceReelCards}</section>
+</article>`;
+}
+
+export function renderResourceAliasHtml(name: string, canonicalPath: string): string {
+  return `<article class="reel-document resource-alias-document" data-document-kind="resource-alias">
+  <header class="document-header"><p class="document-kicker">Consolidated page</p><h1>${escapeHtml(name)}</h1><p>This earlier duplicate now points to the shared profile used by every source Reel.</p><div class="document-actions"><a href="#${encodeURIComponent(canonicalPath)}" data-library-path="${escapeHtml(canonicalPath)}">Open canonical profile</a></div></header>
 </article>`;
 }
 

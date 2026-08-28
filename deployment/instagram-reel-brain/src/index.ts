@@ -78,7 +78,8 @@ import {
   applyMediaLinkFallbacks,
   boundedLibraryKvMetadata,
   completionSynthesisObjectKey,
-  canonicalArtifactKey,
+  canonicalResourceKey,
+  canonicalResourcePath,
   canonicalizeInstagramUrl,
   classifyInstagramMediaPayload,
   findInstagramCarouselMediaPayload,
@@ -102,6 +103,7 @@ import {
   renderYoutubeCollectionHtml,
   renderYoutubeVideoHtml,
   renderResourceHtml,
+  renderResourceAliasHtml,
   renderResourceMarkdown,
   renderRootHtml,
   renderRootMarkdown,
@@ -201,7 +203,7 @@ type RoutedSynthesisResource = SynthesisResource & {
   slug: string;
   kind: ResourceKind;
   artifactType: ArtifactType | null;
-  canonicalKey: string | null;
+  canonicalKey: string;
   documentSlug: string;
 };
 
@@ -1719,16 +1721,15 @@ async function refreshYoutubeCollectionPages(env: Env, onlyVideoIds?: Set<string
 }
 
 function routeSynthesisResources(job: JobRow, payload: SynthesisPayload): RoutedSynthesisResource[] {
-  const sourceSuffix = slugify(payload.metadata.shortcode || job.shortcode || job.id.slice(0, 8));
   return payload.resources.map((resource) => {
     const slug = slugify(resource.name);
     const kind = normalizeResourceKind(resource.kind, resource.name, resource.summary);
     const artifactType = normalizeArtifactType(resource.artifact_type, kind, resource.name, resource.summary);
-    const canonicalKey = artifactType ? canonicalArtifactKey(artifactType, resource.name) : null;
+    const canonicalKey = canonicalResourceKey(kind, resource.name, artifactType);
     const heroImageUrl = artifactType === "music" && resource.hero_image_url
       ? highResolutionMusicArtworkUrl(resource.hero_image_url)
       : resource.hero_image_url;
-    return { ...resource, hero_image_url: heroImageUrl, slug, kind, artifactType, canonicalKey, documentSlug: artifactType ? slug : `${slug}-${sourceSuffix}` };
+    return { ...resource, hero_image_url: heroImageUrl, slug, kind, artifactType, canonicalKey, documentSlug: slug };
   });
 }
 
@@ -1940,16 +1941,17 @@ async function enrichSynthesisResourceMedia(resources: SynthesisResource[]): Pro
   }));
 }
 
-type CanonicalArtifactRow = {
+type CanonicalResourceRow = {
   name: string;
   kind: string | null;
-  artifact_type: string;
+  artifact_type: string | null;
   canonical_url: string | null;
   summary: string | null;
   why_useful: string | null;
   guide_text: string | null;
   evidence_json: string | null;
   media_json: string | null;
+  library_path: string | null;
   job_id: string;
   reel_title: string | null;
   author_username: string | null;
@@ -1958,28 +1960,37 @@ type CanonicalArtifactRow = {
   media_type: "reel" | "carousel" | "post";
 };
 
-function longestText(rows: CanonicalArtifactRow[], field: "summary" | "why_useful" | "guide_text"): string {
+type RelatedCanonicalResourceRow = {
+  canonical_key: string;
+  name: string;
+  kind: string | null;
+  artifact_type: string | null;
+  source_count: number;
+};
+
+function longestText(rows: CanonicalResourceRow[], field: "summary" | "why_useful" | "guide_text"): string {
   return rows.map((row) => String(row[field] || "").trim()).sort((left, right) => right.length - left.length)[0] || "Not recorded.";
 }
 
-async function refreshCanonicalArtifactPage(env: Env, canonicalKey: string): Promise<string | null> {
-  const artifactType = canonicalKey.split(":", 1)[0] as ArtifactType;
-  const definition = ARTIFACT_COLLECTION_DEFINITIONS[artifactType];
-  if (!definition) return null;
+async function refreshCanonicalResourcePage(env: Env, canonicalKey: string): Promise<{ path: string; aliases: number } | null> {
   const rows = await env.REEL_DB.prepare(
-    `SELECT r.name,r.kind,r.artifact_type,r.canonical_url,r.summary,r.why_useful,r.guide_text,r.evidence_json,r.media_json,
+    `SELECT r.name,r.kind,r.artifact_type,r.canonical_url,r.summary,r.why_useful,r.guide_text,r.evidence_json,r.media_json,r.library_path,
       j.id AS job_id,j.title AS reel_title,j.author_username,j.shortcode,j.library_path AS root_path,
       CASE WHEN EXISTS(SELECT 1 FROM artifacts a WHERE a.job_id=j.id AND a.kind='carousel_item') THEN 'carousel'
         WHEN COALESCE(j.canonical_url,j.source_url) LIKE '%/p/%' THEN 'post' ELSE 'reel' END AS media_type
      FROM resources r JOIN jobs j ON j.id=r.job_id
      WHERE r.canonical_key=? ORDER BY j.completed_at,j.created_at`,
-  ).bind(canonicalKey).all<CanonicalArtifactRow>();
+  ).bind(canonicalKey).all<CanonicalResourceRow>();
   if (!rows.results.length) return null;
   const names = rows.results.map((row) => row.name.trim()).filter(Boolean).sort((left, right) => left.length - right.length || left.localeCompare(right));
   const name = names[0] || canonicalKey.split(":").slice(1).join(":");
-  const slug = canonicalKey.split(":").slice(1).join(":");
-  const path = `${definition.folder}/${slug}.html`;
+  const resourceKind = normalizeResourceKind(rows.results[0].kind, name, rows.results[0].summary || "");
+  const artifactType = normalizeArtifactType(rows.results[0].artifact_type, resourceKind, name, rows.results[0].summary || "");
+  const path = canonicalResourcePath(canonicalKey, resourceKind);
+  if (!path) return null;
+  const folder = path.split("/", 1)[0];
   const canonicalUrl = rows.results.map((row) => row.canonical_url).find(Boolean) || null;
+  const legacyPaths = [...new Set(rows.results.map((row) => String(row.library_path || "")).filter((legacyPath) => legacyPath && legacyPath !== path))];
   const sources = new Set<string>();
   for (const row of rows.results) {
     try {
@@ -2007,6 +2018,22 @@ async function refreshCanonicalArtifactPage(env: Env, canonicalKey: string): Pro
       return [];
     }
   }).sort((left, right) => JSON.stringify(right).length - JSON.stringify(left).length)[0] || null;
+  const relatedRows = await env.REEL_DB.prepare(
+    `SELECT r2.canonical_key,r2.name,r2.kind,r2.artifact_type,COUNT(DISTINCT r2.job_id) AS source_count
+     FROM resources r1 JOIN resources r2 ON r2.job_id=r1.job_id
+     WHERE r1.canonical_key=? AND r2.canonical_key IS NOT NULL AND r2.canonical_key!=?
+     GROUP BY r2.canonical_key ORDER BY source_count DESC,r2.name LIMIT 200`,
+  ).bind(canonicalKey, canonicalKey).all<RelatedCanonicalResourceRow>();
+  const relatedResources = relatedRows.results.flatMap((row) => {
+    const relatedKind = normalizeResourceKind(row.kind, row.name, "");
+    const libraryPath = canonicalResourcePath(row.canonical_key, relatedKind);
+    return libraryPath ? [{
+      name: row.name,
+      libraryPath,
+      kind: row.artifact_type ? ARTIFACT_COLLECTION_DEFINITIONS[row.artifact_type as ArtifactType]?.singular || row.artifact_type : RESOURCE_KIND_DEFINITIONS[normalizeResourceKind(row.kind, row.name, "")].label,
+      sourceCount: Number(row.source_count || 0),
+    }] : [];
+  });
   const html = renderResourceHtml({
     rootId: sourceReels[0]?.jobId || "",
     rootPath: "",
@@ -2019,6 +2046,7 @@ async function refreshCanonicalArtifactPage(env: Env, canonicalKey: string): Pro
     sources: [...sources],
     artifactType,
     sourceReels,
+    relatedResources,
     media,
     justWatchWidgetKey: env.JUSTWATCH_WIDGET_API_KEY,
   });
@@ -2032,14 +2060,36 @@ async function refreshCanonicalArtifactPage(env: Env, canonicalKey: string): Pro
     author: "",
     video_available: false,
     resource_kind: rows.results[0].kind || "media",
-    resource_folder: definition.folder,
-    artifact_type: artifactType,
+    resource_folder: folder,
+    artifact_type: artifactType || "",
     summary: longestText(rows.results, "summary"),
     source_count: sourceReels.length,
   });
   await env.REEL_DB.prepare("UPDATE resources SET guide_html_key=?,library_path=? WHERE canonical_key=?")
     .bind(key, path, canonicalKey).run();
-  return path;
+  for (const legacyPath of legacyPaths) {
+    const aliasHtml = renderResourceAliasHtml(name, path);
+    await env.REEL_ARCHIVE.put(`library/${legacyPath}`, aliasHtml, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
+    await putReelLibraryHtml(env, legacyPath, aliasHtml, {
+      kind: "resource-alias",
+      job_id: "",
+      parent_path: path,
+      title: name,
+      author: "",
+      video_available: false,
+      resource_kind: resourceKind,
+      resource_folder: folder,
+      artifact_type: artifactType || "",
+      summary: `Consolidated into ${path}`,
+      source_count: sourceReels.length,
+    });
+  }
+  return { path, aliases: legacyPaths.length };
+}
+
+async function refreshCanonicalArtifactPage(env: Env, canonicalKey: string): Promise<string | null> {
+  const result = await refreshCanonicalResourcePage(env, canonicalKey);
+  return result?.path || null;
 }
 
 async function removeSupersededReelLibraryFiles(
@@ -2193,43 +2243,13 @@ async function publishSynthesisHtml(
     env.REEL_DB.prepare("UPDATE jobs SET html_key=?, library_path=?, codex_input_tokens=?, codex_cached_input_tokens=?, codex_output_tokens=?, codex_reasoning_output_tokens=?, codex_total_tokens=?, updated_at=CURRENT_TIMESTAMP WHERE id=?")
       .bind(rootKey, paths.root, tokenUsage.input_tokens, tokenUsage.cached_input_tokens, tokenUsage.output_tokens, tokenUsage.reasoning_output_tokens, tokenUsage.total_tokens, job.id),
   ];
-  const canonicalArtifactKeys = new Set<string>();
+  const canonicalResourceKeys = new Set<string>();
   for (const resource of resources) {
     const definition = RESOURCE_KIND_DEFINITIONS[resource.kind];
     const resourceFolder = resource.artifactType ? ARTIFACT_COLLECTION_DEFINITIONS[resource.artifactType].folder : definition.folder;
     const path = resourcePaths.get(resource.slug) || `${resourceFolder}/${resource.documentSlug}.html`;
     const key = `library/${path}`;
-    if (resource.canonicalKey) {
-      canonicalArtifactKeys.add(resource.canonicalKey);
-    } else {
-      const html = renderResourceHtml({
-        rootId: job.id,
-        rootPath: paths.root,
-        name: resource.name,
-        kind: resource.kind,
-        canonicalUrl: resource.canonical_url,
-        summary: resource.summary,
-        whyUseful: resource.why_useful,
-        guide: resource.guide,
-        sources: resource.sources || [],
-        artifactType: resource.artifactType,
-        media: resource,
-        justWatchWidgetKey: env.JUSTWATCH_WIDGET_API_KEY,
-      });
-      await env.REEL_ARCHIVE.put(key, html, { httpMetadata: { contentType: "text/html; charset=utf-8" } });
-      await putReelLibraryHtml(env, path, html, {
-        kind: "resource",
-        job_id: job.id,
-        parent_path: paths.root,
-        title: resource.name,
-        author: payload.metadata.author_username,
-        video_available: false,
-        resource_kind: resource.kind,
-        resource_folder: resourceFolder,
-        artifact_type: "",
-        summary: resource.summary,
-      });
-    }
+    canonicalResourceKeys.add(resource.canonicalKey);
     statements.push(
       env.REEL_DB.prepare("UPDATE resources SET canonical_key=?,guide_text=?,media_json=?,guide_html_key=?,library_path=? WHERE job_id=? AND slug=?")
         .bind(resource.canonicalKey, resource.guide, JSON.stringify({ hero_image_url: resource.hero_image_url || null, hero_image_alt: resource.hero_image_alt || null, spotify_url: resource.spotify_url || null, youtube_candidates: resource.youtube_candidates || [], article_links: resource.article_links || [] }), key, path, job.id, resource.slug),
@@ -2276,7 +2296,7 @@ async function publishSynthesisHtml(
     `${paths.directory}/resources/`,
   );
   await env.REEL_DB.batch(statements);
-  for (const canonicalKey of canonicalArtifactKeys) await refreshCanonicalArtifactPage(env, canonicalKey);
+  for (const canonicalKey of canonicalResourceKeys) await refreshCanonicalResourcePage(env, canonicalKey);
   if (!options.deferIndexRefresh) {
     const youtubeIds = new Set(resources.flatMap((resource) => (resource.youtube_candidates || []).map((candidate) => youtubeVideoId(candidate.url)).filter((id): id is string => Boolean(id))));
     await refreshYoutubeCollectionPages(env, youtubeIds);
@@ -6071,6 +6091,45 @@ async function handleReelLibraryStreamingRepair(request: Request, env: Env): Pro
   });
 }
 
+async function handleReelLibraryResourceReconciliation(request: Request, env: Env): Promise<Response> {
+  if (!env.REEL_LIBRARY_SHARED_TOKEN || !timingSafeEqual(bearer(request), env.REEL_LIBRARY_SHARED_TOKEN)) {
+    return json({ error: "Unauthorised" }, { status: 401 });
+  }
+  const input: { after?: string; limit?: number } = await request.json<{ after?: string; limit?: number }>().catch(() => ({}));
+  const after = String(input.after || "").trim().slice(0, 300);
+  const requestedLimit = Number(input.limit || 24);
+  const limit = Number.isInteger(requestedLimit) ? Math.max(1, Math.min(24, requestedLimit)) : 24;
+  const rows = await env.REEL_DB.prepare(
+    `SELECT DISTINCT canonical_key FROM resources
+     WHERE canonical_key IS NOT NULL AND canonical_key>?
+     ORDER BY canonical_key LIMIT ?`,
+  ).bind(after, limit).all<{ canonical_key: string }>();
+  const refreshed: string[] = [];
+  let aliases = 0;
+  for (const row of rows.results) {
+    const result = await refreshCanonicalResourcePage(env, row.canonical_key);
+    if (result) {
+      refreshed.push(row.canonical_key);
+      aliases += result.aliases;
+    }
+  }
+  const nextAfter = rows.results.length === limit ? rows.results.at(-1)?.canonical_key || null : null;
+  if (!nextAfter) {
+    await refreshArtifactCollectionPages(env);
+    await refreshYoutubeCollectionPages(env);
+    await refreshListCollectionPage(env);
+    await refreshReelLibraryManifest(env);
+  }
+  return json({
+    ok: refreshed.length === rows.results.length,
+    refreshed: refreshed.length,
+    aliases,
+    requested: rows.results.length,
+    next_after: nextAfter,
+    complete: !nextAfter,
+  });
+}
+
 async function handleSignedThumbnailDownload(request: Request, env: Env, jobId: string): Promise<Response> {
   if (!env.DOWNLOAD_SIGNING_KEY) return json({ error: "Downloads are not configured" }, { status: 503 });
   const url = new URL(request.url);
@@ -6749,6 +6808,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/integration/reel-library/self-test" && request.method === "POST") return handleReelLibrarySelfTest(request, env);
     if (url.pathname === "/integration/reel-library/repair-artifacts" && request.method === "POST") return handleReelLibraryArtifactRepair(request, env);
     if (url.pathname === "/integration/reel-library/refresh-streaming" && request.method === "POST") return handleReelLibraryStreamingRepair(request, env);
+    if (url.pathname === "/integration/reel-library/reconcile-resources" && request.method === "POST") return handleReelLibraryResourceReconciliation(request, env);
     const libraryMedia = url.pathname.match(/^\/integration\/reel-library\/jobs\/([^/]+)\/(video|audio)$/);
     if (libraryMedia && request.method === "POST") return handleReelLibraryMediaLink(request, env, libraryMedia[1], libraryMedia[2] as "video" | "audio");
     const libraryCarousel = url.pathname.match(/^\/integration\/reel-library\/jobs\/([^/]+)\/carousel$/);
