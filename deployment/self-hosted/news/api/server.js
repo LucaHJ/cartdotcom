@@ -1,5 +1,6 @@
-import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { createServer, request as createHttpRequest } from "node:http";
+import { createReadStream } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
@@ -7,6 +8,8 @@ import pg from "pg";
 import { WebSocketServer } from "ws";
 import { createPredictionApi } from "./predictions.js";
 import { createAnalyticsApi } from "./analytics.js";
+import { createRelationshipApi } from "./relationships.js";
+import { createStrategyApi } from "./strategies.js";
 import { processingAuthority } from "./common/authority.js";
 
 const { Pool } = pg;
@@ -16,7 +19,12 @@ const dashboardTokenFile = process.env.DASHBOARD_TOKEN_FILE;
 const runtimeControlTokenFile = process.env.RUNTIME_CONTROL_TOKEN_FILE;
 const codexAuthRotatorUrl = process.env.CODEX_AUTH_ROTATOR_URL || "http://auth-rotator:3011/rotate";
 const corpusRoot = path.resolve(process.env.ARTICLE_CORPUS_ROOT || "/data/article-corpus");
+const imdbHistoryRoot = path.resolve(process.env.IMDB_HISTORY_ROOT || "/data/imdb-history");
 const mutationsEnabled = /^(1|true|yes)$/i.test(process.env.API_MUTATIONS_ENABLED || "false");
+const codexParallelCapacity = Math.max(1, Math.min(4, Number(process.env.CODEX_PARALLEL_CAPACITY || 4)));
+const ibkrCodexPrefix = "/backend/ibkr_codex";
+const ibkrCodexOrigin = new URL(process.env.IBKR_CODEX_ORIGIN || "http://ibkr-api:3000");
+const ibkrGatewayOrigin = new URL(process.env.IBKR_GATEWAY_ORIGIN || "http://ibkr-gateway:6080");
 
 if (!passwordFile) {
   throw new Error("PGPASSWORD_FILE is required");
@@ -38,6 +46,8 @@ const pool = new Pool({
 });
 const predictions = createPredictionApi(pool);
 const analytics = createAnalyticsApi(pool);
+const relationships = createRelationshipApi(pool);
+const strategies = createStrategyApi(pool);
 
 function json(response, status, payload) {
   response.writeHead(status, {
@@ -97,6 +107,83 @@ function html(response, content) {
   response.end(content);
 }
 
+function proxiedPath(requestUrl, prefix) {
+  const incoming = new URL(requestUrl || "/", "http://localhost");
+  const pathname = incoming.pathname.slice(prefix.length) || "/";
+  return `${pathname.startsWith("/") ? pathname : `/${pathname}`}${incoming.search}`;
+}
+
+function proxyHttpRequest(request, response, origin, prefix) {
+  return new Promise((resolve, reject) => {
+    const targetPath = proxiedPath(request.url, prefix);
+    const upstream = createHttpRequest({
+      protocol: origin.protocol,
+      hostname: origin.hostname,
+      port: origin.port,
+      method: request.method,
+      path: targetPath,
+      headers: { ...request.headers, host: origin.host },
+    }, (upstreamResponse) => {
+      response.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.statusMessage, upstreamResponse.headers);
+      upstreamResponse.pipe(response);
+      upstreamResponse.on("end", resolve);
+    });
+    upstream.on("error", reject);
+    request.on("aborted", () => upstream.destroy());
+    request.pipe(upstream);
+  });
+}
+
+async function gatewaySessionValid(request) {
+  const result = await fetch(new URL("/internal/validation/verify", ibkrCodexOrigin), {
+    headers: request.headers.cookie ? { cookie: request.headers.cookie } : {},
+    signal: AbortSignal.timeout(5_000),
+  }).catch(() => null);
+  return Boolean(result?.ok);
+}
+
+function writeUpgradeResponse(socket, upstreamResponse) {
+  const lines = [`HTTP/1.1 ${upstreamResponse.statusCode || 101} ${upstreamResponse.statusMessage || "Switching Protocols"}`];
+  for (let index = 0; index < upstreamResponse.rawHeaders.length; index += 2) {
+    lines.push(`${upstreamResponse.rawHeaders[index]}: ${upstreamResponse.rawHeaders[index + 1]}`);
+  }
+  lines.push("", "");
+  socket.write(lines.join("\r\n"));
+}
+
+async function proxyGatewayUpgrade(request, socket, head) {
+  if (!await gatewaySessionValid(request)) {
+    socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  const gatewayPrefix = `${ibkrCodexPrefix}/gateway`;
+  const upstream = createHttpRequest({
+    protocol: ibkrGatewayOrigin.protocol,
+    hostname: ibkrGatewayOrigin.hostname,
+    port: ibkrGatewayOrigin.port,
+    method: "GET",
+    path: proxiedPath(request.url, gatewayPrefix),
+    headers: { ...request.headers, host: ibkrGatewayOrigin.host },
+  });
+  upstream.on("upgrade", (upstreamResponse, upstreamSocket, upstreamHead) => {
+    writeUpgradeResponse(socket, upstreamResponse);
+    if (head?.length) upstreamSocket.write(head);
+    if (upstreamHead?.length) socket.write(upstreamHead);
+    upstreamSocket.pipe(socket);
+    socket.pipe(upstreamSocket);
+  });
+  upstream.on("response", (upstreamResponse) => {
+    socket.write(`HTTP/1.1 ${upstreamResponse.statusCode || 502} ${upstreamResponse.statusMessage || "Bad Gateway"}\r\nConnection: close\r\n\r\n`);
+    socket.destroy();
+  });
+  upstream.on("error", () => {
+    socket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+  });
+  upstream.end();
+}
+
 function corpusObjectPath(objectKey) {
   const candidate = path.resolve(corpusRoot, objectKey);
   const relative = path.relative(corpusRoot, candidate);
@@ -106,13 +193,84 @@ function corpusObjectPath(objectKey) {
   return candidate;
 }
 
+function imdbHistoryObjectPath(urlPathname) {
+  const prefix = "/api/imdb/history/";
+  const encodedObjectKey = urlPathname.slice(prefix.length);
+  let objectKey;
+  try {
+    objectKey = decodeURIComponent(encodedObjectKey);
+  } catch {
+    throw new Error("Invalid IMDb history object key");
+  }
+  if (objectKey.includes("\0")) {
+    throw new Error("Invalid IMDb history object key");
+  }
+  const candidate = path.resolve(imdbHistoryRoot, objectKey);
+  const relative = path.relative(imdbHistoryRoot, candidate);
+  if (!objectKey || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Invalid IMDb history object key");
+  }
+  return candidate;
+}
+
+async function serveImdbHistory(request, response, url) {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    response.writeHead(405, {
+      "allow": "GET, HEAD",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    });
+    response.end();
+    return;
+  }
+
+  let filePath;
+  try {
+    filePath = imdbHistoryObjectPath(url.pathname);
+  } catch {
+    return json(response, 400, { error: "Invalid IMDb history path" });
+  }
+
+  let fileStat;
+  try {
+    fileStat = await stat(filePath);
+  } catch {
+    return json(response, 404, { error: "IMDb history object not found" });
+  }
+
+  if (!fileStat.isFile()) {
+    return json(response, 404, { error: "IMDb history object not found" });
+  }
+
+  const headers = {
+    "content-type": filePath.endsWith(".json") || filePath.endsWith(".json.gz") ? "application/json; charset=utf-8" : "application/octet-stream",
+    "content-length": String(fileStat.size),
+    "cache-control": "public, max-age=300",
+    "x-content-type-options": "nosniff",
+  };
+  if (filePath.endsWith(".json.gz") && request.headers["x-imdb-history-raw-gzip"] !== "1") {
+    headers["content-encoding"] = "gzip";
+  }
+
+  response.writeHead(200, headers);
+  if (request.method === "HEAD") {
+    response.end();
+    return;
+  }
+
+  createReadStream(filePath).on("error", (error) => {
+    console.error("Failed to stream IMDb history object", error);
+    response.destroy(error);
+  }).pipe(response);
+}
+
 async function databaseCounts() {
   const result = await pool.query(`
     SELECT
       (SELECT count(*)::integer FROM articles) AS articles,
       (SELECT count(*)::integer FROM research_jobs) AS jobs,
       (SELECT count(*)::integer FROM research_results) AS results,
-      (SELECT count(*)::integer FROM prediction_outcomes) AS predictions,
+      (SELECT count(*)::integer FROM prediction_outcomes WHERE direction IN ('bullish', 'bearish')) AS predictions,
       (SELECT count(*)::integer FROM research_jobs WHERE status = 'pending') AS pending_jobs,
       (SELECT count(*)::integer FROM research_jobs WHERE status = 'running') AS running_jobs
   `);
@@ -133,16 +291,68 @@ async function operationTelemetry() {
         count(*) FILTER (WHERE research_jobs.status = 'failed')::integer AS failed,
         avg(research_jobs.synthesis_duration_seconds) FILTER (WHERE research_jobs.status = 'succeeded') AS average_synthesis_seconds,
         count(research_jobs.synthesis_duration_seconds) FILTER (WHERE research_jobs.status = 'succeeded')::integer AS synthesis_samples,
+        avg(research_jobs.synthesis_duration_seconds) FILTER (
+          WHERE research_jobs.status = 'succeeded' AND research_jobs.processing_profile = 'collection-v1'
+        ) AS average_collection_seconds,
+        count(research_jobs.synthesis_duration_seconds) FILTER (
+          WHERE research_jobs.status = 'succeeded' AND research_jobs.processing_profile = 'collection-v1'
+        )::integer AS collection_samples,
         avg(research_jobs.prediction_delay_seconds) FILTER (
           WHERE research_jobs.status = 'succeeded'
             AND research_jobs.prediction_delay_eligible = 1
             AND coalesce(articles.source_id, '') != 'yahoo-finance'
         ) AS average_prediction_delay_seconds,
+        avg(greatest(0, extract(epoch FROM (articles.discovered_at - articles.published_at)))) FILTER (
+          WHERE research_jobs.status = 'succeeded'
+            AND research_jobs.prediction_delay_eligible = 1
+            AND coalesce(articles.source_id, '') != 'yahoo-finance'
+            AND articles.published_at IS NOT NULL
+        ) AS average_acquisition_delay_seconds,
+        avg(greatest(0, extract(epoch FROM (research_jobs.finished_at - articles.discovered_at)))) FILTER (
+          WHERE research_jobs.status = 'succeeded'
+            AND research_jobs.prediction_delay_eligible = 1
+            AND coalesce(articles.source_id, '') != 'yahoo-finance'
+            AND research_jobs.finished_at IS NOT NULL
+        ) AS average_post_acquisition_delay_seconds,
         count(research_jobs.prediction_delay_seconds) FILTER (
           WHERE research_jobs.status = 'succeeded'
             AND research_jobs.prediction_delay_eligible = 1
             AND coalesce(articles.source_id, '') != 'yahoo-finance'
-        )::integer AS prediction_delay_samples
+        )::integer AS prediction_delay_samples,
+        count(*) FILTER (
+          WHERE research_jobs.status = 'succeeded'
+            AND research_jobs.prediction_delay_eligible = 1
+            AND coalesce(articles.source_id, '') != 'yahoo-finance'
+            AND articles.published_at IS NULL
+        )::integer AS prediction_delay_missing_publication_samples,
+        avg(research_jobs.prediction_delay_seconds) FILTER (
+          WHERE research_jobs.status = 'succeeded'
+            AND research_jobs.prediction_delay_eligible = 1
+            AND articles.source_id = 'yahoo-finance'
+        ) AS average_yahoo_prediction_delay_seconds,
+        avg(greatest(0, extract(epoch FROM (articles.discovered_at - articles.published_at)))) FILTER (
+          WHERE research_jobs.status = 'succeeded'
+            AND research_jobs.prediction_delay_eligible = 1
+            AND articles.source_id = 'yahoo-finance'
+            AND articles.published_at IS NOT NULL
+        ) AS average_yahoo_acquisition_delay_seconds,
+        avg(greatest(0, extract(epoch FROM (research_jobs.finished_at - articles.discovered_at)))) FILTER (
+          WHERE research_jobs.status = 'succeeded'
+            AND research_jobs.prediction_delay_eligible = 1
+            AND articles.source_id = 'yahoo-finance'
+            AND research_jobs.finished_at IS NOT NULL
+        ) AS average_yahoo_post_acquisition_delay_seconds,
+        count(research_jobs.prediction_delay_seconds) FILTER (
+          WHERE research_jobs.status = 'succeeded'
+            AND research_jobs.prediction_delay_eligible = 1
+            AND articles.source_id = 'yahoo-finance'
+        )::integer AS yahoo_prediction_delay_samples,
+        count(*) FILTER (
+          WHERE research_jobs.status = 'succeeded'
+            AND research_jobs.prediction_delay_eligible = 1
+            AND articles.source_id = 'yahoo-finance'
+            AND articles.published_at IS NULL
+        )::integer AS yahoo_prediction_delay_missing_publication_samples
       FROM research_jobs
       INNER JOIN articles ON articles.id = research_jobs.article_id
     `),
@@ -160,6 +370,8 @@ async function operationTelemetry() {
   const pending = Number(row.pending || 0);
   const running = Number(row.running || 0);
   const averageSynthesis = numberOrNull(row.average_synthesis_seconds);
+  const averageCollection = numberOrNull(row.average_collection_seconds);
+  const queueAverage = averageCollection ?? averageSynthesis;
   return {
     jobs: [
       { status: "pending", count: pending },
@@ -170,10 +382,20 @@ async function operationTelemetry() {
     timing: {
       average_synthesis_seconds: averageSynthesis,
       synthesis_samples: Number(row.synthesis_samples || 0),
+      average_collection_seconds: averageCollection,
+      collection_samples: Number(row.collection_samples || 0),
       average_prediction_delay_seconds: numberOrNull(row.average_prediction_delay_seconds),
+      average_acquisition_delay_seconds: numberOrNull(row.average_acquisition_delay_seconds),
+      average_post_acquisition_delay_seconds: numberOrNull(row.average_post_acquisition_delay_seconds),
       prediction_delay_samples: Number(row.prediction_delay_samples || 0),
-      estimated_queue_seconds: averageSynthesis === null ? null : Math.ceil(((pending + running) * averageSynthesis) / 8),
-      parallel_capacity: 8,
+      prediction_delay_missing_publication_samples: Number(row.prediction_delay_missing_publication_samples || 0),
+      average_yahoo_prediction_delay_seconds: numberOrNull(row.average_yahoo_prediction_delay_seconds),
+      average_yahoo_acquisition_delay_seconds: numberOrNull(row.average_yahoo_acquisition_delay_seconds),
+      average_yahoo_post_acquisition_delay_seconds: numberOrNull(row.average_yahoo_post_acquisition_delay_seconds),
+      yahoo_prediction_delay_samples: Number(row.yahoo_prediction_delay_samples || 0),
+      yahoo_prediction_delay_missing_publication_samples: Number(row.yahoo_prediction_delay_missing_publication_samples || 0),
+      estimated_queue_seconds: queueAverage === null ? null : Math.ceil(((pending + running) * queueAverage) / codexParallelCapacity),
+      parallel_capacity: codexParallelCapacity,
     },
   };
 }
@@ -217,7 +439,7 @@ async function compatibilityStatus() {
         AND research_results.symbols IS NOT NULL
         AND btrim(research_results.symbols) NOT IN ('', '[]')
     `),
-    pool.query("SELECT count(*)::integer AS count FROM prediction_outcomes"),
+    pool.query("SELECT count(*)::integer AS count FROM prediction_outcomes WHERE direction IN ('bullish', 'bearish')"),
     pool.query("SELECT content_status AS status, count(*)::integer AS count FROM articles GROUP BY content_status"),
     operationTelemetry(),
     latestSourceCheck(),
@@ -416,6 +638,13 @@ async function listQuery(sql, values = []) {
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || "/", "http://localhost");
+    if (url.pathname === `${ibkrCodexPrefix}/gateway` || url.pathname.startsWith(`${ibkrCodexPrefix}/gateway/`)) {
+      if (!await gatewaySessionValid(request)) return json(response, 403, { error: "invalid_or_expired_validation_session" });
+      return await proxyHttpRequest(request, response, ibkrGatewayOrigin, `${ibkrCodexPrefix}/gateway`);
+    }
+    if (url.pathname === ibkrCodexPrefix || url.pathname.startsWith(`${ibkrCodexPrefix}/`)) {
+      return await proxyHttpRequest(request, response, ibkrCodexOrigin, ibkrCodexPrefix);
+    }
 
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
       return html(response, dashboardHtml);
@@ -428,6 +657,10 @@ const server = createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/health/ready") {
       await pool.query("SELECT 1");
       return json(response, 200, { status: "ready", database: "available" });
+    }
+
+    if (url.pathname.startsWith("/api/imdb/history/")) {
+      return serveImdbHistory(request, response, url);
     }
 
     if (url.pathname.startsWith("/api/") && !isAuthorized(request)) {
@@ -489,6 +722,28 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/source-stats") {
       return json(response, 200, { ok: true, sources: await analytics.sourceStats() });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/article-analysis/status") {
+      return json(response, 200, { ok: true, ...(await relationships.status()) });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/article-analysis/relationships") {
+      return json(response, 200, { ok: true, ...(await relationships.relationships(url)) });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/article-analysis/trend") {
+      return json(response, 200, { ok: true, ...(await relationships.trend(url)) });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/strategies/equal-dollar-cull") {
+      return json(response, 200, {
+        ok: true,
+        simulation: await strategies.equalDollarCull(
+          url.searchParams.get("initial_balance"),
+          url.searchParams.get("hold_days"),
+        ),
+      });
     }
 
     if (request.method === "GET" && url.pathname === "/api/source-activity") {
@@ -807,6 +1062,13 @@ webSocketServer.on("connection", (socket) => {
 
 server.on("upgrade", (request, socket, head) => {
   const url = new URL(request.url || "/", "http://localhost");
+  if (url.pathname.startsWith(`${ibkrCodexPrefix}/gateway/`)) {
+    proxyGatewayUpgrade(request, socket, head).catch(() => {
+      socket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+    });
+    return;
+  }
   if (url.pathname !== "/api/events" || !isAuthorized(request)) {
     socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
     socket.destroy();

@@ -10460,7 +10460,9 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/backend/ibkr_codex" || url.pathname.startsWith("/backend/ibkr_codex/")) {
-      const validationFlow = url.pathname === "/backend/ibkr_codex/account-validation"
+      const validationFlow = url.pathname === "/backend/ibkr_codex"
+        || url.pathname === "/backend/ibkr_codex/"
+        || url.pathname === "/backend/ibkr_codex/account-validation"
         || url.pathname.startsWith("/backend/ibkr_codex/gateway/");
       if (!validationFlow) {
         const unauthorized = requireAuthorized(request, env);
