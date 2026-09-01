@@ -18,6 +18,10 @@ const entries = [
   ["ticker_pipeline", "/api/diagnostics/ticker-pipeline"],
   ["source_activity", "/api/source-activity?mode=day"],
   ["source_stats", "/api/source-stats"],
+  ["article_analysis_status", "/api/article-analysis/status"],
+  ["article_analysis_relationships", "/api/article-analysis/relationships?day=1&min_confidence=50&limit=100"],
+  ["article_analysis_trend", "/api/article-analysis/trend?kind=overall&max_day=365"],
+  ["strategy_equal_dollar_cull", "/api/strategies/equal-dollar-cull?initial_balance=100"],
 ];
 const responses = Object.fromEntries(entries.map(([key, path]) => [key, {
   request_path: path,
@@ -66,6 +70,11 @@ assert.equal(response.status, 200);
 assert.equal(response.headers.get("x-news-signal-mode"), "snapshot");
 assert.equal(response.headers.get("x-news-signal-snapshot-at"), snapshot.generated_at);
 assert.deepEqual(await response.json(), { ok: true, fixture: "offline-status" });
+
+response = await request("/api/article-analysis/relationships?day=2&min_confidence=50&limit=100", {
+  headers: { authorization: `Bearer ${dashboardToken}` },
+});
+assert.equal(response.status, 503, "a snapshot must not answer a different relationship query");
 
 response = await request("/api/ingest", {
   method: "POST",

@@ -173,6 +173,11 @@ type ResearchResultFields = {
   event_blurb?: string;
 };
 
+type CollectionResultFields = {
+  investment_relevant?: boolean;
+  tickers?: Array<{ company?: string; symbol?: string }>;
+};
+
 type ImpactDetail = {
   kind?: "company" | "industry" | "supply_chain" | "market";
   name?: string;
@@ -367,6 +372,7 @@ export interface Env {
   EXPERIMENT_REPORT_EMAIL_FROM?: string;
   EXPERIMENT_REPORT_EMAIL_TO?: string;
   RESEND_API_KEY?: string;
+  IBKR_NOTIFICATION_TOKEN?: string;
   SNAPSHOT_UPLOAD_TOKEN?: string;
   OFFSITE_BACKUP_TOKEN?: string;
   SELF_HOSTED_API_ORIGIN?: string;
@@ -412,6 +418,10 @@ const DASHBOARD_SNAPSHOT_KEYS = [
   "ticker_pipeline",
   "source_activity",
   "source_stats",
+  "article_analysis_status",
+  "article_analysis_relationships",
+  "article_analysis_trend",
+  "strategy_equal_dollar_cull",
 ] as const;
 const DASHBOARD_SNAPSHOT_ROUTE_KEYS: Record<string, typeof DASHBOARD_SNAPSHOT_KEYS[number]> = {
   "/api/status": "status",
@@ -427,6 +437,10 @@ const DASHBOARD_SNAPSHOT_ROUTE_KEYS: Record<string, typeof DASHBOARD_SNAPSHOT_KE
   "/api/diagnostics/ticker-pipeline": "ticker_pipeline",
   "/api/source-activity": "source_activity",
   "/api/source-stats": "source_stats",
+  "/api/article-analysis/status": "article_analysis_status",
+  "/api/article-analysis/relationships": "article_analysis_relationships",
+  "/api/article-analysis/trend": "article_analysis_trend",
+  "/api/strategies/equal-dollar-cull": "strategy_equal_dollar_cull",
 };
 
 let dashboardSnapshotCache: { loadedAt: number; snapshot: DashboardSnapshot } | null = null;
@@ -544,8 +558,8 @@ const LEGACY_STALE_BACKFILL_THRESHOLD_MINUTES = 5;
 const SOURCE_EXPANSION_CUTOFF = "2026-07-18T08:28:55Z";
 const BRISBANE_OFFSET_MS = 10 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
-const RESEARCH_CONTAINER_COUNT = 8;
-const QUEUE_DRAIN_MAX_JOBS = 8;
+const RESEARCH_CONTAINER_COUNT = 4;
+const QUEUE_DRAIN_MAX_JOBS = 4;
 const QUEUE_DRAIN_MAX_MS = 4 * 60 * 1000;
 const MODEL_EXPERIMENT_SAMPLE_SIZE = 1000;
 const MODEL_EXPERIMENT_MAX_ATTEMPTS = 3;
@@ -993,6 +1007,8 @@ const DASHBOARD_HTML = `<!doctype html>
     body {
       margin: 0;
       min-height: 100vh;
+      max-width: 100%;
+      overflow-x: hidden;
       background: var(--bg);
       color: var(--text);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -1136,6 +1152,7 @@ const DASHBOARD_HTML = `<!doctype html>
     body.snapshot-mode [data-heatmap-direction],
     body.snapshot-mode [data-outcome-direction],
     body.snapshot-mode [data-reset-prediction-filters],
+    body.snapshot-mode #analysis-reset-view,
     body.snapshot-mode .source-view-button,
     body.snapshot-mode #source-period-previous,
     body.snapshot-mode #source-period-next,
@@ -1478,8 +1495,11 @@ const DASHBOARD_HTML = `<!doctype html>
     .tabs {
       display: flex;
       gap: 8px;
+      max-width: 100%;
       margin: 12px 0 14px;
       border-bottom: 1px solid var(--line);
+      overflow-x: auto;
+      overflow-y: hidden;
     }
 
     .tab {
@@ -1489,6 +1509,7 @@ const DASHBOARD_HTML = `<!doctype html>
       color: var(--muted);
       padding: 11px 8px 9px;
       cursor: pointer;
+      flex: 0 0 auto;
       font-weight: 700;
     }
 
@@ -2134,6 +2155,102 @@ const DASHBOARD_HTML = `<!doctype html>
     .source-activity-chart svg { display: block; width: 100%; min-width: 780px; height: 100%; }
     .source-stats-table { padding: 14px 18px 18px; }
 
+    .analysis-controls {
+      display: flex;
+      align-items: end;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-alt);
+    }
+
+    .analysis-control { display: grid; gap: 5px; }
+    .analysis-control label { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .analysis-control select,
+    .analysis-control input {
+      min-width: 150px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 9px;
+      background: var(--surface-input);
+      color: var(--text);
+    }
+    .analysis-percent-input { display: flex; align-items: center; gap: 7px; }
+    .analysis-percent-input input { width: 130px; min-width: 130px; }
+    .analysis-percent-input span { color: var(--muted); }
+
+    .analysis-progress { height: 3px; overflow: hidden; background: var(--surface-alt); }
+    .analysis-progress span { display: block; width: 34%; height: 100%; background: var(--blue); animation: analysisProgress 900ms ease-in-out infinite; }
+    @keyframes analysisProgress { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+
+    .analysis-status {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      border-bottom: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .analysis-status-item { min-width: 0; padding: 12px 14px; background: var(--panel); }
+    .analysis-status-value { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .analysis-status-label { margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .analysis-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; padding: 14px; }
+    .analysis-block { min-width: 0; border: 1px solid var(--line); background: var(--panel); }
+    .analysis-block.wide { grid-column: 1 / -1; }
+    .analysis-block-title { padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel-soft); font-size: 13px; font-weight: 750; }
+    .analysis-block-title.with-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .analysis-block-title .btn { flex: 0 0 auto; padding: 5px 9px; font-size: 12px; }
+    .analysis-table-wrap { max-height: 410px; overflow: auto; }
+    .analysis-table-wrap table { min-width: 650px; }
+    .analysis-table-wrap tr[data-analysis-select] { cursor: pointer; }
+    .analysis-table-wrap tr[data-analysis-select]:hover { background: var(--surface-hover); }
+    .analysis-table-wrap tr.selected { background: var(--blue-bg); }
+    .analysis-effect { font-variant-numeric: tabular-nums; font-weight: 700; }
+    .analysis-effect.positive { color: var(--green); }
+    .analysis-effect.negative { color: var(--red); }
+    .analysis-trend-chart { width: 100%; height: 340px; overflow-x: auto; background: var(--chart-bg); }
+    .analysis-trend-chart svg { display: block; width: 100%; min-width: 760px; height: 100%; }
+    .analysis-note { padding: 10px 14px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .analysis-grouped-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 14px; }
+    .analysis-group-table { min-width: 0; }
+    .analysis-group-table-title { padding: 9px 11px; border-bottom: 1px solid var(--line); background: var(--panel-soft); font-size: 12px; font-weight: 750; }
+    .analysis-group-table .analysis-table-wrap { max-height: 320px; }
+    .analysis-confidence { font-variant-numeric: tabular-nums; font-weight: 700; text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+    .analysis-help { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+    .analysis-combined-table table { min-width: 1080px; }
+    .analysis-factors { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 330px; }
+    .analysis-factor { display: inline-flex; gap: 4px; align-items: baseline; white-space: nowrap; }
+    .analysis-factor-label { color: var(--muted); font-size: 10px; font-weight: 750; text-transform: uppercase; }
+
+    .strategy-controls {
+      display: flex;
+      align-items: end;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-alt);
+    }
+
+    .strategy-control { display: grid; gap: 5px; }
+    .strategy-control label { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .strategy-control input, .strategy-control select {
+      width: 180px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 9px;
+      background: var(--surface-input);
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .strategy-control-note { max-width: 620px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .strategy-chart { width: 100%; height: 390px; overflow-x: auto; background: var(--chart-bg); }
+    .strategy-chart svg { display: block; width: 100%; min-width: 780px; height: 100%; }
+    .strategy-note { padding: 10px 18px 14px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
     @media (max-width: 1050px) {
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .layout { grid-template-columns: 1fr; }
@@ -2152,6 +2269,8 @@ const DASHBOARD_HTML = `<!doctype html>
       .confidence-heatmap td:nth-child(3) { display: table-cell; }
       .prediction-outcomes-table th:nth-child(3),
       .prediction-outcomes-table td:nth-child(3) { display: table-cell; }
+      .analysis-table th:nth-child(3),
+      .analysis-table td:nth-child(3) { display: table-cell; }
       #source-stats th:nth-child(3),
       #source-stats td:nth-child(3) { display: table-cell; }
       .prediction-filter-status { width: 100%; margin-left: 0; }
@@ -2159,7 +2278,12 @@ const DASHBOARD_HTML = `<!doctype html>
       .prediction-trend-meta { text-align: left; }
       .source-activity-heading { align-items: flex-start; flex-direction: column; }
       .source-hourly-widget { grid-template-columns: 1fr; }
+      .strategy-control, .strategy-control input, .strategy-control select { width: 100%; }
       .source-hourly-note { grid-column: auto; }
+      .analysis-status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .analysis-grid { grid-template-columns: 1fr; }
+      .analysis-block.wide { grid-column: auto; }
+      .analysis-grouped-sections { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -2201,6 +2325,8 @@ const DASHBOARD_HTML = `<!doctype html>
 
     <nav class="tabs" aria-label="Dashboard sections">
       <button class="tab active" id="simulation-tab" type="button">Prediction Accuracy</button>
+      <button class="tab" id="analysis-tab" type="button">Article Relationships</button>
+      <button class="tab" id="strategies-tab" type="button">Strategies</button>
       <button class="tab" id="overview-tab" type="button">Overview</button>
       <button class="tab" id="sources-tab" type="button">Sources</button>
     </nav>
@@ -2314,6 +2440,84 @@ const DASHBOARD_HTML = `<!doctype html>
       </section>
     </section>
 
+    <section id="analysis-panel" class="hidden">
+      <section class="panel" style="margin-top:14px">
+        <div class="model-blurb">Article Relationships compares signed ticker price movement with article content, structure, source and timing. Bullish and bearish labels are ignored. Results are exploratory associations and may reflect confounding, repeated coverage and multiple comparisons rather than causation.</div>
+        <div class="panel-header">
+          <div class="panel-title">Article and Market Relationship Explorer</div>
+          <div class="panel-meta" id="analysis-meta">Feature index is loading</div>
+        </div>
+        <div class="analysis-controls">
+          <div class="analysis-control">
+            <label for="analysis-horizon" title="Select an exact recorded day after article publication. Movement is measured from the article-time baseline to that day.">Price horizon</label>
+            <select id="analysis-horizon">
+              <option value="1" selected>Day 1</option>
+            </select>
+          </div>
+          <div class="analysis-control">
+            <label for="analysis-min-confidence" title="Hide relationships whose displayed sample-size confidence is below this percentage. Confidence is samples divided by samples plus 100, multiplied by 100 and rounded to a whole percentage.">Minimum confidence</label>
+            <div class="analysis-percent-input">
+              <input id="analysis-min-confidence" type="number" min="50" max="100" step="1" value="50" inputmode="numeric" aria-label="Minimum sample confidence percentage">
+              <span aria-hidden="true">%</span>
+            </div>
+          </div>
+        </div>
+        <div class="analysis-progress" id="analysis-progress" role="progressbar" aria-label="Updating article relationship view" hidden><span></span></div>
+        <div class="analysis-status" id="analysis-status"></div>
+        <div class="analysis-grid">
+          <section class="analysis-block wide">
+            <div class="analysis-block-title with-action">
+              <span>Movement Over Time</span>
+              <button class="btn" id="analysis-reset-view" type="button">Reset view</button>
+            </div>
+            <div class="analysis-trend-chart" id="analysis-trend-chart"></div>
+            <div class="analysis-note" id="analysis-trend-note">Select a relationship below to compare its daily movement.</div>
+          </section>
+          <section class="analysis-block wide">
+            <div class="analysis-block-title"><span class="analysis-help" title="Highest-performing intersections across every stored price horizon. Combinations cover publisher or source type, impacted company or ticker, publication weekday, word-count band, and Day 1 through the latest qualifying horizon, subject to the selected sample-confidence threshold.">All-Horizon Combined Relationships</span></div>
+            <div class="analysis-table-wrap analysis-combined-table" id="analysis-combined"></div>
+          </section>
+          <section class="analysis-block wide">
+            <div class="analysis-block-title"><span class="analysis-help" title="Pearson correlations and regression slopes between numeric article attributes and signed ticker movement at the selected price horizon.">Numeric Correlations</span></div>
+            <div class="analysis-table-wrap" id="analysis-numeric"></div>
+          </section>
+          <section class="analysis-block wide">
+            <div class="analysis-block-title"><span class="analysis-help" title="Average signed ticker movement grouped by categorical article attributes. Each category has its own independently ranked table.">Grouped Relationships</span></div>
+            <div id="analysis-grouped"></div>
+          </section>
+          <section class="analysis-block wide">
+            <div class="analysis-block-title"><span class="analysis-help" title="Relationships for normalized words and adjacent two-word phrases extracted from stored article plaintext. Up to 192 words and 96 phrases are indexed per article.">Words and Phrases</span></div>
+            <div class="analysis-table-wrap" id="analysis-lexical"></div>
+          </section>
+        </div>
+      </section>
+    </section>
+
+    <section id="strategies-panel" class="hidden">
+      <section class="panel" style="margin-top:14px">
+        <div class="model-blurb">Equal $1 Ticker Culling buys USD 1 of every actionable ticker attached to every article at its stored publication-time baseline price. Each article-ticker pair remains a separate fractional-share lot. When less than USD 1 remains in cash, the lowest-value open lot is sold first; additional low-value lots are sold only when needed to fund the next purchase. A configurable holding limit also closes each lot at its first stored price on or after that age. The chart is a historical data simulation and excludes commissions, spread, slippage, FX, tax, dividends and market-hours execution constraints.</div>
+        <div class="panel-header">
+          <div class="panel-title">Equal $1 Ticker Culling</div>
+          <div class="panel-meta" id="strategy-meta">Strategy history is loading</div>
+        </div>
+        <div class="strategy-controls">
+          <div class="strategy-control">
+            <label for="strategy-initial-balance" title="Starting cash for the simulation. Every article-ticker purchase uses exactly USD 1 until cash must be restored by culling the lowest-value open lots.">Initial balance (USD)</label>
+            <input id="strategy-initial-balance" type="number" min="1" max="1000000" step="1" value="100" inputmode="decimal" aria-label="Strategy initial balance in US dollars">
+          </div>
+          <div class="strategy-control">
+            <label for="strategy-hold-period" title="Maximum age of an investment before it is sold at its first stored price observation on or after that age.">Auto-sell after</label>
+            <select id="strategy-hold-period" aria-label="Strategy maximum holding period">
+              <option value="">Maximum available</option>
+            </select>
+          </div>
+          <div class="strategy-control-note">Changing either control reruns the same chronological history. The default holding limit always matches the age of the oldest call; shorter limits realise each lot sooner.</div>
+        </div>
+        <div class="strategy-chart" id="strategy-chart" aria-live="polite"></div>
+        <div class="strategy-note" id="strategy-note">Every plotted point is the simulated portfolio percentage change from its initial balance at the end of a Brisbane calendar day.</div>
+      </section>
+    </section>
+
     <section id="simulation-panel">
       <section class="panel">
         <div class="model-blurb">Prediction Accuracy tracks every bullish or bearish ticker prediction against real market movement. Price collection continues for every call at 12h, 24h, 48h, 1w, 2w, 1m, 3m, 6m, 1y, 2y, 3y, and 4y. Every call remains an independent observation for its full lifetime; later calls do not alter or exclude earlier results.</div>
@@ -2376,10 +2580,14 @@ const DASHBOARD_HTML = `<!doctype html>
     const sourceStatsMeta = document.getElementById("source-stats-meta");
     const overviewTab = document.getElementById("overview-tab");
     const simulationTab = document.getElementById("simulation-tab");
+    const analysisTab = document.getElementById("analysis-tab");
+    const strategiesTab = document.getElementById("strategies-tab");
     const sourcesTab = document.getElementById("sources-tab");
     const settingsBtn = document.getElementById("settings-btn");
     const overviewPanel = document.getElementById("overview-panel");
     const simulationPanel = document.getElementById("simulation-panel");
+    const analysisPanel = document.getElementById("analysis-panel");
+    const strategiesPanel = document.getElementById("strategies-panel");
     const settingsPanel = document.getElementById("settings-panel");
     const sourcesPanel = document.getElementById("sources-panel");
     const predictionSummaryEl = document.getElementById("prediction-summary");
@@ -2388,6 +2596,23 @@ const DASHBOARD_HTML = `<!doctype html>
     const predictionTrendMeta = document.getElementById("prediction-trend-meta");
     const predictionsEl = document.getElementById("predictions");
     const predictionsMeta = document.getElementById("predictions-meta");
+    const analysisMetaEl = document.getElementById("analysis-meta");
+    const analysisStatusEl = document.getElementById("analysis-status");
+    const analysisHorizonEl = document.getElementById("analysis-horizon");
+    const analysisMinConfidenceEl = document.getElementById("analysis-min-confidence");
+    const analysisProgressEl = document.getElementById("analysis-progress");
+    const analysisResetViewEl = document.getElementById("analysis-reset-view");
+    const analysisTrendChartEl = document.getElementById("analysis-trend-chart");
+    const analysisTrendNoteEl = document.getElementById("analysis-trend-note");
+    const analysisCombinedEl = document.getElementById("analysis-combined");
+    const analysisNumericEl = document.getElementById("analysis-numeric");
+    const analysisGroupedEl = document.getElementById("analysis-grouped");
+    const analysisLexicalEl = document.getElementById("analysis-lexical");
+    const strategyInitialBalanceEl = document.getElementById("strategy-initial-balance");
+    const strategyHoldPeriodEl = document.getElementById("strategy-hold-period");
+    const strategyChartEl = document.getElementById("strategy-chart");
+    const strategyMetaEl = document.getElementById("strategy-meta");
+    const strategyNoteEl = document.getElementById("strategy-note");
     const codexAuthFileEl = document.getElementById("codex-auth-file");
     const rotateCodexAuthBtn = document.getElementById("rotate-codex-auth-btn");
     const codexAuthStatusEl = document.getElementById("codex-auth-status");
@@ -2413,6 +2638,16 @@ const DASHBOARD_HTML = `<!doctype html>
     const eodTradesEl = document.getElementById("eod-trades");
     const eodTradesMeta = document.getElementById("eod-trades-meta");
     let predictionsLoaded = false;
+    let analysisLoaded = false;
+    let analysisLoading = false;
+    let analysisReloadPending = false;
+    let analysisReloadTimer = null;
+    let analysisSelection = { kind: "overall", feature: "", value: "", label: "Overall movement" };
+    let strategyLoaded = false;
+    let strategyLoading = false;
+    let strategyReloadPending = false;
+    let strategyReloadTimer = null;
+    let strategyRequestVersion = 0;
     let predictionSummaryData = [];
     let predictionCoverage = {};
     let predictionDailySeries = [];
@@ -2488,6 +2723,8 @@ const DASHBOARD_HTML = `<!doctype html>
       const token = tokenInput.value.trim();
       persistToken(token);
       predictionsLoaded = false;
+      analysisLoaded = false;
+      strategyLoaded = false;
       eodSimulationLoaded = false;
       syncAuthState();
       stopLiveStatusStream();
@@ -2499,6 +2736,8 @@ const DASHBOARD_HTML = `<!doctype html>
       clearStoredToken();
       tokenInput.value = "";
       predictionsLoaded = false;
+      analysisLoaded = false;
+      strategyLoaded = false;
       eodSimulationLoaded = false;
       syncAuthState();
       stopLiveStatusStream();
@@ -2515,8 +2754,37 @@ const DASHBOARD_HTML = `<!doctype html>
     rotateCodexAuthBtn.addEventListener("click", rotateCodexAuth);
     overviewTab.addEventListener("click", () => setTab("overview"));
     simulationTab.addEventListener("click", () => setTab("simulation"));
+    analysisTab.addEventListener("click", () => setTab("analysis"));
+    strategiesTab.addEventListener("click", () => setTab("strategies"));
     sourcesTab.addEventListener("click", () => setTab("sources"));
     settingsBtn.addEventListener("click", () => setTab("settings"));
+    strategyInitialBalanceEl.addEventListener("input", scheduleStrategyRefresh);
+    strategyInitialBalanceEl.addEventListener("change", () => loadStrategy(true));
+    strategyHoldPeriodEl.addEventListener("change", () => loadStrategy(true));
+    analysisHorizonEl.addEventListener("change", scheduleArticleAnalysisRefresh);
+    analysisMinConfidenceEl.addEventListener("input", scheduleArticleAnalysisRefresh);
+    analysisMinConfidenceEl.addEventListener("change", () => {
+      minimumAnalysisConfidence();
+      scheduleArticleAnalysisRefresh();
+    });
+    analysisResetViewEl.addEventListener("click", () => {
+      if (snapshotMode) return;
+      analysisSelection = { kind: "overall", feature: "", value: "", label: "Overall movement" };
+      for (const item of analysisPanel.querySelectorAll("[data-analysis-select]")) item.classList.remove("selected");
+      loadArticleAnalysisTrend();
+    });
+    analysisPanel.addEventListener("click", (event) => {
+      const row = event.target instanceof Element ? event.target.closest("[data-analysis-select]") : null;
+      if (!row || snapshotMode) return;
+      analysisSelection = {
+        kind: row.getAttribute("data-analysis-kind") || "overall",
+        feature: row.getAttribute("data-analysis-feature") || "",
+        value: row.getAttribute("data-analysis-value") || "",
+        label: row.getAttribute("data-analysis-label") || "Selected relationship",
+      };
+      for (const item of analysisPanel.querySelectorAll("[data-analysis-select]")) item.classList.toggle("selected", item === row);
+      loadArticleAnalysisTrend();
+    });
     sourcesPanel.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target : null;
       const viewButton = target?.closest("[data-source-view]");
@@ -2565,17 +2833,148 @@ const DASHBOARD_HTML = `<!doctype html>
       const simulation = tab === "simulation";
       const settings = tab === "settings";
       const sources = tab === "sources";
-      const overview = !simulation && !settings && !sources;
+      const analysis = tab === "analysis";
+      const strategies = tab === "strategies";
+      const overview = !simulation && !settings && !sources && !analysis && !strategies;
       overviewTab.classList.toggle("active", overview);
       simulationTab.classList.toggle("active", simulation);
+      analysisTab.classList.toggle("active", analysis);
+      strategiesTab.classList.toggle("active", strategies);
       sourcesTab.classList.toggle("active", sources);
       overviewPanel.classList.toggle("hidden", !overview);
       simulationPanel.classList.toggle("hidden", !simulation);
+      analysisPanel.classList.toggle("hidden", !analysis);
+      strategiesPanel.classList.toggle("hidden", !strategies);
       settingsPanel.classList.toggle("hidden", !settings);
       sourcesPanel.classList.toggle("hidden", !sources);
       settingsBtn.classList.toggle("active", settings);
       if (simulation && !predictionsLoaded) loadPredictions();
       if (sources) loadSourceStats();
+      if (analysis && !analysisLoaded) loadArticleAnalysis();
+      if (strategies && !strategyLoaded) loadStrategy();
+    }
+
+    function strategyInitialBalance() {
+      const parsed = Number(strategyInitialBalanceEl.value);
+      const balance = Number.isFinite(parsed) ? Math.min(1000000, Math.max(1, Math.round(parsed * 100) / 100)) : 100;
+      strategyInitialBalanceEl.value = String(balance);
+      return balance;
+    }
+
+    function scheduleStrategyRefresh() {
+      if (snapshotMode) return;
+      if (strategyReloadTimer) clearTimeout(strategyReloadTimer);
+      strategyReloadTimer = setTimeout(() => {
+        strategyReloadTimer = null;
+        loadStrategy(true);
+      }, 450);
+    }
+
+    function strategyHoldPeriod() {
+      if (!strategyHoldPeriodEl.value) return null;
+      const parsed = Number(strategyHoldPeriodEl.value);
+      return Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : null;
+    }
+
+    async function loadStrategy(force = false) {
+      if (strategyLoading) {
+        if (force) strategyReloadPending = true;
+        return;
+      }
+      const balance = strategyInitialBalance();
+      const holdPeriod = strategyHoldPeriod();
+      const requestVersion = ++strategyRequestVersion;
+      strategyLoading = true;
+      strategyReloadPending = false;
+      const hadData = strategyLoaded;
+      strategyMetaEl.textContent = "Simulating " + formatMoney(balance) + " across stored calls";
+      if (!hadData) strategyChartEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+      try {
+        const parameters = new URLSearchParams({ initial_balance: String(balance) });
+        if (holdPeriod !== null) parameters.set("hold_days", String(holdPeriod));
+        const payload = await api("/api/strategies/equal-dollar-cull?" + parameters.toString(), { signal: AbortSignal.timeout(120000) });
+        if (requestVersion !== strategyRequestVersion) return;
+        renderStrategy(payload.simulation || {});
+        strategyLoaded = true;
+      } catch (error) {
+        strategyMetaEl.textContent = hadData ? "Update failed; previous simulation retained" : "Strategy simulation unavailable";
+        if (!hadData) showError(strategyChartEl, error, false);
+      } finally {
+        strategyLoading = false;
+        if (strategyReloadPending) {
+          strategyReloadPending = false;
+          void loadStrategy(true);
+        }
+      }
+    }
+
+    function renderStrategy(simulation) {
+      const maximumHoldPeriod = Math.max(1, Number(simulation.max_hold_period_days || simulation.hold_period_days || 1));
+      const selectedHoldPeriod = Number(simulation.hold_period_days) >= maximumHoldPeriod ? "" : String(simulation.hold_period_days);
+      const holdOptions = ['<option value="">Maximum (' + maximumHoldPeriod.toLocaleString() + ' days)</option>'];
+      for (let day = 1; day < maximumHoldPeriod; day += 1) {
+        holdOptions.push('<option value="' + day + '">' + day.toLocaleString() + (day === 1 ? ' day' : ' days') + '</option>');
+      }
+      strategyHoldPeriodEl.innerHTML = holdOptions.join("");
+      strategyHoldPeriodEl.value = selectedHoldPeriod;
+      const series = Array.isArray(simulation.series) ? simulation.series : [];
+      if (!series.length) {
+        strategyChartEl.innerHTML = '<div class="empty">No buyable article-ticker history is available for this strategy.</div>';
+        strategyMetaEl.textContent = "No strategy history";
+        return;
+      }
+      const initialBalance = Number(simulation.initial_balance || 0);
+      const endingValue = Number(simulation.ending_value || 0);
+      const returnPct = Number(simulation.return_pct || 0);
+      const movements = series.map((point) => initialBalance > 0 ? (Number(point.value || 0) / initialBalance - 1) * 100 : 0);
+      let minimum = Math.min(0, ...movements);
+      let maximum = Math.max(0, ...movements);
+      const rawSpan = maximum - minimum;
+      const padding = rawSpan > 0 ? rawSpan * 0.12 : 0.5;
+      minimum -= padding;
+      maximum += padding;
+      const span = Math.max(0.01, maximum - minimum);
+      const width = 1120;
+      const height = 380;
+      const pad = { left: 82, right: 28, top: 46, bottom: 48 };
+      const plotWidth = width - pad.left - pad.right;
+      const plotHeight = height - pad.top - pad.bottom;
+      const x = (index) => pad.left + (series.length > 1 ? index / (series.length - 1) * plotWidth : 0);
+      const y = (value) => pad.top + (maximum - value) / span * plotHeight;
+      const lineColor = returnPct >= 0 ? "var(--green)" : "var(--red)";
+      const path = movements.map((movement, index) => (index ? "L" : "M") + x(index).toFixed(2) + " " + y(movement).toFixed(2)).join(" ");
+      const grid = Array.from({ length: 6 }, (_, index) => {
+        const value = maximum - span * index / 5;
+        const pointY = y(value);
+        return '<line x1="' + pad.left + '" y1="' + pointY.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + pointY.toFixed(2) + '" stroke="var(--chart-grid)"></line>' +
+          '<text x="' + (pad.left - 10) + '" y="' + (pointY + 4).toFixed(2) + '" text-anchor="end" fill="var(--muted)" font-size="10">' + escapeHtml(signedPct(value)) + '</text>';
+      }).join("");
+      const tickIndexes = Array.from(new Set(Array.from({ length: 6 }, (_, index) => Math.round(index * (series.length - 1) / 5))));
+      const dateTicks = tickIndexes.map((index) => {
+        const date = new Date(series[index].date + "T00:00:00+10:00");
+        const label = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        return '<line x1="' + x(index).toFixed(2) + '" y1="' + pad.top + '" x2="' + x(index).toFixed(2) + '" y2="' + (height - pad.bottom) + '" stroke="var(--chart-grid-subtle)"></line>' +
+          '<text x="' + x(index).toFixed(2) + '" y="' + (height - 18) + '" text-anchor="middle" fill="var(--muted)" font-size="10">' + escapeHtml(label) + '</text>';
+      }).join("");
+      const dots = series.map((point, index) => {
+        const movement = movements[index];
+        const detail = point.date + ": " + signedPct(movement) + ", portfolio " + formatMoney(point.value) + ", invested " + formatMoney(point.invested) + ", cash " + formatMoney(point.cash) + ", " + Number(point.open_lots || 0).toLocaleString() + " open lots.";
+        return '<circle cx="' + x(index).toFixed(2) + '" cy="' + y(movement).toFixed(2) + '" r="3" fill="' + lineColor + '"><title>' + escapeHtml(detail) + '</title></circle>';
+      }).join("");
+      const baselineY = y(0);
+      strategyChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Equal one dollar ticker culling portfolio percentage change over time">' +
+        '<line x1="' + pad.left + '" y1="20" x2="' + (pad.left + 24) + '" y2="20" stroke="' + lineColor + '" stroke-width="3"></line><text x="' + (pad.left + 31) + '" y="24" fill="var(--text-secondary)" font-size="11">Portfolio change</text>' +
+        '<line x1="' + (pad.left + 160) + '" y1="20" x2="' + (pad.left + 184) + '" y2="20" stroke="var(--muted)" stroke-width="2" stroke-dasharray="6 5"></line><text x="' + (pad.left + 191) + '" y="24" fill="var(--muted)" font-size="11">Break-even (0%)</text>' +
+        grid + dateTicks +
+        '<line x1="' + pad.left + '" y1="' + baselineY.toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + baselineY.toFixed(2) + '" stroke="var(--muted)" stroke-width="2" stroke-dasharray="6 5"></line>' +
+        '<path d="' + path + '" fill="none" stroke="' + lineColor + '" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>' + dots + '</svg>';
+      strategyMetaEl.textContent = formatMoney(endingValue) + " ending value (" + signedPct(returnPct) + ") - " +
+        Number(simulation.executed_buys || 0).toLocaleString() + " buys - " + Number(simulation.culled_lots || 0).toLocaleString() + " lots culled - " +
+        Number(simulation.autosold_lots || 0).toLocaleString() + " auto-sold - " + Number(simulation.open_lots || 0).toLocaleString() + " open";
+      const activeHoldPeriod = Number(simulation.hold_period_days || maximumHoldPeriod);
+      strategyNoteEl.textContent = "History: " + series[0].date + " to " + series.at(-1).date + ". " +
+        Number(simulation.price_updates_applied || 0).toLocaleString() + " held-lot price updates were applied. Calculation time: " +
+        (Number(simulation.calculation_ms || 0) / 1000).toFixed(1) + " seconds. Auto-sell limit: " + activeHoldPeriod.toLocaleString() + (activeHoldPeriod === 1 ? " day. " : " days. ") + "The y-axis shows change from the selected initial balance; hover a point for its dollar value, cash, invested value and open-lot count.";
     }
 
     function setSimulationModel(model) {
@@ -2667,6 +3066,11 @@ const DASHBOARD_HTML = `<!doctype html>
       "#source-period-next",
       "#prediction-confidence-filter",
       "#prediction-sort",
+      "#analysis-horizon",
+      "#analysis-min-confidence",
+      "#strategy-initial-balance",
+      "#strategy-hold-period",
+      "[data-analysis-select]",
     ].join(",");
 
     function applySnapshotControlState() {
@@ -2714,6 +3118,7 @@ const DASHBOARD_HTML = `<!doctype html>
       snapshotBannerEl.hidden = false;
       snapshotBannerDetailEl.textContent = "Showing the last server snapshot from " + formatDate(snapshotAt) + ". Live controls will return automatically when the server reconnects.";
       liveStatusUpdated.textContent = "Server offline";
+      analysisProgressEl.hidden = true;
       if (firstActivation) {
         predictionFilters.direction = "all";
         predictionFilters.confidenceBin = null;
@@ -2829,6 +3234,8 @@ const DASHBOARD_HTML = `<!doctype html>
           predictionsLoaded = false;
           await loadPredictions();
         }
+        if (!analysisPanel.classList.contains("hidden")) await loadArticleAnalysis(true);
+        if (!strategiesPanel.classList.contains("hidden")) await loadStrategy(true);
       } finally {
         setBusy(false);
       }
@@ -2971,6 +3378,323 @@ const DASHBOARD_HTML = `<!doctype html>
       } finally {
         sourceStatsLoading = false;
       }
+    }
+
+    function minimumAnalysisConfidence() {
+      const parsed = Number.parseInt(analysisMinConfidenceEl.value || "50", 10);
+      const confidence = Math.min(100, Math.max(50, Number.isFinite(parsed) ? parsed : 50));
+      analysisMinConfidenceEl.value = String(confidence);
+      return String(confidence);
+    }
+
+    function scheduleArticleAnalysisRefresh() {
+      if (snapshotMode) return;
+      if (!analysisMinConfidenceEl.value || !analysisMinConfidenceEl.checkValidity()) return;
+      clearTimeout(analysisReloadTimer);
+      analysisMetaEl.textContent = "Updating " + analysisHorizonEl.options[analysisHorizonEl.selectedIndex].text.toLowerCase() + " view";
+      analysisReloadTimer = setTimeout(() => loadArticleAnalysis(true), 180);
+    }
+
+    function populateAnalysisDays(maxRecordedDay) {
+      const maxDay = Math.max(1, Number.parseInt(maxRecordedDay || "1", 10));
+      const currentDay = Math.min(maxDay, Math.max(1, Number.parseInt(analysisHorizonEl.value || "1", 10)));
+      if (analysisHorizonEl.dataset.maxDay !== String(maxDay)) {
+        analysisHorizonEl.innerHTML = Array.from({ length: maxDay }, (_, index) => {
+          const day = index + 1;
+          return '<option value="' + day + '">Day ' + day.toLocaleString() + '</option>';
+        }).join("");
+        analysisHorizonEl.dataset.maxDay = String(maxDay);
+      }
+      analysisHorizonEl.value = String(currentDay);
+    }
+
+    async function loadArticleAnalysis(force = false) {
+      if (analysisLoading) {
+        if (force) analysisReloadPending = true;
+        return;
+      }
+      analysisLoading = true;
+      analysisReloadPending = false;
+      analysisProgressEl.hidden = false;
+      const hadData = analysisLoaded;
+      if (!hadData) {
+        analysisMetaEl.textContent = "Loading relationship data";
+        analysisStatusEl.innerHTML = Array.from({ length: 4 }, () => '<div class="analysis-status-item">' + predictionLoadingRows() + '</div>').join("");
+        analysisCombinedEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+        analysisNumericEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+        analysisGroupedEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+        analysisLexicalEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+      }
+      const requestedDay = analysisHorizonEl.value;
+      const requestedConfidence = minimumAnalysisConfidence();
+      try {
+        const status = await api("/api/article-analysis/status");
+        populateAnalysisDays(status.max_recorded_day);
+        if (requestedDay !== analysisHorizonEl.value || requestedConfidence !== minimumAnalysisConfidence()) {
+          analysisReloadPending = true;
+          return;
+        }
+        const relationships = await api("/api/article-analysis/relationships?day=" + encodeURIComponent(requestedDay) + "&min_confidence=" + encodeURIComponent(requestedConfidence) + "&limit=100", { signal: AbortSignal.timeout(120000) });
+        if (requestedDay !== analysisHorizonEl.value || requestedConfidence !== minimumAnalysisConfidence()) {
+          analysisReloadPending = true;
+          return;
+        }
+        renderArticleAnalysisStatus(status, relationships);
+        renderArticleRelationships(relationships);
+        analysisLoaded = true;
+        await loadArticleAnalysisTrend();
+      } catch (error) {
+        if (hadData) {
+          analysisMetaEl.textContent = "Update failed; previous relationship view retained";
+        } else {
+          analysisMetaEl.textContent = "Article relationship analysis unavailable";
+          showError(analysisCombinedEl, error, false);
+          analysisNumericEl.innerHTML = "";
+          analysisGroupedEl.innerHTML = "";
+          analysisLexicalEl.innerHTML = "";
+        }
+      } finally {
+        analysisLoading = false;
+        if (analysisReloadPending) {
+          analysisReloadPending = false;
+          void loadArticleAnalysis(true);
+        } else {
+          analysisProgressEl.hidden = true;
+        }
+      }
+    }
+
+    function renderArticleAnalysisStatus(status, relationships) {
+      const indexed = Number(status.indexed_articles || 0);
+      const eligible = Number(status.eligible_articles || 0);
+      const observations = Number(status.indexed_observations || 0);
+      const terms = Number(status.indexed_terms || 0);
+      const overall = relationships.overall || {};
+      const progress = eligible ? indexed / eligible * 100 : 0;
+      const snapshotCutoff = relationships.snapshot?.cutoff_at
+        ? new Date(relationships.snapshot.cutoff_at).toLocaleString("en-AU", { timeZone: "Australia/Brisbane", dateStyle: "medium", timeStyle: "short" })
+        : null;
+      analysisMetaEl.textContent = relationships.horizon + " movement | " + Number(overall.samples || 0).toLocaleString() + " article-ticker samples | " + progress.toFixed(1) + "% indexed" + (snapshotCutoff ? " | Snapshot cutoff " + snapshotCutoff : "");
+      analysisStatusEl.innerHTML = [
+        [indexed.toLocaleString() + " / " + eligible.toLocaleString(), "Articles indexed"],
+        [observations.toLocaleString(), "Ticker observations"],
+        [terms.toLocaleString(), "Searchable word and phrase rows"],
+        [signedPct(overall.average_movement_pct), "Overall " + relationships.horizon + " movement"],
+      ].map((item) => '<div class="analysis-status-item"><div class="analysis-status-value">' + escapeHtml(item[0]) + '</div><div class="analysis-status-label">' + escapeHtml(item[1]) + '</div></div>').join("");
+    }
+
+    function analysisEffect(value, digits = 3) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return '<span class="analysis-effect">n/a</span>';
+      const cls = number > 0 ? " positive" : number < 0 ? " negative" : "";
+      return '<span class="analysis-effect' + cls + '">' + escapeHtml((number > 0 ? "+" : "") + number.toFixed(digits)) + '</span>';
+    }
+
+    function analysisRowAttributes(kind, feature, value, label) {
+      return ' data-analysis-select data-analysis-kind="' + escapeAttr(kind) + '" data-analysis-feature="' + escapeAttr(feature) + '" data-analysis-value="' + escapeAttr(value || "") + '" data-analysis-label="' + escapeAttr(label) + '"';
+    }
+
+    function analysisHelp(label, help) {
+      if (!help) return escapeHtml(label);
+      return '<span class="analysis-help" title="' + escapeAttr(help) + '" aria-label="' + escapeAttr(label + ". " + help) + '">' + escapeHtml(label) + '</span>';
+    }
+
+    function analysisTable(headers, rows) {
+      return '<table class="analysis-table"><thead><tr>' + headers.map((header) => {
+        const item = typeof header === "string" ? { label: header, help: "" } : header;
+        return '<th>' + analysisHelp(item.label, item.help) + '</th>';
+      }).join("") + '</tr></thead><tbody>' + rows.join("") + '</tbody></table>';
+    }
+
+    function analysisConfidence(item) {
+      const samples = Number(item && (item.confidence_samples ?? item.cohort_samples ?? item.samples) || 0);
+      const confidence = Number.isFinite(Number(item && item.sample_confidence_pct))
+        ? Number(item.sample_confidence_pct)
+        : sampleSizeConfidence(samples);
+      return '<span class="analysis-confidence" title="' + escapeAttr(sampleSizeConfidenceTooltip(samples, confidence)) + '">' + confidence.toFixed(0) + '%</span>';
+    }
+
+    const analysisGroupLabels = Object.freeze({
+      source: "Source",
+      source_type: "Source Type",
+      content_source: "Content Source",
+      publication_hour: "Publication Hour",
+      publication_weekday: "Publication Weekday",
+      publication_month: "Publication Month",
+      word_count_band: "Word Count Band",
+      ticker_count: "Tickers per Article",
+      symbol: "Ticker Symbol",
+    });
+
+    const analysisMetricHeaders = Object.freeze({
+      feature: { label: "Feature", help: "The numeric article or article-ticker attribute compared with signed market movement." },
+      correlation: { label: "Correlation", help: "Pearson correlation between the feature and signed percentage movement at the selected horizon. +1 is a perfect positive linear relationship, 0 is no linear relationship, and -1 is a perfect negative relationship." },
+      slope: { label: "Slope", help: "Linear-regression estimate of the percentage-point movement change associated with one additional unit of the feature." },
+      value: { label: "Value", help: "The specific category value used to group article-ticker observations." },
+      averageMovement: { label: "Avg move", help: "Arithmetic mean signed ticker-price percentage change from the article-time baseline to the selected price horizon." },
+      versusOverall: { label: "vs overall", help: "This group’s average movement minus the average movement of every eligible article-ticker observation at the same horizon." },
+      versusAbsent: { label: "vs absent", help: "Average movement when this word or phrase is present minus average movement across observations where it is absent." },
+      standardizedEffect: { label: "Std effect", help: "The present-versus-absent movement difference divided by the overall sample standard deviation of movement." },
+      factors: { label: "Combined factors", help: "Two to four conditions that must all be true for an article-ticker observation to belong to this cohort." },
+      medianMovement: { label: "Median move", help: "Middle signed percentage movement in the cohort. Unlike the average, it is less sensitive to a small number of extreme movements." },
+      positiveRate: { label: "Positive", help: "Percentage of article-ticker observations whose signed price movement is above zero at the selected horizon. Direction labels from synthesis are not used." },
+      samples: { label: "Samples", help: "Article-ticker observations with a valid baseline and price at the selected horizon. One article can contribute several samples when it has several tickers." },
+      combinedSamples: { label: "Horizon / cohort", help: "The first number is the observations with a valid price at this horizon. The second is the fixed Day 1 cohort used to qualify the factor combination and calculate confidence." },
+      articles: { label: "Articles", help: "Distinct source articles represented by the samples in this row." },
+      confidence: { label: "Confidence", help: "Sample-volume confidence calculated as n / (n + 100) × 100. It reaches 50% at 100 samples and does not correct for correlated articles or tickers." },
+      term: { label: "Word or phrase", help: "A normalized word or adjacent two-word phrase found in stored article plaintext. Each article contributes at most its 192 most frequent words and 96 most frequent phrases." },
+      termType: { label: "Type", help: "Word is one normalized token; phrase is two normalized tokens that appeared next to each other in article plaintext." },
+    });
+
+    const analysisFeatureHelp = Object.freeze({
+      word_count: "Number of Unicode-aware word tokens found in stored article plaintext.",
+      char_count: "Number of characters in stored article plaintext.",
+      unique_word_count: "Number of distinct lowercased word tokens in stored article plaintext.",
+      sentence_count: "Count of sentence-ending punctuation groups in stored article plaintext.",
+      paragraph_count: "Count of plaintext blocks separated by one or more blank lines.",
+      title_word_count: "Number of normalized word tokens in the article title.",
+      summary_word_count: "Number of word tokens in the stored article summary.",
+      average_word_length: "Total characters across plaintext word tokens divided by the number of tokens.",
+      lexical_diversity: "Distinct lowercased plaintext words divided by total plaintext words.",
+      uppercase_word_count: "Number of plaintext word tokens containing A-Z characters whose letters are entirely uppercase.",
+      number_token_count: "Number of plaintext word tokens containing at least one digit.",
+      currency_symbol_count: "Occurrences of $, €, £, and ¥ in stored article plaintext.",
+      percent_symbol_count: "Occurrences of the % character in stored article plaintext.",
+      question_count: "Occurrences of question marks in stored article plaintext.",
+      exclamation_count: "Occurrences of exclamation marks in stored article plaintext.",
+      quote_count: "Occurrences of straight or curly double-quotation marks in stored article plaintext.",
+      article_ticker_count: "Number of distinct ticker symbols attached to the article by synthesis.",
+      publication_to_discovery_seconds: "Seconds between the article’s published timestamp and the time the source checker discovered it.",
+      discovery_to_synthesis_seconds: "Seconds between source discovery and the latest completed synthesis result.",
+      publication_to_synthesis_seconds: "Seconds between article publication and the latest completed synthesis result.",
+      ticker_mention_count: "Exact occurrences of the attached ticker symbol in stored article plaintext.",
+      ticker_title_mention_count: "Exact occurrences of the attached ticker symbol in the article title.",
+      ticker_first_mention_word_index: "Number of plaintext word tokens before the first exact ticker-symbol mention; -1 means the symbol was not written explicitly.",
+    });
+
+    const analysisGroupHelp = Object.freeze({
+      source: "Publisher name joined from the source record; source ID is used only when no display name is stored.",
+      source_type: "Publisher classification stored on the source record, such as editorial, press release, or first party.",
+      content_source: "How full plaintext was acquired, currently a fetched webpage or text supplied by the feed.",
+      publication_hour: "Hour of the stored publication timestamp converted to Australia/Brisbane time.",
+      publication_weekday: "Weekday of the stored publication timestamp converted to Australia/Brisbane time.",
+      publication_month: "Calendar month number, 1 through 12, from the stored publication timestamp in Australia/Brisbane time. Years are combined.",
+      word_count_band: "Bucket assigned from the stored plaintext word count: under 250, 250-499, 500-999, 1000-1999, or 2000+.",
+      ticker_count: "Number of distinct ticker symbols attached to an article by synthesis.",
+      symbol: "Uppercased ticker symbol attached to the article. Multi-ticker articles contribute one observation to each symbol.",
+    });
+
+    function renderArticleRelationships(payload) {
+      const combinedItems = [...(payload.combined || [])].sort((left, right) => Number(right.average_movement_pct ?? -Infinity) - Number(left.average_movement_pct ?? -Infinity));
+      const combinedRows = combinedItems.map((item) => {
+        const dimensions = Array.isArray(item.dimensions) ? item.dimensions : [];
+        const queryDimensions = Array.isArray(item.query_dimensions) ? item.query_dimensions : dimensions.filter((dimension) => dimension.feature !== "price_horizon");
+        const label = item.label || dimensions.map((dimension) => dimension.label + ": " + dimension.value).join(" + ");
+        const factors = dimensions.map((dimension) => '<span class="analysis-factor"><span class="analysis-factor-label">' + escapeHtml(dimension.label || dimension.feature) + '</span><span>' + escapeHtml(dimension.value) + '</span></span>').join("");
+        const horizonSamples = Number(item.horizon_samples ?? item.samples ?? 0);
+        const cohortSamples = Number(item.cohort_samples ?? item.samples ?? 0);
+        return '<tr' + analysisRowAttributes("combination", "", JSON.stringify(queryDimensions), label) + '><td><div class="analysis-factors">' + factors + '</div></td><td>' + analysisEffect(item.average_movement_pct, 3) + '%</td><td>' + analysisEffect(item.median_movement_pct, 3) + '%</td><td>' + analysisEffect(item.positive_pct, 1) + '%</td><td>' + analysisEffect(item.difference_from_overall_pct, 3) + '%</td><td title="' + escapeAttr(horizonSamples + ' observations at this horizon; ' + cohortSamples + ' observations in the fixed Day 1 cohort') + '">' + horizonSamples.toLocaleString() + ' / ' + cohortSamples.toLocaleString() + '</td><td>' + Number(item.articles || 0).toLocaleString() + '</td><td>' + analysisConfidence(item) + '</td></tr>';
+      });
+      analysisCombinedEl.innerHTML = combinedRows.length
+        ? analysisTable([analysisMetricHeaders.factors, analysisMetricHeaders.averageMovement, analysisMetricHeaders.medianMovement, analysisMetricHeaders.positiveRate, analysisMetricHeaders.versusOverall, analysisMetricHeaders.combinedSamples, analysisMetricHeaders.articles, analysisMetricHeaders.confidence], combinedRows)
+        : '<div class="empty">No multi-factor relationships meet the sample-confidence threshold yet.</div>';
+
+      const numericItems = [...(payload.numeric || [])].sort((left, right) => Number(right.correlation ?? -Infinity) - Number(left.correlation ?? -Infinity));
+      const numericRows = numericItems.map((item) => {
+        const label = item.label || item.feature;
+        return '<tr' + analysisRowAttributes("numeric", item.feature, "", label) + '><td>' + analysisHelp(label, analysisFeatureHelp[item.feature]) + '</td><td>' + analysisEffect(item.correlation, 4) + '</td><td>' + analysisEffect(item.slope, 5) + '</td><td>' + Number(item.samples || 0).toLocaleString() + '</td><td>' + Number(item.articles || 0).toLocaleString() + '</td><td>' + analysisConfidence(item) + '</td></tr>';
+      });
+      analysisNumericEl.innerHTML = numericRows.length
+        ? analysisTable([analysisMetricHeaders.feature, analysisMetricHeaders.correlation, analysisMetricHeaders.slope, analysisMetricHeaders.samples, analysisMetricHeaders.articles, analysisMetricHeaders.confidence], numericRows)
+        : '<div class="empty">No numeric relationships meet the sample threshold yet.</div>';
+
+      const groupedByFeature = new Map();
+      for (const item of payload.grouped || []) {
+        const rows = groupedByFeature.get(item.feature) || [];
+        rows.push(item);
+        groupedByFeature.set(item.feature, rows);
+      }
+      const groupedSections = Object.entries(analysisGroupLabels).flatMap(([feature, title]) => {
+        const items = (groupedByFeature.get(feature) || []).sort((left, right) => Number(right.average_movement_pct ?? -Infinity) - Number(left.average_movement_pct ?? -Infinity));
+        if (!items.length) return [];
+        const rows = items.map((item) => {
+          const label = title + ": " + item.value;
+          return '<tr' + analysisRowAttributes("category", item.feature, item.value, label) + '><td>' + escapeHtml(item.value) + '</td><td>' + analysisEffect(item.average_movement_pct, 3) + '%</td><td>' + analysisEffect(item.difference_from_overall_pct, 3) + '%</td><td>' + Number(item.samples || 0).toLocaleString() + '</td><td>' + Number(item.articles || 0).toLocaleString() + '</td><td>' + analysisConfidence(item) + '</td></tr>';
+        });
+        return ['<section class="analysis-group-table"><div class="analysis-group-table-title">' + analysisHelp(title, analysisGroupHelp[feature]) + '</div><div class="analysis-table-wrap">' + analysisTable([analysisMetricHeaders.value, analysisMetricHeaders.averageMovement, analysisMetricHeaders.versusOverall, analysisMetricHeaders.samples, analysisMetricHeaders.articles, analysisMetricHeaders.confidence], rows) + '</div></section>'];
+      });
+      analysisGroupedEl.innerHTML = groupedSections.length
+        ? '<div class="analysis-grouped-sections">' + groupedSections.join("") + '</div>'
+        : '<div class="empty">No grouped relationships meet the sample threshold yet.</div>';
+
+      const lexicalItems = [...(payload.lexical || [])].sort((left, right) => Number(right.average_movement_pct ?? -Infinity) - Number(left.average_movement_pct ?? -Infinity));
+      const lexicalRows = lexicalItems.map((item) => {
+        const label = item.term_kind + ': "' + item.term + '"';
+        const termHelp = item.term_kind === "phrase"
+          ? "Normalized adjacent two-word phrase indexed from stored article plaintext."
+          : "Normalized word indexed from stored article plaintext.";
+        return '<tr' + analysisRowAttributes("term", item.term_kind, item.term, label) + '><td>' + analysisHelp(item.term, termHelp) + '</td><td>' + analysisHelp(item.term_kind, analysisMetricHeaders.termType.help) + '</td><td>' + analysisEffect(item.average_movement_pct, 3) + '%</td><td>' + analysisEffect(item.difference_from_absent_pct, 3) + '%</td><td>' + analysisEffect(item.standardized_effect, 4) + '</td><td>' + Number(item.samples || 0).toLocaleString() + '</td><td>' + Number(item.articles || 0).toLocaleString() + '</td><td>' + analysisConfidence(item) + '</td></tr>';
+      });
+      analysisLexicalEl.innerHTML = lexicalRows.length
+        ? analysisTable([analysisMetricHeaders.term, analysisMetricHeaders.termType, analysisMetricHeaders.averageMovement, analysisMetricHeaders.versusAbsent, analysisMetricHeaders.standardizedEffect, analysisMetricHeaders.samples, analysisMetricHeaders.articles, analysisMetricHeaders.confidence], lexicalRows)
+        : '<div class="empty">No words or phrases meet the sample threshold yet.</div>';
+    }
+
+    async function loadArticleAnalysisTrend() {
+      const selection = analysisSelection;
+      const query = new URLSearchParams({ kind: selection.kind, max_day: "365" });
+      if (selection.feature) query.set("feature", selection.feature);
+      if (selection.value) query.set("value", selection.value);
+      analysisTrendNoteEl.textContent = "Loading " + selection.label + " movement";
+      analysisTrendChartEl.innerHTML = '<div class="prediction-page-loader">' + predictionLoadingRows() + predictionLoadingRows() + '</div>';
+      try {
+        const payload = await api("/api/article-analysis/trend?" + query.toString(), { signal: AbortSignal.timeout(60000) });
+        renderArticleAnalysisTrend(payload);
+        analysisTrendNoteEl.textContent = selection.label + ". Every point is the signed average movement from article-time baseline; sample counts are available on hover.";
+      } catch (error) {
+        analysisTrendNoteEl.textContent = "Movement history unavailable";
+        showError(analysisTrendChartEl, error, false);
+      }
+    }
+
+    function renderArticleAnalysisTrend(payload) {
+      const rows = Array.isArray(payload.series) ? payload.series : [];
+      if (!rows.length) {
+        analysisTrendChartEl.innerHTML = '<div class="empty">No daily market history is available for this relationship.</div>';
+        return;
+      }
+      const byCohort = new Map();
+      for (const row of rows) {
+        const cohort = row.cohort || payload.label || "Overall";
+        const series = byCohort.get(cohort) || [];
+        series.push({ day: Number(row.day_index || 0), movement: Number(row.average_movement_pct || 0), samples: Number(row.samples || 0) });
+        byCohort.set(cohort, series);
+      }
+      const all = [...byCohort.values()].flat();
+      const maxDay = Math.max(1, ...all.map((point) => point.day));
+      const movementMin = Math.min(0, ...all.map((point) => point.movement));
+      const movementMax = Math.max(0, ...all.map((point) => point.movement));
+      const range = Math.max(0.1, movementMax - movementMin);
+      const width = 1120;
+      const height = 330;
+      const pad = { left: 62, right: 24, top: 38, bottom: 42 };
+      const plotWidth = width - pad.left - pad.right;
+      const plotHeight = height - pad.top - pad.bottom;
+      const x = (day) => pad.left + day / maxDay * plotWidth;
+      const y = (movement) => pad.top + (movementMax - movement) / range * plotHeight;
+      const ticks = Array.from({ length: 6 }, (_, index) => movementMin + range * index / 5);
+      const grid = ticks.map((tick) => '<line x1="' + pad.left + '" y1="' + y(tick).toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y(tick).toFixed(2) + '" stroke="var(--chart-grid)"></line><text x="' + (pad.left - 8) + '" y="' + (y(tick) + 4).toFixed(2) + '" text-anchor="end" fill="var(--muted)" font-size="10">' + tick.toFixed(1) + '%</text>').join("");
+      const xStep = Math.max(1, Math.ceil(maxDay / 6));
+      const xTicks = Array.from({ length: Math.floor(maxDay / xStep) + 1 }, (_, index) => index * xStep).filter((day) => day <= maxDay).map((day) => '<text x="' + x(day).toFixed(2) + '" y="' + (height - 16) + '" text-anchor="middle" fill="var(--muted)" font-size="10">Day ' + day + '</text>').join("");
+      const colors = ["var(--blue)", "var(--green)", "var(--red)", "var(--amber)"];
+      const lines = [...byCohort.entries()].map(([cohort, points], cohortIndex) => {
+        points.sort((left, right) => left.day - right.day);
+        const path = points.map((point, index) => (index ? "L" : "M") + x(point.day).toFixed(2) + " " + y(point.movement).toFixed(2)).join(" ");
+        const dots = points.map((point) => '<circle cx="' + x(point.day).toFixed(2) + '" cy="' + y(point.movement).toFixed(2) + '" r="2.5" fill="' + colors[cohortIndex % colors.length] + '"><title>' + escapeHtml(cohort + ", day " + point.day + ": " + signedPct(point.movement) + " from " + point.samples + " samples") + '</title></circle>').join("");
+        return '<path d="' + path + '" fill="none" stroke="' + colors[cohortIndex % colors.length] + '" stroke-width="3" stroke-linejoin="round"></path>' + dots;
+      }).join("");
+      const legend = [...byCohort.keys()].map((cohort, index) => '<line x1="' + (pad.left + index * 190) + '" y1="20" x2="' + (pad.left + 22 + index * 190) + '" y2="20" stroke="' + colors[index % colors.length] + '" stroke-width="3"></line><text x="' + (pad.left + 29 + index * 190) + '" y="24" fill="var(--text-secondary)" font-size="11">' + escapeHtml(cohort) + '</text>').join("");
+      analysisTrendChartEl.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Average signed ticker movement over time">' + legend + grid + '<line x1="' + pad.left + '" y1="' + y(0).toFixed(2) + '" x2="' + (width - pad.right) + '" y2="' + y(0).toFixed(2) + '" stroke="var(--chart-zero)" stroke-width="2"></line>' + xTicks + lines + '</svg>';
     }
 
     function renderTickerPipelineHealth(payload) {
@@ -3290,8 +4014,9 @@ const DASHBOARD_HTML = `<!doctype html>
       const results = Number((status.results && status.results.count) || 0);
       const predictions = Number((status.predictions && status.predictions.count) || 0);
       const timing = status.timing || {};
-      const capacity = Number(timing.parallel_capacity || 8);
+      const capacity = Number(timing.parallel_capacity || 4);
       const synthesisSamples = Number(timing.synthesis_samples || 0);
+      const collectionSamples = Number(timing.collection_samples || 0);
       const delaySamples = Number(timing.prediction_delay_samples || 0);
       const missingDelaySamples = Number(timing.prediction_delay_missing_publication_samples || 0);
       const yahooDelaySamples = Number(timing.yahoo_prediction_delay_samples || 0);
@@ -3308,7 +4033,13 @@ const DASHBOARD_HTML = `<!doctype html>
         ]),
         metric("Running", running, running + " of " + capacity + " parallel Codex workers active"),
         metric("Pending", pending, timing.estimated_queue_seconds === null || timing.estimated_queue_seconds === undefined ? "Queue estimate unavailable" : "Estimated clear in " + formatDuration(timing.estimated_queue_seconds) + " at " + capacity + " workers"),
-        metric("Avg synthesis", formatDuration(timing.average_synthesis_seconds), synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s")),
+        metric(
+          "Avg synthesis",
+          formatDuration(timing.average_synthesis_seconds),
+          synthesisSamples + " completed article" + (synthesisSamples === 1 ? "" : "s") +
+            (collectionSamples ? " | superscript: post-cutdown average across " + collectionSamples : " | post-cutdown sample pending"),
+          collectionSamples ? [{ text: formatDuration(timing.average_collection_seconds), active: true }] : [],
+        ),
         metric(
           "Avg pipeline delay (non-Yahoo)",
           formatDuration(timing.average_prediction_delay_seconds),
@@ -4693,7 +5424,7 @@ const DASHBOARD_HTML = `<!doctype html>
     setInterval(updateRunningJobTimers, 1000);
     if (tokenInput.value.trim()) {
       const requestedTab = new URLSearchParams(window.location.search).get("tab");
-      if (requestedTab === "sources" || requestedTab === "overview" || requestedTab === "settings") {
+      if (requestedTab === "sources" || requestedTab === "overview" || requestedTab === "settings" || requestedTab === "analysis" || requestedTab === "strategies") {
         setTab(requestedTab);
       }
       startLiveStatusStream();
@@ -4701,7 +5432,8 @@ const DASHBOARD_HTML = `<!doctype html>
     }
   </script>
 </body>
-</html>`;
+</html>
+`;
 
 function json(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload, null, 2), {
@@ -4936,6 +5668,11 @@ async function serveDashboardSnapshot(request: Request, env: Env): Promise<Respo
   const snapshot = await loadDashboardSnapshot(env);
   const entry = snapshot?.responses[key];
   if (!snapshot || !entry) return null;
+  const requestedPath = new URL(url.pathname + url.search, "https://snapshot.invalid");
+  const storedPath = new URL(entry.request_path, "https://snapshot.invalid");
+  requestedPath.searchParams.sort();
+  storedPath.searchParams.sort();
+  if (requestedPath.pathname + requestedPath.search !== storedPath.pathname + storedPath.search) return null;
   return new Response(JSON.stringify(entry.body), {
     status: entry.status,
     headers: {
@@ -4984,7 +5721,12 @@ async function proxySelfHostedApi(request: Request, env: Env): Promise<Response>
     upstreamRequest.headers.set("cf-access-client-secret", env.TUNNEL_ACCESS_CLIENT_SECRET);
   }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
+  const timeoutMs = requestedUrl.pathname === "/api/article-analysis/relationships"
+    ? 90_000
+    : requestedUrl.pathname === "/api/article-analysis/trend"
+      ? 50_000
+      : 10_000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const upstream = env.SELF_HOSTED_API
       ? await env.SELF_HOSTED_API.fetch(upstreamRequest, { signal: controller.signal })
@@ -5005,6 +5747,59 @@ async function proxySelfHostedApi(request: Request, env: Env): Promise<Response>
     }
     console.error("Self-hosted API proxy failed", requestedUrl.pathname, error);
     return json({ error: "Live server unavailable and no stored response is available for this request" }, {
+      status: 503,
+      headers: { "retry-after": "30" },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function proxyPublicImdbHistory(request: Request, env: Env): Promise<Response> {
+  if (!["GET", "HEAD"].includes(request.method)) {
+    return json({ error: "Method not allowed" }, {
+      status: 405,
+      headers: { allow: "GET, HEAD" },
+    });
+  }
+  if (!env.SELF_HOSTED_API) {
+    return json({ error: "Workers VPC binding is not configured" }, { status: 503 });
+  }
+  const requestedUrl = new URL(request.url);
+  const target = new URL(requestedUrl.pathname + requestedUrl.search, "http://news-api:3000");
+  const upstreamRequest = new Request(target.toString(), {
+    method: request.method,
+    headers: {
+      accept: request.headers.get("accept") || "*/*",
+      "accept-encoding": request.headers.get("accept-encoding") || "gzip, br",
+      "user-agent": "cartdotcom-imdb-history-proxy/1.0",
+      "x-forwarded-host": requestedUrl.host,
+      "x-imdb-history-raw-gzip": requestedUrl.pathname.endsWith(".json.gz") ? "1" : "0",
+    },
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const upstream = await env.SELF_HOSTED_API.fetch(upstreamRequest, { signal: controller.signal });
+    const headers = new Headers(upstream.headers);
+    headers.set("access-control-allow-origin", "*");
+    headers.set("x-content-type-options", "nosniff");
+    headers.set("x-imdb-history-mode", "live");
+    if (requestedUrl.pathname.endsWith(".json.gz")) {
+      headers.set("content-encoding", "gzip");
+    }
+    const responseInit: ResponseInit & { encodeBody?: "manual" } = {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers,
+    };
+    if (requestedUrl.pathname.endsWith(".json.gz")) {
+      responseInit.encodeBody = "manual";
+    }
+    return new Response(upstream.body, responseInit);
+  } catch (error) {
+    console.error("IMDb history proxy failed", requestedUrl.pathname, error);
+    return json({ error: "IMDb history server unavailable" }, {
       status: 503,
       headers: { "retry-after": "30" },
     });
@@ -6108,7 +6903,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     : RESEARCH_CONTAINER_COUNT;
 
   const acquired = await env.NEWS_DB.prepare(
-    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT CAST(value AS INTEGER) FROM json_each('[0,1,2,3,4,5,6,7]') AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = CAST(slots.value AS INTEGER)) AND NOT EXISTS (SELECT 1 FROM model_experiment_jobs AS experiment_slots WHERE experiment_slots.status = 'running' AND experiment_slots.research_slot = CAST(slots.value AS INTEGER)) ORDER BY CAST(value AS INTEGER) LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ? AND ((SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') + (SELECT COUNT(*) FROM model_experiment_jobs AS active_experiments WHERE active_experiments.status = 'running')) < ? AND (? = 0 OR NOT EXISTS (SELECT 1 FROM research_jobs AS first_pass_jobs WHERE first_pass_jobs.status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = first_pass_jobs.id)))",
+    "UPDATE research_jobs SET status = 'running', attempts = attempts + 1, last_error = NULL, started_at = CURRENT_TIMESTAMP, finished_at = NULL, synthesis_duration_seconds = NULL, prediction_delay_seconds = NULL, research_slot = (SELECT CAST(value AS INTEGER) FROM json_each('[0,1,2,3]') AS slots WHERE NOT EXISTS (SELECT 1 FROM research_jobs AS active_slots WHERE active_slots.status = 'running' AND active_slots.research_slot = CAST(slots.value AS INTEGER)) AND NOT EXISTS (SELECT 1 FROM model_experiment_jobs AS experiment_slots WHERE experiment_slots.status = 'running' AND experiment_slots.research_slot = CAST(slots.value AS INTEGER)) ORDER BY CAST(value AS INTEGER) LIMIT 1) WHERE id = ? AND status = 'pending' AND (SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') < ? AND ((SELECT COUNT(*) FROM research_jobs AS active_jobs WHERE active_jobs.status = 'running') + (SELECT COUNT(*) FROM model_experiment_jobs AS active_experiments WHERE active_experiments.status = 'running')) < ? AND (? = 0 OR NOT EXISTS (SELECT 1 FROM research_jobs AS first_pass_jobs WHERE first_pass_jobs.status = 'pending' AND NOT EXISTS (SELECT 1 FROM research_results WHERE research_results.job_id = first_pass_jobs.id)))",
   )
     .bind(jobId, productionConcurrency, RESEARCH_CONTAINER_COUNT, existing.has_result ? 1 : 0)
     .run();
@@ -6152,7 +6947,7 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
 
   try {
     article = await captureArticleContent(env, article);
-    const memo = await runContainerResearch(env, researchPrompt(article), researchSlot);
+    const memo = await runContainerResearch(env, collectionPrompt(article), researchSlot);
     const activeLease = await env.NEWS_DB.prepare(
       "SELECT research_jobs.status AS job_status, articles.status AS article_status FROM research_jobs INNER JOIN articles ON articles.id = research_jobs.article_id WHERE research_jobs.id = ?",
     )
@@ -6161,19 +6956,20 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     if (activeLease?.job_status !== "running" || activeLease.article_status === "archived") {
       return { ok: true, jobId, skipped: "archived_during_research" };
     }
-    const fields = parseResearchFields(memo);
-    const validationError = validateResearchFields(fields);
-    if (validationError) throw new Error(`Codex returned an invalid structured analysis: ${validationError}`);
-    const impactDetails = normalizeImpactDetails(fields.impact_details);
-    const companies = impactDetails.length
-      ? [...new Set(impactDetails.filter((item) => item.kind === "company" && item.name).map((item) => String(item.name)))]
-      : fields.companies || [];
-    const industries = impactDetails.length
-      ? [...new Set(impactDetails.filter((item) => item.kind !== "company" && item.name).map((item) => String(item.name)))]
-      : fields.industries || [];
-    const symbols = impactDetails.length
-      ? symbolsFromImpactDetails(impactDetails)
-      : [...new Set((Array.isArray(fields.symbols) ? fields.symbols : []).map(normalizeTicker).filter((symbol): symbol is string => Boolean(symbol)))];
+    const fields = parseCollectionFields(memo);
+    const validationError = validateCollectionFields(fields);
+    if (validationError) throw new Error(`Codex returned invalid collection data: ${validationError}`);
+    const bySymbol = new Map<string, string>();
+    if (fields.investment_relevant) {
+      for (const item of fields.tickers || []) {
+        const symbol = normalizeTicker(item?.symbol || "");
+        const company = typeof item?.company === "string" ? item.company.trim() : "";
+        if (symbol && company && !bySymbol.has(symbol)) bySymbol.set(symbol, company);
+      }
+    }
+    const symbols = [...bySymbol.keys()].sort();
+    const companies = symbols.map((symbol) => bySymbol.get(symbol) || symbol);
+    const industries: string[] = [];
     await env.NEWS_DB.batch([
       env.NEWS_DB.prepare(
         "INSERT INTO research_results (id, job_id, article_id, event_type, companies, industries, symbols, sentiment_score, impact_horizon, confidence, summary, memo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET event_type = excluded.event_type, companies = excluded.companies, industries = excluded.industries, symbols = excluded.symbols, sentiment_score = excluded.sentiment_score, impact_horizon = excluded.impact_horizon, confidence = excluded.confidence, summary = excluded.summary, memo = excluded.memo, created_at = CURRENT_TIMESTAMP",
@@ -6181,14 +6977,14 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
         crypto.randomUUID(),
         jobId,
         article.id,
-        fields.event_type || null,
+        fields.investment_relevant ? "investment_relevant" : "not_investment_relevant",
         JSON.stringify(companies),
         JSON.stringify(industries),
         JSON.stringify(symbols),
-        typeof fields.sentiment_score === "number" ? fields.sentiment_score : null,
-        fields.impact_horizon || null,
-        typeof fields.confidence === "number" ? fields.confidence : null,
-        fields.event_blurb || fields.summary || null,
+        null,
+        null,
+        null,
+        null,
         memo,
       ),
       env.NEWS_DB.prepare(
@@ -6258,6 +7054,47 @@ async function processJob(env: Env, jobId: string): Promise<{ ok: boolean; jobId
     });
     throw error;
   }
+}
+
+function collectionPrompt(article: Article): string {
+  const articleText = (article.content_plaintext || article.summary || "none").slice(0, 60_000);
+  return `You are classifying an article for an investment-data collection system.
+
+Use only the supplied article and source metadata. Do not browse, research, predict price movement, infer sentiment, write a summary, or provide investment analysis.
+
+Decide whether the article contains a concrete event or information relevant to analyzing publicly traded investments. Record only publicly traded companies directly named or unambiguously identified in the supplied text. Resolve a ticker only when certain. Do not add inferred exposures, peers, indices, funds, or private companies. Omit uncertain tickers.
+
+Article:
+Title: ${article.title}
+URL: ${article.url}
+Published: ${article.published_at || "unknown"}
+Source: ${article.source_name || article.source_id}
+Source type: ${article.source_type || "editorial"}
+Stored content status: ${article.content_status || "unknown"}
+Stored plaintext article content:
+${articleText}
+
+Return only JSON with exactly these fields:
+- investment_relevant: boolean
+- tickers: array of objects with company and symbol only
+Use an empty tickers array when the article is not investment relevant or has no certain public ticker.`;
+}
+
+function parseCollectionFields(memo: string): CollectionResultFields {
+  const jsonText = extractFirstJsonObject(memo);
+  if (!jsonText) return {};
+  try {
+    const parsed = JSON.parse(jsonText) as CollectionResultFields;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function validateCollectionFields(fields: CollectionResultFields): string | null {
+  if (typeof fields.investment_relevant !== "boolean") return "missing investment_relevant";
+  if (!Array.isArray(fields.tickers)) return "missing tickers array";
+  return null;
 }
 
 function modelExperimentCalls(
@@ -6464,7 +7301,7 @@ async function processModelExperimentJob(
   const acquired = await env.NEWS_DB.prepare(
     `UPDATE model_experiment_jobs SET status = 'running', attempts = attempts + 1, started_at = CURRENT_TIMESTAMP,
       finished_at = NULL, last_error = NULL, updated_at = CURRENT_TIMESTAMP,
-      research_slot = (SELECT CAST(value AS INTEGER) FROM json_each('[0,1,2,3,4,5,6,7]') AS slots
+      research_slot = (SELECT CAST(value AS INTEGER) FROM json_each('[0,1,2,3]') AS slots
         WHERE NOT EXISTS (SELECT 1 FROM research_jobs WHERE status = 'running' AND research_slot = CAST(slots.value AS INTEGER))
           AND NOT EXISTS (SELECT 1 FROM model_experiment_jobs AS active WHERE active.status = 'running' AND active.research_slot = CAST(slots.value AS INTEGER))
         ORDER BY CAST(value AS INTEGER) LIMIT 1)
@@ -6748,6 +7585,36 @@ async function sendExperimentEmail(
   const payload = await response.json() as { id?: string; message?: string };
   if (!response.ok) throw new Error(payload.message || `Email provider returned HTTP ${response.status}`);
   return { provider: "resend", messageId: payload.id || null };
+}
+
+async function sendIbkrNotification(request: Request, env: Env): Promise<Response> {
+  if (!env.IBKR_NOTIFICATION_TOKEN || request.headers.get("authorization") !== `Bearer ${env.IBKR_NOTIFICATION_TOKEN}`) {
+    return json({ error: "Unauthorized" }, { status: 401 });
+  }
+  let body: { to?: string; subject?: string; text?: string; link?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  const to = String(body.to || "").trim().toLowerCase();
+  const subject = String(body.subject || "").trim().slice(0, 200);
+  let text = String(body.text || "").trim().slice(0, 20_000);
+  const link = String(body.link || "").trim();
+  if (to !== "lucajeannin@icloud.com" || !subject || !text) {
+    return json({ error: "The fixed IBKR alert recipient, subject, and text are required" }, { status: 400 });
+  }
+  if (link) {
+    const parsed = new URL(link);
+    if (parsed.protocol !== "https:") return json({ error: "Notification links must use HTTPS" }, { status: 400 });
+    text += `\n\n${parsed.toString()}`;
+  }
+  try {
+    const sent = await sendExperimentEmail(env, to, subject, text);
+    return json({ ok: true, ...sent });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, { status: 502 });
+  }
 }
 
 async function sendModelExperimentReport(env: Env, experiment: ModelExperimentRow): Promise<void> {
@@ -9592,12 +10459,29 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname === "/backend/ibkr_codex" || url.pathname.startsWith("/backend/ibkr_codex/")) {
+      const validationFlow = url.pathname === "/backend/ibkr_codex/account-validation"
+        || url.pathname.startsWith("/backend/ibkr_codex/gateway/");
+      if (!validationFlow) {
+        const unauthorized = requireAuthorized(request, env);
+        if (unauthorized) return unauthorized;
+      }
+      if (!selfHostedApiConfigured(env)) {
+        return json({ error: "IBKR Codex origin is not configured" }, { status: 503 });
+      }
+      return proxySelfHostedApi(request, env);
+    }
+
     if (url.pathname === "/" || url.pathname === "/dashboard") {
       return html(DASHBOARD_HTML);
     }
 
     if (url.pathname === "/api/internal/dashboard-snapshot" && request.method === "POST") {
       return storeDashboardSnapshot(request, env);
+    }
+
+    if (url.pathname === "/api/internal/ibkr-notification" && request.method === "POST") {
+      return sendIbkrNotification(request, env);
     }
 
     if (url.pathname === "/api/internal/offsite-object" && request.method === "POST") {
@@ -9616,6 +10500,10 @@ export default {
 
     if (url.pathname === "/health/self-hosted" && request.method === "GET") {
       return selfHostedConnectivityStatus(env);
+    }
+
+    if (url.pathname.startsWith("/api/imdb/history/")) {
+      return proxyPublicImdbHistory(request, env);
     }
 
     if (url.pathname === "/api/snapshot/status" && request.method === "GET") {

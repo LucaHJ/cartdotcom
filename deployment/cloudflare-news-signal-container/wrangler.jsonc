@@ -12,7 +12,7 @@
   },
   "vars": {
     "CODEX_RESEARCH_MODEL": "gpt-5.6-luna",
-    "CODEX_RESEARCH_REASONING_EFFORT": "medium",
+    "CODEX_RESEARCH_REASONING_EFFORT": "low",
     "PROCESSING_AUTHORITY": "self_hosted",
     "SELF_HOSTED_PROXY_ENABLED": "true",
     "CORPUS_EXPORT_ENABLED": "false",
@@ -55,7 +55,7 @@
         "queue": "cartdotcom-news-signal-research",
         "max_batch_size": 1,
         "max_batch_timeout": 1,
-        "max_concurrency": 8,
+        "max_concurrency": 4,
         "max_retries": 3
       }
     ]
@@ -64,7 +64,7 @@
     {
       "class_name": "CodexResearchContainer",
       "image": "./container/Dockerfile",
-      "max_instances": 8
+      "max_instances": 4
     }
   ],
   "durable_objects": {
