@@ -1,0 +1,195 @@
+name: ibkr-codex-paper
+
+services:
+  ib-gateway:
+    build: ./gateway
+    restart: unless-stopped
+    environment:
+      DISPLAY: :1
+      VNC_PORT: "5900"
+      NOVNC_PORT: "6080"
+    volumes:
+      - /srv/codex-lab/ibkr-codex/gateway-home:/home/ibgateway/Jts
+    networks:
+      broker:
+      egress:
+      edge:
+        aliases: [ibkr-gateway]
+    shm_size: 512m
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 512
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:6080/vnc.html >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ibkr_codex
+      POSTGRES_USER: ibkr_codex
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - ibkr_codex_postgres:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ibkr_codex -d ibkr_codex"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 256
+    security_opt: ["no-new-privileges:true"]
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment: &app_environment
+      APP_ENV: production
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ibkr_codex
+      PGUSER: ibkr_codex
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      ARTIFACT_ROOT: /data/artifacts
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL}"
+      IBKR_HOST: ib-gateway
+      IBKR_PORT: "4002"
+      IBKR_CLIENT_ID: "41"
+      IBKR_PAPER_ACCOUNT_FILE: /run/secrets/ibkr_paper_account
+      INTERNAL_API_TOKEN_FILE: /run/secrets/internal_api_token
+      CODEX_RUNNER_URL: http://codex-runner:3010/research
+      CODEX_MODEL: gpt-5.6-sol
+      CODEX_REASONING_EFFORT: xhigh
+      CODEX_TIMEOUT_SECONDS: "7200"
+      NEWS_SIGNAL_ORIGIN: http://news-api:3000
+      NEWS_SIGNAL_TOKEN_FILE: /run/secrets/dashboard_token
+      EMAIL_TO: lucajeannin@icloud.com
+      EMAIL_REMINDER_SECONDS: "3600"
+      NOTIFICATION_URL: "${NOTIFICATION_URL:-}"
+      NOTIFICATION_TOKEN_FILE: /run/secrets/notification_token
+      TRADING_TIME_ET: "12:45"
+      RETENTION_ANNUAL_LIMIT_BYTES: "10737418240"
+    secrets: &app_secrets
+      - postgres_password
+      - ibkr_paper_account
+      - internal_api_token
+      - dashboard_token
+      - notification_token
+    volumes:
+      - /srv/codex-lab/ibkr-codex/artifacts:/data/artifacts
+    networks:
+      data:
+      runtime:
+      edge:
+        aliases: [ibkr-api]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    security_opt: ["no-new-privileges:true"]
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      codex-runner: { condition: service_healthy }
+    environment: *app_environment
+    secrets: *app_secrets
+    volumes:
+      - /srv/codex-lab/ibkr-codex/artifacts:/data/artifacts
+    networks: [data, runtime, broker, egress, edge]
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 384
+    security_opt: ["no-new-privileges:true"]
+
+  codex-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.codex
+    command: ["python", "-m", "app.codex_runner"]
+    restart: unless-stopped
+    environment:
+      CODEX_HOME: /codex-auth
+      CODEX_MODEL: gpt-5.6-sol
+      CODEX_REASONING_EFFORT: xhigh
+      CODEX_TIMEOUT_SECONDS: "7200"
+      RUNNER_PORT: "3010"
+      ARTIFACT_ROOT: /data/artifacts
+      INTERNAL_EVENT_URL: http://api:3000/internal/run-event
+      INTERNAL_API_TOKEN_FILE: /run/secrets/internal_api_token
+    secrets:
+      - internal_api_token
+    volumes:
+      # Deliberately mount only the ChatGPT login, not user plugins/MCPs or
+      # mutable Codex configuration. Research receives only native web search.
+      - /home/lucaj/.codex/auth.json:/codex-auth/auth.json:ro
+      - /srv/codex-lab/ibkr-codex/artifacts:/data/artifacts
+      - /srv/codex-lab/ibkr-codex/research-work:/work
+    networks: [runtime, egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3010/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    mem_limit: 3g
+    cpus: 8.0
+    pids_limit: 1024
+    security_opt: ["no-new-privileges:true"]
+
+  backup:
+    image: postgres:17-alpine
+    profiles: ["tools"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ibkr_codex
+      PGUSER: ibkr_codex
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - /srv/backups/ibkr-codex:/backups
+      - ./scripts:/scripts:ro
+    networks: [data]
+    entrypoint: ["/bin/sh", "/scripts/backup.sh"]
+
+secrets:
+  postgres_password: { file: /srv/codex-lab/ibkr-codex/secrets/postgres_password }
+  ibkr_paper_account: { file: /srv/codex-lab/ibkr-codex/secrets/ibkr_paper_account }
+  internal_api_token: { file: /srv/codex-lab/ibkr-codex/secrets/internal_api_token }
+  notification_token: { file: /srv/codex-lab/ibkr-codex/secrets/notification_token }
+  dashboard_token: { file: /srv/platform/secrets/dashboard_token }
+
+volumes:
+  ibkr_codex_postgres:
+
+networks:
+  data:
+    name: ibkr-codex-data
+    internal: true
+  runtime:
+    name: ibkr-codex-runtime
+    internal: true
+  broker:
+    name: ibkr-codex-broker
+    internal: true
+  egress:
+    name: ibkr-codex-egress
+  edge:
+    name: cartdotcom-edge
+    external: true

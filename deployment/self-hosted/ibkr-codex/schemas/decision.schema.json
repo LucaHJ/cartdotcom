@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_summary", "portfolio_assessment", "candidates", "decisions"],
+  "properties": {
+    "run_summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "portfolio_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["overall_view", "key_risks", "cash_view"],
+      "properties": {
+        "overall_view": { "type": "string", "minLength": 1, "maxLength": 6000 },
+        "key_risks": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 1000 } },
+        "cash_view": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["symbol", "company", "assessment", "liquidity_evidence", "citations"],
+        "properties": {
+          "symbol": { "type": "string", "pattern": "^[A-Z0-9.-]{1,12}$" },
+          "company": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "assessment": { "type": "string", "minLength": 1, "maxLength": 5000 },
+          "liquidity_evidence": { "type": "string", "minLength": 1, "maxLength": 1500 },
+          "citations": { "type": "array", "maxItems": 15, "items": { "type": "string", "pattern": "^https://" } }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["symbol", "action", "target_weight_pct", "confidence", "thesis", "risks", "citations"],
+        "properties": {
+          "symbol": { "type": "string", "pattern": "^[A-Z0-9.-]{1,12}$" },
+          "action": { "type": "string", "enum": ["BUY", "SELL", "HOLD"] },
+          "target_weight_pct": { "type": "number", "minimum": 0, "maximum": 15 },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "thesis": { "type": "string", "minLength": 1, "maxLength": 6000 },
+          "risks": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 1000 } },
+          "citations": { "type": "array", "maxItems": 20, "items": { "type": "string", "pattern": "^https://" } }
+        }
+      }
+    }
+  }
+}

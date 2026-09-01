@@ -1,0 +1,52 @@
+{
+	admin off
+}
+
+:8080 {
+	encode zstd gzip
+
+	handle /health {
+		respond "healthy" 200
+	}
+
+	handle_path /backend/ibkr_codex/gateway/* {
+		forward_auth ibkr-api:3000 {
+			uri /internal/validation/verify
+		}
+		reverse_proxy ibkr-gateway:6080
+	}
+
+	handle_path /backend/ibkr_codex/* {
+		reverse_proxy ibkr-api:3000
+	}
+
+	handle_path /server-docs/* {
+		root * /srv/docs
+		file_server browse
+	}
+
+	handle_path /api/self-hosted/* {
+		reverse_proxy news-api:3000
+	}
+
+	handle_path /api/reel-origin/* {
+		reverse_proxy 172.19.0.1:3110
+	}
+
+	handle_path /api/imdb/history/* {
+		root * /srv/cartdotcom/imdb-history/history
+		@compressed path *.json.gz
+		header @compressed Content-Type "application/json; charset=utf-8"
+		header @compressed Content-Encoding gzip
+		header Cache-Control "public, max-age=300"
+		file_server
+	}
+
+	handle /api/* {
+		reverse_proxy news-api:3000
+	}
+
+	handle {
+		reverse_proxy news-api:3000
+	}
+}

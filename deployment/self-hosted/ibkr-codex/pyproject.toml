@@ -1,0 +1,28 @@
+[project]
+name = "ibkr-codex-paper-trader"
+version = "0.1.0"
+description = "Paper-only IBKR portfolio research and execution service"
+requires-python = ">=3.12"
+dependencies = [
+  "apscheduler==3.11.0",
+  "fastapi==0.116.1",
+  "httpx==0.28.1",
+  "ibapi==9.81.1.post1",
+  "pandas-market-calendars==5.1.1",
+  "psycopg[binary,pool]==3.2.9",
+  "uvicorn[standard]==0.35.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.1",
+  "pytest-asyncio==1.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

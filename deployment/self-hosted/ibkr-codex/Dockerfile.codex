@@ -1,0 +1,20 @@
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && HOME=/opt/codex curl -fsSL https://chatgpt.com/codex/install.sh | HOME=/opt/codex sh \
+    && ln -s /opt/codex/.local/bin/codex /usr/local/bin/codex \
+    && useradd --create-home --uid 1000 app
+WORKDIR /app
+COPY pyproject.toml ./
+COPY app ./app
+RUN pip install .
+COPY schemas ./schemas
+RUN mkdir -p /data/artifacts /work /codex-auth && chown -R app:app /data /work /codex-auth
+USER app
+CMD ["python", "-m", "app.codex_runner"]

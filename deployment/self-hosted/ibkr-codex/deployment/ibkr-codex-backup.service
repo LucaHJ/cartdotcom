@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up the IBKR Codex paper-trading database
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/codex-lab/ibkr-codex/source
+ExecStart=/usr/bin/docker compose --profile tools run --rm backup
+
