@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -20,7 +21,13 @@ from app.policy import POLICY
 from app.workflow import queue_run
 
 
-app = FastAPI(title="IBKR Codex Paper Trader", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    migrate()
+    yield
+
+
+app = FastAPI(title="IBKR Codex Paper Trader", docs_url=None, redoc_url=None, lifespan=lifespan)
 STATIC_ROOT = Path(__file__).resolve().parent.parent / "static"
 
 
@@ -42,11 +49,6 @@ def dashboard_auth(authorization: str | None = Header(default=None)) -> None:
 def internal_auth(authorization: str | None = Header(default=None)) -> None:
     if not settings.internal_api_token or _bearer(authorization) != settings.internal_api_token:
         raise HTTPException(status_code=401, detail="Valid internal authorization is required.")
-
-
-@app.on_event("startup")
-def startup() -> None:
-    migrate()
 
 
 @app.get("/healthz")
