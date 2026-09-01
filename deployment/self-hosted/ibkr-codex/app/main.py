@@ -150,10 +150,11 @@ def orders(limit: int = Query(default=100, ge=1, le=500)) -> Any:
 
 @app.post("/api/control/kill-switch", dependencies=[Depends(dashboard_auth)])
 def kill_switch(body: SwitchRequest) -> dict[str, Any]:
-    set_setting("kill_switch", body.engaged, "dashboard")
-    if body.engaged:
-        set_setting("trading_enabled", False, "dashboard")
-    return {"kill_switch": body.engaged, "trading_enabled": setting_bool("trading_enabled", False)}
+    if not body.engaged:
+        raise HTTPException(status_code=400, detail="Use the capability-gated paper-trading enable action to clear the kill switch.")
+    set_setting("kill_switch", True, "dashboard")
+    set_setting("trading_enabled", False, "dashboard")
+    return {"kill_switch": True, "trading_enabled": False}
 
 
 @app.post("/api/control/enable-paper-trading", dependencies=[Depends(dashboard_auth)])
