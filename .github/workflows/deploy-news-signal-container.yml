@@ -2,6 +2,12 @@ name: Deploy News Signal Container
 
 on:
   workflow_dispatch:
+    inputs:
+      provision_ibkr_vpc:
+        description: Provision the one-time private Caddy VPC service
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -69,6 +75,18 @@ jobs:
       - name: Confirm Docker is available
         run: docker version
 
+      - name: Provision private Caddy VPC service
+        if: ${{ inputs.provision_ibkr_vpc }}
+        run: >-
+          npx wrangler vpc service create cartdotcom-platform-caddy
+          --type http
+          --tunnel-id 1bb7b4e0-aa3b-48c9-ae57-0349c283b7d2
+          --hostname caddy
+          --http-port 8080
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
       - name: Configure dashboard snapshot credential
         run: |
           printf '%s' "$SNAPSHOT_UPLOAD_TOKEN" | npx wrangler secret put SNAPSHOT_UPLOAD_TOKEN
@@ -84,7 +102,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       - name: Deploy Worker and Container
-        run: npx wrangler deploy --containers-rollout=immediate
+        run: npx wrangler deploy --containers-rollout=none
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
