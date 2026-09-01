@@ -284,7 +284,7 @@ def execute_run(run_id: str) -> None:
         with connection() as conn:
             conn.execute(
                 "UPDATE research_runs SET status='validating',output_path=%s,event_path=%s,output_sha256=%s,"
-                "input_tokens=%s,output_tokens=%s,cached_input_tokens=%s,runtime_seconds=%s,"
+                "input_tokens=%s,output_tokens=%s,cached_input_tokens=%s,codex_runtime_seconds=%s,"
                 "decision_summary=%s,artifact_bytes=artifact_bytes+%s WHERE id=%s",
                 (
                     output_artifact.path, event_artifact.path, output_artifact.sha256,
