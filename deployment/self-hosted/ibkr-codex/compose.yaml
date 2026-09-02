@@ -71,7 +71,7 @@ services:
       # The account owner has explicitly approved 10-15 minute delayed US
       # quotes for this once-daily PAPER-only strategy.
       ALLOW_DELAYED_MARKET_DATA: "true"
-      ALLOW_CRYPTO_PAPER_TRADING: "true"
+      ALLOW_CRYPTO_PAPER_TRADING: "false"
       VIRTUAL_INVESTABLE_CAPITAL: "20000"
       IBKR_PAPER_ACCOUNT_FILE: /run/secrets/ibkr_paper_account
       INTERNAL_API_TOKEN_FILE: /run/secrets/internal_api_token

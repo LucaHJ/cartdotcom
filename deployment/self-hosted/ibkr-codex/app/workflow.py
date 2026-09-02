@@ -58,7 +58,7 @@ def _news_context() -> dict[str, Any]:
 
 def _enrich_positions(broker: PaperBroker, snapshot: dict[str, Any]) -> None:
     for position in snapshot["positions"]:
-        if position["sec_type"] not in {"STK", "CRYPTO"} or position["currency"] != "USD":
+        if position["sec_type"] != "STK" or position["currency"] != "USD":
             position["market_data_error"] = "Unsupported existing holding type; no new order is permitted."
             continue
         try:
@@ -207,15 +207,11 @@ def _execute_decision(
         return turnover_used, cash_available
     symbol = decision["symbol"]
     asset_type = decision["asset_type"]
-    if asset_type == "CRYPTO":
-        capability = fetch_one("SELECT crypto_usd_order_access FROM broker_status WHERE singleton=true")
-        if not settings.allow_crypto_paper_trading or not capability or not capability.get("crypto_usd_order_access"):
-            raise PolicyViolation("BTC/ETH paper execution is unavailable because the dedicated IBKR crypto capability probe has not passed.")
     position = _position(snapshot, symbol)
     current_quantity = _decimal(position["quantity"]) if position else Decimal("0")
     current_value = _decimal(position.get("market_value", "0")) if position else Decimal("0")
     contract = broker.resolve_instrument(symbol, asset_type)
-    if contract.currency != "USD" or (asset_type == "US_EQUITY" and contract.secType != "STK") or (asset_type == "CRYPTO" and contract.secType != "CRYPTO"):
+    if contract.currency != "USD" or contract.secType != "STK":
         raise PolicyViolation("The resolved contract does not match the approved USD asset type.")
     first_quote = broker.quote(contract)
     proposal = proposed_order(

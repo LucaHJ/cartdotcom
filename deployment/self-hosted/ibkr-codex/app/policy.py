@@ -10,11 +10,7 @@ from typing import Any
 class RiskPolicy:
     max_new_position_pct: Decimal = Decimal("5")
     max_total_position_pct: Decimal = Decimal("15")
-    equity_target_allocation_pct: Decimal = Decimal("85")
-    crypto_target_allocation_pct: Decimal = Decimal("10")
-    max_crypto_allocation_pct: Decimal = Decimal("10")
-    max_crypto_position_pct: Decimal = Decimal("5")
-    max_new_crypto_position_pct: Decimal = Decimal("3")
+    equity_target_allocation_pct: Decimal = Decimal("95")
     max_turnover_pct: Decimal = Decimal("20")
     min_cash_reserve_pct: Decimal = Decimal("5")
     max_orders_per_run: int = 5
@@ -24,7 +20,7 @@ class RiskPolicy:
     max_slippage_pct: Decimal = Decimal("0.75")
     max_attempts: int = 3
     attempt_seconds: int = 300
-    allowed_security_types: tuple[str, ...] = ("STK", "CRYPTO")
+    allowed_security_types: tuple[str, ...] = ("STK",)
     allowed_currencies: tuple[str, ...] = ("USD",)
     fractional_shares: bool = False
     shorting: bool = False
@@ -34,7 +30,6 @@ class RiskPolicy:
         """Strategic paper allocations, deliberately leaving a cash buffer."""
         return {
             "US_EQUITY": self.equity_target_allocation_pct,
-            "CRYPTO": self.crypto_target_allocation_pct,
             "CASH_RESERVE": self.min_cash_reserve_pct,
         }
 
@@ -63,12 +58,12 @@ def whole_shares(value: Decimal) -> Decimal:
 
 
 def asset_type_for_security_type(security_type: str) -> str:
-    return "CRYPTO" if security_type.upper() == "CRYPTO" else "US_EQUITY"
+    if security_type.upper() != "STK":
+        raise PolicyViolation("Only US-listed stocks and ordinary unleveraged ETFs are permitted.")
+    return "US_EQUITY"
 
 
 def quantity_for_asset_type(value: Decimal, asset_type: str) -> Decimal:
-    if asset_type == "CRYPTO":
-        return value.quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
     return whole_shares(value)
 
 
@@ -80,13 +75,11 @@ def validate_decision_shape(decision: dict[str, Any]) -> None:
         raise PolicyViolation("Invalid ticker symbol.")
     if action not in {"BUY", "SELL", "HOLD"}:
         raise PolicyViolation("Action must be BUY, SELL, or HOLD.")
-    if asset_type not in {"US_EQUITY", "CRYPTO"}:
-        raise PolicyViolation("asset_type must be US_EQUITY or CRYPTO.")
-    if asset_type == "CRYPTO" and symbol not in {"BTC", "ETH"}:
-        raise PolicyViolation("Only BTC and ETH USD crypto contracts are allowed.")
+    if asset_type != "US_EQUITY":
+        raise PolicyViolation("Crypto and all non-US-equity asset types are prohibited.")
     target = Decimal(str(decision.get("target_weight_pct", 0)))
     confidence = Decimal(str(decision.get("confidence", 0)))
-    position_cap = POLICY.max_crypto_position_pct if asset_type == "CRYPTO" else POLICY.max_total_position_pct
+    position_cap = POLICY.max_total_position_pct
     if target < 0 or target > position_cap:
         raise PolicyViolation(f"Target weight exceeds the {position_cap}% {asset_type} position cap.")
     if confidence < 0 or confidence > 1:
@@ -126,14 +119,14 @@ def proposed_order(
 
     target_pct = Decimal(str(decision["target_weight_pct"]))
     desired_value = net_liquidation * target_pct / 100
-    position_cap = POLICY.max_crypto_position_pct if asset_type == "CRYPTO" else POLICY.max_total_position_pct
-    allocation_cap = POLICY.max_crypto_allocation_pct if asset_type == "CRYPTO" else (Decimal("100") - POLICY.min_cash_reserve_pct)
+    position_cap = POLICY.max_total_position_pct
+    allocation_cap = Decimal("100") - POLICY.min_cash_reserve_pct
     max_total = net_liquidation * position_cap / 100
     desired_value = min(desired_value, max_total)
 
     if action == "BUY":
         desired_increase = max(Decimal("0"), desired_value - current_market_value)
-        max_new_pct = POLICY.max_new_crypto_position_pct if asset_type == "CRYPTO" else POLICY.max_new_position_pct
+        max_new_pct = POLICY.max_new_position_pct
         max_new = net_liquidation * max_new_pct / 100
         allocation_remaining = max(Decimal("0"), net_liquidation * allocation_cap / 100 - asset_class_value)
         reserve = net_liquidation * POLICY.min_cash_reserve_pct / 100
