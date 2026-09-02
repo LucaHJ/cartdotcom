@@ -15,7 +15,7 @@ from app.broker import PaperBroker, Quote
 from app.capital import protected_cash_floor, virtual_cash_available
 from app.config import settings
 from app.database import add_event, connection, fetch_one, setting_bool
-from app.notifications import send_failure
+from app.notifications import send_run_report
 from app.policy import POLICY, PolicyViolation, asset_type_for_security_type, proposed_order, validate_decision_shape
 from app.prompt import research_prompt
 
@@ -411,6 +411,8 @@ def execute_run(run_id: str) -> None:
             )
             conn.commit()
         add_event(run_id, "run.completed", "Paper account, terminal orders, executions, and final positions were reconciled.")
+        if not send_run_report(run_id):
+            add_event(run_id, "notification.failed", "The completion report email could not be delivered.")
     except Exception as exc:
         message = str(exc)[:12000]
         with connection() as conn:
@@ -424,7 +426,7 @@ def execute_run(run_id: str) -> None:
             )
             conn.commit()
         add_event(run_id, "run.failed", message)
-        send_failure(run_id, message)
+        send_run_report(run_id)
         raise
     finally:
         broker.disconnect_paper()

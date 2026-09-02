@@ -10,7 +10,7 @@ from urllib.parse import quote
 import httpx
 
 from app.config import settings
-from app.database import connection, fetch_one
+from app.database import connection, fetch_all, fetch_one
 
 
 def create_validation_link() -> str:
@@ -125,4 +125,82 @@ def send_failure(run_id: str, message: str) -> bool:
         "IBKR Codex paper-trading run failed",
         f"Run {run_id} failed closed. No further orders will be submitted until the cause is resolved.\n\n{message}",
         f"{settings.public_base_url}/?run={run_id}",
+    )
+
+
+def _short(value: object, limit: int = 1_200) -> str:
+    text = str(value or "").strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def format_run_report(
+    run: dict[str, object],
+    decisions: list[dict[str, object]],
+    orders: list[dict[str, object]],
+    executions: list[dict[str, object]],
+) -> str:
+    """Produce a compact, complete email while the dashboard retains raw artifacts."""
+    completed = str(run.get("status")) == "completed"
+    outcome = "completed and reconciled" if completed else f"ended {run.get('status', 'unknown')}"
+    lines = [
+        f"IBKR Codex paper-trading research {outcome}.",
+        "All activity is confined to the allowlisted IBKR paper account.",
+        "",
+        f"Run: {run.get('id')}",
+        f"Trigger: {run.get('trigger', 'unknown')}",
+        f"Runtime: {run.get('runtime_seconds', 0)}s total; {run.get('codex_runtime_seconds', 0)}s Codex",
+        "Tokens: "
+        f"{run.get('input_tokens', 0)} input / {run.get('output_tokens', 0)} output / "
+        f"{run.get('cached_input_tokens', 0)} cached input",
+        "",
+        "Research summary:",
+        _short(run.get("decision_summary") or run.get("error") or "No research summary was recorded."),
+        "",
+        "Decisions:",
+    ]
+    if not decisions:
+        lines.append("- No decisions were recorded.")
+    for item in decisions:
+        lines.append(
+            f"- {item.get('symbol')} {item.get('action')} | target {item.get('target_weight_pct')}% | "
+            f"confidence {item.get('confidence')} | {item.get('validation_status')}"
+        )
+        if item.get("thesis"):
+            lines.append(f"  Thesis: {_short(item['thesis'])}")
+        if item.get("validation_message"):
+            lines.append(f"  Validation: {_short(item['validation_message'], 500)}")
+    lines.extend(["", "Paper-order actions:"])
+    if not orders:
+        lines.append("- No paper orders were submitted.")
+    for item in orders:
+        lines.append(
+            f"- {item.get('symbol')} {item.get('side')} {item.get('requested_quantity')} @ "
+            f"{item.get('limit_price')} | attempt {item.get('attempt')} | {item.get('status')} | "
+            f"filled {item.get('filled_quantity')} / remaining {item.get('remaining_quantity')}"
+        )
+        if item.get("error"):
+            lines.append(f"  Order detail: {_short(item['error'], 500)}")
+    lines.extend(["", "Executions:"])
+    if not executions:
+        lines.append("- No paper executions were reported.")
+    for item in executions:
+        lines.append(f"- {item.get('symbol')} {item.get('side')} {item.get('shares')} @ {item.get('price')}")
+    lines.extend(["", f"Dashboard: {settings.public_base_url}"])
+    return "\n".join(lines)
+
+
+def send_run_report(run_id: str) -> bool:
+    run = fetch_one("SELECT * FROM research_runs WHERE id=%s", (run_id,))
+    if not run:
+        return False
+    decisions = fetch_all("SELECT * FROM decisions WHERE run_id=%s ORDER BY created_at", (run_id,))
+    orders = fetch_all("SELECT * FROM orders WHERE run_id=%s ORDER BY created_at", (run_id,))
+    executions = fetch_all("SELECT * FROM executions WHERE order_id IN (SELECT id FROM orders WHERE run_id=%s) ORDER BY executed_at", (run_id,))
+    completed = run["status"] == "completed"
+    return send_email(
+        "run_report",
+        f"run-report:{run_id}",
+        "IBKR Codex paper research completed" if completed else "IBKR Codex paper-trading run failed",
+        format_run_report(run, decisions, orders, executions),
+        settings.public_base_url,
     )
