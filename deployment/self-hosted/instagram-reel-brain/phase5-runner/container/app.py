@@ -287,9 +287,9 @@ def download_remote_media(url: str, destination: Path, headers: dict[str, Any] |
                     if chunk:
                         handle.write(chunk)
     except Exception as exc:
-        raise PipelineError("error_download", f"Could not download carousel item: {exc}") from exc
+        raise PipelineError("error_download", f"Could not download post item: {exc}") from exc
     if not destination.exists() or destination.stat().st_size == 0:
-        raise PipelineError("error_download", "A carousel item download produced an empty file")
+        raise PipelineError("error_download", "A post item download produced an empty file")
 
 
 def select_largest_image_candidate(thumbnails: list[dict[str, Any]]) -> dict[str, Any]:
@@ -330,7 +330,12 @@ def normalise_instagram_private_info(payload: Any, source_url: str) -> dict[str,
     if not isinstance(item, dict):
         return None
     slides = item.get("carousel_media") if isinstance(item.get("carousel_media"), list) else []
-    if len(slides) <= 1:
+    if not slides and (
+        isinstance(item.get("video_versions"), list)
+        or isinstance(item.get("image_versions2"), dict)
+    ):
+        slides = [item]
+    if len(slides) < 1:
         return None
     entries: list[dict[str, Any]] = []
     for slide in slides[:MAX_CAROUSEL_ANALYSIS_ITEMS]:
@@ -358,7 +363,7 @@ def normalise_instagram_private_info(payload: Any, source_url: str) -> dict[str,
             "thumbnails": thumbnails,
             "http_headers": headers,
         })
-    if len(entries) <= 1:
+    if len(entries) < 1:
         return None
     caption = item.get("caption") if isinstance(item.get("caption"), dict) else {}
     user = item.get("user") if isinstance(item.get("user"), dict) else {}
@@ -381,7 +386,7 @@ def normalise_instagram_private_info(payload: Any, source_url: str) -> dict[str,
         "_type": "playlist",
         "id": shortcode,
         "webpage_url": f"https://www.instagram.com/p/{shortcode}/" if shortcode else source_url,
-        "title": caption_text[:160] or f"Instagram carousel {shortcode}",
+        "title": caption_text[:160] or f"Instagram {'carousel' if len(entries) > 1 else 'post'} {shortcode}",
         "description": caption_text,
         "channel": str(user.get("username") or "unknown"),
         "uploader_id": str(user.get("pk") or user.get("id") or ""),
@@ -399,7 +404,9 @@ def find_instagram_carousel_info(value: Any, source_url: str) -> dict[str, Any] 
         direct = normalise_instagram_private_info(value, source_url)
         if direct:
             return direct
-        if isinstance(value.get("carousel_media"), list) and len(value["carousel_media"]) > 1:
+        if ((isinstance(value.get("carousel_media"), list) and len(value["carousel_media"]) >= 1)
+            or isinstance(value.get("image_versions2"), dict)
+            or isinstance(value.get("video_versions"), list)):
             direct = normalise_instagram_private_info({"items": [value]}, source_url)
             if direct:
                 return direct
@@ -422,6 +429,19 @@ def instagram_media_id_from_html(page_html: str, source_url: str) -> str | None:
     pattern = rf'"media_id":"(\d{{8,30}})".{{0,5000}}"shortcode":"{re.escape(shortcode)}"'
     match = re.search(pattern, page_html, flags=re.DOTALL)
     return match.group(1) if match else None
+
+
+def instagram_open_graph_value(page_html: str, property_name: str) -> str:
+    escaped = re.escape(property_name)
+    patterns = [
+        rf'<meta[^>]+property=["\']{escaped}["\'][^>]+content=["\']([^"\']+)["\']',
+        rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']{escaped}["\']',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, page_html, flags=re.IGNORECASE)
+        if match:
+            return html.unescape(match.group(1)).strip()
+    return ""
 
 
 def fetch_instagram_html_info(source_url: str, cookie_path: Path | None = None) -> dict[str, Any] | None:
@@ -450,7 +470,28 @@ def fetch_instagram_html_info(source_url: str, cookie_path: Path | None = None) 
                 return found
         media_id = instagram_media_id_from_html(response.text, source_url)
         if media_id:
-            return fetch_instagram_private_info(source_url, cookie_path, media_id)
+            private = fetch_instagram_private_info(source_url, cookie_path, media_id)
+            if private:
+                return private
+        image_url = instagram_open_graph_value(response.text, "og:image") or instagram_open_graph_value(response.text, "twitter:image")
+        if image_url.startswith("https://"):
+            shortcode = instagram_shortcode(source_url) or ""
+            caption = instagram_open_graph_value(response.text, "og:description")
+            return {
+                "_type": "playlist",
+                "id": shortcode,
+                "webpage_url": source_url,
+                "title": caption[:160] or f"Instagram post {shortcode}",
+                "description": caption,
+                "channel": "unknown",
+                "comments": [],
+                "entries": [{
+                    "id": shortcode,
+                    "formats": [],
+                    "thumbnails": [{"url": image_url}],
+                    "http_headers": {"Referer": "https://www.instagram.com/", "User-Agent": "Mozilla/5.0"},
+                }],
+            }
     except Exception:
         return None
     return None
@@ -666,7 +707,13 @@ def download_instagram_media(
         if private_info:
             raw = private_info
     entries = list(raw.get("entries") or []) if isinstance(raw, dict) else []
-    if not isinstance(raw, dict) or raw.get("_type") != "playlist" or len(entries) <= 1:
+    visual_post = (
+        "/p/" in source_url
+        and isinstance(raw, dict)
+        and raw.get("_type") == "playlist"
+        and len(entries) >= 1
+    )
+    if not visual_post and (not isinstance(raw, dict) or raw.get("_type") != "playlist" or len(entries) <= 1):
         video, metadata = download_reel(source_url, workdir, cookie_path)
         metadata["media_type"] = "reel" if "/reel/" in source_url else "post"
         metadata["carousel_item_count"] = 0
@@ -678,8 +725,8 @@ def download_instagram_media(
     downloaded: list[Path] = []
     previews: list[Path] = []
     manifest_items: list[dict[str, Any]] = []
-    comments: list[dict[str, Any]] = []
-    seen_comment_ids: set[str] = set()
+    comments = list(safe_metadata(raw, source_url).get("comments") or [])
+    seen_comment_ids: set[str] = {str(row.get("id") or "") for row in comments if isinstance(row, dict)}
 
     for index, entry_value in enumerate(entries[:MAX_CAROUSEL_ANALYSIS_ITEMS], 1):
         if not isinstance(entry_value, dict):
@@ -726,13 +773,13 @@ def download_instagram_media(
             comments.append(row)
 
     if len(downloaded) != len(entries[:MAX_CAROUSEL_ANALYSIS_ITEMS]):
-        raise PipelineError("error_download", f"Downloaded {len(downloaded)} of {len(entries[:MAX_CAROUSEL_ANALYSIS_ITEMS])} carousel items")
+        raise PipelineError("error_download", f"Downloaded {len(downloaded)} of {len(entries[:MAX_CAROUSEL_ANALYSIS_ITEMS])} post items")
     overview = build_carousel_overview(previews, workdir)
     parent_url = f"https://www.instagram.com/p/{raw.get('id')}/" if raw.get("id") else source_url
     metadata = safe_metadata(raw, parent_url)
     metadata.update({
         "canonical_url": parent_url,
-        "media_type": "carousel",
+        "media_type": "carousel" if len(downloaded) > 1 else "post",
         "carousel_item_count": len(downloaded),
         "carousel_items": manifest_items,
         "comments": safe_metadata({"comments": comments}, source_url)["comments"],

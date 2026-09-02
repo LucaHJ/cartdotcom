@@ -533,19 +533,25 @@ function looksLikeDirectItem(value: Record<string, unknown>, parentKey: string):
     .some((key) => Object.hasOwn(value, key));
 }
 
-export function findInstagramCarouselMediaPayload(value: unknown): { items: Array<Record<string, unknown>> } | null {
+export function findInstagramPostMediaPayload(value: unknown): { items: Array<Record<string, unknown>> } | null {
   if (Array.isArray(value)) {
     for (const child of value) {
-      const found = findInstagramCarouselMediaPayload(child);
+      const found = findInstagramPostMediaPayload(child);
       if (found) return found;
     }
     return null;
   }
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  if (Array.isArray(record.carousel_media) && record.carousel_media.length > 1) return { items: [record] };
+  if (Array.isArray(record.carousel_media) && record.carousel_media.length >= 1) return { items: [record] };
+  const imageVersions = record.image_versions2 as { candidates?: unknown[] } | undefined;
+  const hasPostCode = typeof record.code === "string" || typeof record.shortcode === "string";
+  if (hasPostCode && ((Array.isArray(imageVersions?.candidates) && imageVersions.candidates.length >= 1)
+    || (Array.isArray(record.video_versions) && record.video_versions.length >= 1))) {
+    return { items: [record] };
+  }
   const sidecar = record.edge_sidecar_to_children as { edges?: unknown[] } | undefined;
-  if (Array.isArray(sidecar?.edges) && sidecar.edges.length > 1) {
+  if (Array.isArray(sidecar?.edges) && sidecar.edges.length >= 1) {
     const carouselMedia = sidecar.edges.map((edge, index) => {
       const node = edge && typeof edge === "object" && (edge as Record<string, unknown>).node
         ? (edge as Record<string, unknown>).node as Record<string, unknown>
@@ -568,10 +574,16 @@ export function findInstagramCarouselMediaPayload(value: unknown): { items: Arra
     }] };
   }
   for (const child of Object.values(record)) {
-    const found = findInstagramCarouselMediaPayload(child);
+    const found = findInstagramPostMediaPayload(child);
     if (found) return found;
   }
   return null;
+}
+
+export function findInstagramCarouselMediaPayload(value: unknown): { items: Array<Record<string, unknown>> } | null {
+  const payload = findInstagramPostMediaPayload(value);
+  const media = payload?.items?.[0];
+  return Array.isArray(media?.carousel_media) && media.carousel_media.length > 1 ? payload : null;
 }
 
 export function instagramDirectCarousels(payload: unknown): InstagramDirectCarousel[] {
@@ -677,7 +689,7 @@ export function findInstagramDirectPermalink(
           || (matchedBy.includes("title_exact") && matchedBy.some((reason) => reason.startsWith("timestamp_")))
           || (matchedBy.includes("title_partial") && closeTimestamp);
         if (strongIdentity) {
-          const mediaPayload = findInstagramCarouselMediaPayload(record);
+          const mediaPayload = findInstagramPostMediaPayload(record);
           candidates.push({
             sourceUrl: permalinks[0],
             score,

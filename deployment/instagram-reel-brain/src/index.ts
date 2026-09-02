@@ -83,6 +83,7 @@ import {
   canonicalizeInstagramUrl,
   classifyInstagramMediaPayload,
   findInstagramCarouselMediaPayload,
+  findInstagramPostMediaPayload,
   findInstagramDirectPermalink,
   pendingPartIsTest,
   instagramDedupeKey,
@@ -838,10 +839,10 @@ function instagramOpenGraphValue(html: string, property: string): string {
   return decodeInstagramHtmlAttribute(forward?.[1] || reverse?.[1] || "");
 }
 
-function instagramCarouselPayloadFromHtml(html: string): { items: Array<Record<string, unknown>> } | null {
+function instagramPostPayloadFromHtml(html: string): { items: Array<Record<string, unknown>> } | null {
   for (const match of html.matchAll(/<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
     try {
-      const found = findInstagramCarouselMediaPayload(JSON.parse(match[1]) as unknown);
+      const found = findInstagramPostMediaPayload(JSON.parse(match[1]) as unknown);
       if (found) return found;
     } catch {
       // Some application/json blocks are bootloader fragments rather than JSON.
@@ -860,10 +861,10 @@ async function resolveInstagramCarouselSlidesFromHtml(
   const anonymousHeaders = { accept: "text/html", "user-agent": instagramDirectHeaders(cookies)["user-agent"] };
   const anonymousPage = await fetch(canonical.url, { headers: anonymousHeaders, redirect: "follow" }).catch(() => null);
   if (anonymousPage?.ok) {
-    const payload = instagramCarouselPayloadFromHtml(await anonymousPage.text());
+    const payload = instagramPostPayloadFromHtml(await anonymousPage.text());
     if (payload) {
       const count = Array.isArray(payload.items[0]?.carousel_media) ? payload.items[0].carousel_media.length : 0;
-      return { sourceMediaJson: JSON.stringify(payload), detail: `html_embedded_carousel_${count}` };
+      return { sourceMediaJson: JSON.stringify(payload), detail: `html_embedded_media_${Math.max(1, count)}` };
     }
   }
   const slides: string[] = [];
@@ -891,7 +892,7 @@ async function resolveInstagramCarouselSlidesFromHtml(
     seen.add(imageUrl);
     slides.push(imageUrl);
   }
-  if (slides.length <= 1) return { sourceMediaJson: null, detail: `html_open_graph_${slides.length}` };
+  if (slides.length < 1) return { sourceMediaJson: null, detail: "html_open_graph_0" };
   return {
     sourceMediaJson: JSON.stringify({ items: [{
       code: canonical.shortcode,
@@ -998,7 +999,7 @@ function instagramCodeFromMediaInfo(payload: unknown): string | null {
 async function resolveInstagramMediaWithCookies(
   mediaId: string,
   cookies: InstagramBrowserCookie[],
-): Promise<{ sourceUrl: string | null; method: string; detail?: string }> {
+): Promise<{ sourceUrl: string | null; method: string; detail?: string; sourceMediaJson?: string | null }> {
   const response = await fetch(`https://www.instagram.com/api/v1/media/${encodeURIComponent(mediaId)}/info/`, {
     headers: {
       accept: "application/json",
@@ -1011,10 +1012,12 @@ async function resolveInstagramMediaWithCookies(
   if (!response) return { sourceUrl: null, method: "instagram_web_api", detail: "network_failure" };
   const body = await response.json<unknown>().catch(() => null);
   const code = instagramCodeFromMediaInfo(body);
+  const mediaPayload = findInstagramPostMediaPayload(body);
   return {
     sourceUrl: code ? `https://www.instagram.com/p/${code}/` : null,
     method: "instagram_web_api",
     detail: code ? undefined : `HTTP ${response.status}`,
+    sourceMediaJson: mediaPayload ? JSON.stringify(mediaPayload) : null,
   };
 }
 
@@ -1063,7 +1066,7 @@ async function resolveInstagramCarouselSlidesWithBrowser(
       if (!/(?:graphql|api\/v1)/i.test(responseUrl) || !/json/i.test(contentType)) return;
       const task = Promise.resolve(response.json())
         .then((payload: unknown) => {
-          const mediaPayload = findInstagramCarouselMediaPayload(payload);
+          const mediaPayload = findInstagramPostMediaPayload(payload);
           if (mediaPayload && !networkMediaJson) networkMediaJson = JSON.stringify(mediaPayload);
         })
         .catch(() => undefined) as Promise<void>;
@@ -1117,7 +1120,7 @@ async function resolveInstagramCarouselSlidesWithBrowser(
       clicks += 1;
       await new Promise((resolve) => setTimeout(resolve, 800));
     }
-    if (media.length <= 1) {
+    if (media.length < 1) {
       const currentPath = (() => { try { return new URL(page.url()).pathname; } catch { return "unknown"; } })();
       const titleText = (await page.title().catch(() => "")).replace(/[^a-z0-9 _-]+/gi, "").slice(0, 60);
       return { sourceMediaJson: null, detail: `browser_media_${media.length}:clicks_${clicks}:article_${articleFound}:path_${currentPath}:title_${titleText}` };
@@ -1149,7 +1152,36 @@ async function resolveInstagramCarouselPermalink(
   const cookies = await loadInstagramBrowserCookies(env);
   if (!cookies) return { sourceUrl: null, method: "instagram_browser_auth", detail: "Instagram browser authentication is not connected" };
   const directInbox = await resolveInstagramMediaFromDirect({ mediaId, title, timestampMs }, cookies);
-  if (directInbox.sourceUrl) return directInbox;
+  if (directInbox.sourceUrl) {
+    if (directInbox.sourceMediaJson) return directInbox;
+    const enriched = await resolveInstagramMediaWithCookies(mediaId, cookies);
+    if (enriched.sourceMediaJson) {
+      return {
+        ...directInbox,
+        method: `${directInbox.method}+instagram_web_api`,
+        detail: [directInbox.detail, "media_payload_enriched"].filter(Boolean).join(";"),
+        sourceMediaJson: enriched.sourceMediaJson,
+      };
+    }
+    const html = await resolveInstagramCarouselSlidesFromHtml(directInbox.sourceUrl, title, cookies);
+    if (html.sourceMediaJson) {
+      return {
+        ...directInbox,
+        method: `${directInbox.method}+instagram_html`,
+        detail: [directInbox.detail, html.detail].filter(Boolean).join(";"),
+        sourceMediaJson: html.sourceMediaJson,
+      };
+    }
+    const browserMedia = await resolveInstagramCarouselSlidesWithBrowser(env, directInbox.sourceUrl, title, cookies);
+    return browserMedia.sourceMediaJson
+      ? {
+          ...directInbox,
+          method: `${directInbox.method}+cloudflare_browser`,
+          detail: [directInbox.detail, browserMedia.detail].filter(Boolean).join(";"),
+          sourceMediaJson: browserMedia.sourceMediaJson,
+        }
+      : directInbox;
+  }
   const direct = await resolveInstagramMediaWithCookies(mediaId, cookies);
   if (direct.sourceUrl) return direct;
   const browser = await resolveInstagramMediaWithBrowser(env, mediaId, cookies);
@@ -1976,7 +2008,7 @@ async function refreshCanonicalResourcePage(env: Env, canonicalKey: string): Pro
   const rows = await env.REEL_DB.prepare(
     `SELECT r.name,r.kind,r.artifact_type,r.canonical_url,r.summary,r.why_useful,r.guide_text,r.evidence_json,r.media_json,r.library_path,
       j.id AS job_id,j.title AS reel_title,j.author_username,j.shortcode,j.library_path AS root_path,
-      CASE WHEN EXISTS(SELECT 1 FROM artifacts a WHERE a.job_id=j.id AND a.kind='carousel_item') THEN 'carousel'
+      CASE WHEN (SELECT COUNT(*) FROM artifacts a WHERE a.job_id=j.id AND a.kind='carousel_item') > 1 THEN 'carousel'
         WHEN COALESCE(j.canonical_url,j.source_url) LIKE '%/p/%' THEN 'post' ELSE 'reel' END AS media_type
      FROM resources r JOIN jobs j ON j.id=r.job_id
      WHERE r.canonical_key=? ORDER BY j.completed_at,j.created_at`,
@@ -2682,7 +2714,7 @@ async function classifyBacklogCandidate(env: Env, candidate: BacklogCandidate): 
     }).catch(() => null);
     const html = page?.ok ? await page.text() : "";
     detail.push(`html_HTTP_${page?.status || "network"}`, `html_bytes_${html.length}`);
-    const embedded = html ? instagramCarouselPayloadFromHtml(html) : null;
+    const embedded = html ? instagramPostPayloadFromHtml(html) : null;
     if (embedded) detail.push("html_embedded_media");
     if (embedded) classification = classifyInstagramMediaPayload(embedded);
     if (classification.mediaType === "unknown" && html) {

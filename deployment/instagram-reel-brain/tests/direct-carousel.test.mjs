@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyInstagramMediaPayload, findInstagramCarouselMediaPayload, findInstagramDirectPermalink, instagramDirectCarousels } from "../src/domain.ts";
+import { classifyInstagramMediaPayload, findInstagramCarouselMediaPayload, findInstagramDirectPermalink, findInstagramPostMediaPayload, instagramDirectCarousels } from "../src/domain.ts";
 
 test("classifies Instagram private media payloads before a carousel-only pilot", () => {
   assert.deepEqual(classifyInstagramMediaPayload({ items: [{ media_type: 8, carousel_media: [{ pk: "1" }, { pk: "2" }, { pk: "3" }] }] }), {
@@ -77,6 +77,19 @@ test("carries only the matched carousel media object into the processing hand-of
   const payload = { inbox: { threads: [{ items: [{ item_id: "message-4", item_type: "media_share", media_share: carousel }] }] } };
   const match = findInstagramDirectPermalink(payload, { mediaId: "18113134456932485" });
   assert.deepEqual(match?.mediaPayload, { items: [carousel] });
+});
+
+test("carries a matched single-image post into the processing hand-off", () => {
+  const post = {
+    pk: "18113134456932486",
+    code: "DSingleImage1",
+    image_versions2: { candidates: [{ url: "https://cdn/single.jpg", width: 1440, height: 1800 }] },
+  };
+  const payload = { inbox: { threads: [{ items: [{ item_id: "message-single", item_type: "media_share", media_share: post }] }] } };
+  const match = findInstagramDirectPermalink(payload, { mediaId: "18113134456932486" });
+  assert.deepEqual(match?.mediaPayload, { items: [post] });
+  assert.deepEqual(findInstagramPostMediaPayload(post), { items: [post] });
+  assert.equal(findInstagramCarouselMediaPayload(post), null);
 });
 
 test("normalises GraphQL sidecar children into the image hand-off schema", () => {

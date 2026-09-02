@@ -82,6 +82,63 @@ def make_synthetic_video(path: Path):
 
 
 class MediaProcessorApiTests(unittest.TestCase):
+    def test_single_image_post_payload_is_archived_as_one_visual_item(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            module = load_runtime_processor()
+            payload = json.dumps({"items": [{
+                "code": "DSingleImage1",
+                "caption": {"text": "A single visual reference"},
+                "user": {"username": "fixture_author"},
+                "image_versions2": {"candidates": [{
+                    "url": "https://cdn.invalid/single.jpg", "width": 1440, "height": 1800,
+                }]},
+            }]})
+
+            def fake_download(_url, destination, _headers=None):
+                destination.write_bytes(b"synthetic-image")
+
+            def fake_preview(_item, _index, preview_dir):
+                preview_dir.mkdir(parents=True, exist_ok=True)
+                preview = preview_dir / "slide-01.jpg"
+                preview.write_bytes(b"synthetic-preview")
+                return preview
+
+            def fake_overview(_previews, workdir):
+                overview = workdir / "post-overview.mp4"
+                overview.write_bytes(b"synthetic-overview")
+                return overview
+
+            with mock.patch.object(module, "download_remote_media", side_effect=fake_download), mock.patch.object(
+                module, "carousel_preview", side_effect=fake_preview,
+            ), mock.patch.object(module, "build_carousel_overview", side_effect=fake_overview), mock.patch.object(
+                module, "download_reel", side_effect=AssertionError("single image must not use the video downloader"),
+            ):
+                video, metadata, items, manifest, frames = module.download_instagram_media(
+                    "https://www.instagram.com/p/DSingleImage1/", root, source_media_json=payload,
+                )
+
+            self.assertEqual(video.name, "post-overview.mp4")
+            self.assertEqual(metadata["media_type"], "post")
+            self.assertEqual(metadata["carousel_item_count"], 1)
+            self.assertEqual(metadata["author_username"], "fixture_author")
+            self.assertEqual(len(items), 1)
+            self.assertEqual(len(frames), 1)
+            self.assertIsNotNone(manifest)
+            self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["item_count"], 1)
+
+    def test_single_image_open_graph_page_becomes_visual_post_payload(self):
+        with tempfile.TemporaryDirectory() as raw:
+            module = load_runtime_processor()
+            response = mock.MagicMock()
+            response.ok = True
+            response.text = '<meta property="og:image" content="https://cdn.invalid/post.jpg"><meta property="og:description" content="Single image caption">'
+            with mock.patch.object(module.requests, "get", return_value=response):
+                payload = module.fetch_instagram_html_info("https://www.instagram.com/p/DSingleImage2/")
+            self.assertEqual(payload["_type"], "playlist")
+            self.assertEqual(len(payload["entries"]), 1)
+            self.assertEqual(payload["entries"][0]["thumbnails"][0]["url"], "https://cdn.invalid/post.jpg")
+
     def test_prefetch_cache_is_exact_atomic_and_hash_verified(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
