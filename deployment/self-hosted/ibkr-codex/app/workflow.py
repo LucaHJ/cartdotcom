@@ -12,6 +12,7 @@ import pandas_market_calendars as mcal
 
 from app.artifacts import store_json, store_text
 from app.broker import PaperBroker, Quote
+from app.capital import protected_cash_floor, virtual_cash_available
 from app.config import settings
 from app.database import add_event, connection, fetch_one, setting_bool
 from app.notifications import send_failure
@@ -84,12 +85,12 @@ def _store_snapshot(run_id: str, snapshot: dict[str, Any]) -> str:
     snapshot_id = str(uuid.uuid4())
     with connection() as conn:
         conn.execute(
-            "INSERT INTO portfolio_snapshots(id,run_id,account_id,currency,net_liquidation,total_cash,"
+            "INSERT INTO portfolio_snapshots(id,run_id,account_id,currency,net_liquidation,total_cash,accrued_cash,"
             "available_funds,buying_power,excess_liquidity,positions,open_orders) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)",
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)",
             (
                 snapshot_id, run_id, snapshot["account_id"], snapshot["currency"], snapshot["net_liquidation"],
-                snapshot["total_cash"], snapshot["available_funds"], snapshot["buying_power"],
+                snapshot["total_cash"], snapshot["accrued_cash"], snapshot["available_funds"], snapshot["buying_power"],
                 snapshot["excess_liquidity"], json.dumps(snapshot["positions"]), json.dumps(snapshot["open_orders"]),
             ),
         )
@@ -107,6 +108,36 @@ def _asset_class_value(snapshot: dict[str, Any], asset_type: str) -> Decimal:
         (_decimal(item.get("market_value", "0")) for item in snapshot["positions"] if item.get("asset_type") == asset_type),
         Decimal("0"),
     )
+
+
+def _setting_decimal(key: str) -> Decimal:
+    row = fetch_one("SELECT value FROM app_settings WHERE key=%s", (key,))
+    if not row:
+        raise PolicyViolation(f"Capital-protection setting {key} has not been initialized.")
+    return _decimal(row["value"])
+
+
+def _virtual_capital_context(broker: PaperBroker, snapshot: dict[str, Any]) -> dict[str, Decimal | str]:
+    principal = _setting_decimal("virtual_cash_reserve_principal")
+    accrued_baseline = _setting_decimal("virtual_cash_reserve_accrued_baseline")
+    protected_floor = protected_cash_floor(principal, _decimal(snapshot["accrued_cash"]), accrued_baseline)
+    available_base_cash = virtual_cash_available(_decimal(snapshot["total_cash"]), protected_floor)
+    base_currency = str(snapshot["currency"]).upper()
+    fx_contract = broker.resolve_base_to_usd_fx(base_currency)
+    base_to_usd = Decimal("1") if fx_contract is None else broker.quote(fx_contract).last
+    if base_to_usd <= 0:
+        raise PolicyViolation("A valid base-currency-to-USD quote is required before any USD order.")
+    held_usd_value = sum(
+        (_decimal(item.get("market_value", "0")) for item in snapshot["positions"]), Decimal("0")
+    )
+    return {
+        "base_currency": base_currency,
+        "protected_floor": protected_floor,
+        "available_base_cash": available_base_cash,
+        "base_to_usd": base_to_usd,
+        "cash_usd": available_base_cash * base_to_usd,
+        "net_liquidation_usd": available_base_cash * base_to_usd + held_usd_value,
+    }
 
 
 def _insert_decisions(run_id: str, output: dict[str, Any]) -> list[dict[str, Any]]:
@@ -167,6 +198,7 @@ def _execute_decision(
     snapshot: dict[str, Any],
     turnover_used: Decimal,
     cash_available: Decimal,
+    policy_net_liquidation: Decimal,
 ) -> tuple[Decimal, Decimal]:
     if setting_bool("kill_switch", True) or not setting_bool("trading_enabled", False):
         raise PolicyViolation("The execution gate closed before this decision was submitted.")
@@ -188,7 +220,7 @@ def _execute_decision(
     first_quote = broker.quote(contract)
     proposal = proposed_order(
         decision=decision,
-        net_liquidation=_decimal(snapshot["net_liquidation"]),
+        net_liquidation=policy_net_liquidation,
         cash=cash_available,
         current_quantity=current_quantity,
         current_market_value=current_value,
@@ -279,6 +311,15 @@ def execute_run(run_id: str) -> None:
             "FROM broker_status WHERE singleton=true"
         ) or {}
         snapshot["execution_capabilities"] = capability
+        capital = _virtual_capital_context(broker, snapshot)
+        snapshot["capital_protection"] = {
+            "base_currency": capital["base_currency"],
+            "protected_cash_floor": str(capital["protected_floor"]),
+            "available_base_cash": str(capital["available_base_cash"]),
+            "base_to_usd": str(capital["base_to_usd"]),
+            "virtual_cash_usd": str(capital["cash_usd"]),
+            "virtual_net_liquidation_usd": str(capital["net_liquidation_usd"]),
+        }
         _store_snapshot(run_id, snapshot)
         news_context = _news_context()
         prompt = research_prompt(snapshot, news_context)
@@ -335,11 +376,12 @@ def execute_run(run_id: str) -> None:
                 conn.execute("UPDATE research_runs SET status='executing' WHERE id=%s", (run_id,))
                 conn.commit()
             turnover = Decimal("0")
-            cash_available = _decimal(snapshot["total_cash"])
+            cash_available = _decimal(capital["cash_usd"])
+            policy_net_liquidation = _decimal(capital["net_liquidation_usd"])
             for decision in decisions:
                 try:
                     turnover, cash_available = _execute_decision(
-                        broker, run_id, decision, snapshot, turnover, cash_available,
+                        broker, run_id, decision, snapshot, turnover, cash_available, policy_net_liquidation,
                     )
                 except PolicyViolation as exc:
                     _record_validation(decision["id"], "rejected", str(exc))

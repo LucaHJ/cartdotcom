@@ -328,7 +328,7 @@ class PaperBroker(EWrapper, EClient):
         self.connect_paper()
         req_id = self._req_id()
         self._account_values = {}
-        tags = "NetLiquidation,TotalCashValue,AvailableFunds,BuyingPower,ExcessLiquidity,Currency"
+        tags = "NetLiquidation,TotalCashValue,AccruedCash,AvailableFunds,BuyingPower,ExcessLiquidity,Currency"
         self.reqAccountSummary(req_id, "All", tags)
         self._wait(lambda: self._account_values.get("_done") == str(req_id), 20, "account summary")
         self.cancelAccountSummary(req_id)
@@ -348,6 +348,7 @@ class PaperBroker(EWrapper, EClient):
             "currency": self._account_values.get("Currency", self._account_values.get("NetLiquidationCurrency", "USD")),
             "net_liquidation": self._number("NetLiquidation"),
             "total_cash": self._number("TotalCashValue"),
+            "accrued_cash": self._number("AccruedCash"),
             "available_funds": self._number("AvailableFunds"),
             "buying_power": self._number("BuyingPower"),
             "excess_liquidity": self._number("ExcessLiquidity"),
@@ -403,6 +404,27 @@ class PaperBroker(EWrapper, EClient):
         if asset_type == "CRYPTO":
             return self.resolve_crypto(symbol)
         raise RuntimeError(f"Unsupported asset type {asset_type}.")
+
+    def resolve_base_to_usd_fx(self, base_currency: str) -> Contract | None:
+        """Resolve the USD value of one unit of the account base currency."""
+        if base_currency.upper() == "USD":
+            return None
+        req_id = self._req_id()
+        query = Contract()
+        query.symbol = base_currency.upper()
+        query.secType = "CASH"
+        query.exchange = "IDEALPRO"
+        query.currency = "USD"
+        self._contract_details[req_id] = []
+        self.reqContractDetails(req_id, query)
+        self._wait(lambda: req_id in self._contract_done, 20, f"FX contract {base_currency}.USD")
+        matches = [
+            item.contract for item in self._contract_details.get(req_id, [])
+            if item.contract.secType == "CASH" and item.contract.symbol == base_currency.upper() and item.contract.currency == "USD"
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(f"Could not resolve exactly one {base_currency}.USD FX contract for capital protection.")
+        return matches[0]
 
     def _quote_once(self, contract: Contract, requested_type: int) -> Quote:
         req_id = self._req_id()

@@ -4,12 +4,14 @@ import logging
 import json
 import time
 from datetime import UTC, datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pandas_market_calendars as mcal
 
 from app.artifacts import enforce_retention
 from app.broker import PaperAccountDiscovery, PaperBroker
+from app.capital import initial_protected_principal
 from app.config import settings
 from app.database import add_event, connection, fetch_one, migrate, set_setting
 from app.notifications import send_capability_reminder, send_gateway_reminder
@@ -19,6 +21,20 @@ from app.workflow import execute_run, queue_run
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ibkr-worker")
 ET = ZoneInfo("America/New_York")
+
+
+def initialize_virtual_capital_reserve(snapshot: dict[str, object]) -> None:
+    """Fix the protected base-currency principal once, never from a later sale."""
+    existing = fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_principal'")
+    if existing:
+        return
+    total_cash = Decimal(str(snapshot["total_cash"]))
+    virtual_capital = Decimal(settings.virtual_investable_capital)
+    principal = initial_protected_principal(total_cash, virtual_capital)
+    set_setting("virtual_cash_reserve_principal", str(principal), "virtual-capital-initialization")
+    set_setting("virtual_cash_reserve_accrued_baseline", str(snapshot["accrued_cash"]), "virtual-capital-initialization")
+    set_setting("virtual_cash_reserve_currency", str(snapshot["currency"]), "virtual-capital-initialization")
+    set_setting("virtual_investable_capital", str(virtual_capital), "virtual-capital-initialization")
 
 
 def scheduled_time(now: datetime) -> datetime | None:
@@ -50,6 +66,7 @@ def broker_health() -> bool:
         broker = PaperBroker(configured)
         broker.connect_paper(timeout=10)
         snapshot = broker.portfolio_snapshot()
+        initialize_virtual_capital_reserve(snapshot)
         orphaned = [item for item in snapshot["open_orders"] if str(item.get("order_ref", "")).startswith("codex-paper:")]
         if orphaned:
             set_setting("kill_switch", True, "worker-recovery")

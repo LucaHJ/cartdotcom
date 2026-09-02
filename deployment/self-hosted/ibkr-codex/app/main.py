@@ -107,6 +107,12 @@ def status() -> dict[str, Any]:
             "early_close_adjusted": True,
         },
         "retention": retention_status(),
+        "capital_protection": {
+            "reserve_principal": fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_principal'"),
+            "interest_baseline": fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_accrued_baseline'"),
+            "currency": fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_currency'"),
+            "virtual_capital": fetch_one("SELECT value FROM app_settings WHERE key='virtual_investable_capital'"),
+        },
     })
 
 

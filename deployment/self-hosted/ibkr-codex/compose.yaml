@@ -72,6 +72,7 @@ services:
       # quotes for this once-daily PAPER-only strategy.
       ALLOW_DELAYED_MARKET_DATA: "true"
       ALLOW_CRYPTO_PAPER_TRADING: "true"
+      VIRTUAL_INVESTABLE_CAPITAL: "20000"
       IBKR_PAPER_ACCOUNT_FILE: /run/secrets/ibkr_paper_account
       INTERNAL_API_TOKEN_FILE: /run/secrets/internal_api_token
       CODEX_RUNNER_URL: http://codex-runner:3010/research
