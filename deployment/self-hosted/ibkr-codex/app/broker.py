@@ -83,6 +83,16 @@ class Quote:
     last: Decimal
     market_data_type: int
 
+    @property
+    def is_delayed(self) -> bool:
+        return self.market_data_type in {3, 4}
+
+    @property
+    def source_label(self) -> str:
+        return {1: "live", 3: "delayed", 4: "delayed-frozen"}.get(
+            self.market_data_type, f"unknown-{self.market_data_type}"
+        )
+
 
 @dataclass
 class BrokerOrderState:
@@ -174,7 +184,12 @@ class PaperBroker(EWrapper, EClient):
             self._condition.notify_all()
 
     def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = "") -> None:
-        if errorCode not in {2104, 2106, 2107, 2108, 2158}:
+        # IBKR uses the same callback for its informational delayed-data
+        # handoff ("Displaying delayed market data") as it uses for a true
+        # missing-subscription error. The former is expected after an explicit
+        # reqMarketDataType(3) request and the quote callbacks follow it.
+        delayed_handoff = errorCode == 354 and "Displaying delayed market data" in errorString
+        if errorCode not in {2104, 2106, 2107, 2108, 2158} and not delayed_handoff:
             self._errors.append({
                 "request_id": reqId,
                 "code": errorCode,
@@ -252,7 +267,10 @@ class PaperBroker(EWrapper, EClient):
         self._quotes.setdefault(reqId, {})["market_data_type"] = marketDataType
 
     def tickPrice(self, reqId: int, tickType: int, price: float, attrib: Any) -> None:  # noqa: N802
-        field = {1: "bid", 2: "ask", 4: "last"}.get(tickType)
+        # Delayed snapshots use a parallel set of tick fields: 66/67/68
+        # correspond to the ordinary live fields 1/2/4. Normalize both
+        # protocols so the later order-validation path remains identical.
+        field = {1: "bid", 2: "ask", 4: "last", 66: "bid", 67: "ask", 68: "last"}.get(tickType)
         if field and price > 0:
             self._quotes.setdefault(reqId, {})[field] = price
             self._notify()
@@ -353,27 +371,57 @@ class PaperBroker(EWrapper, EClient):
             raise RuntimeError(f"Ticker {symbol} did not resolve to exactly one USD stock contract.")
         return matches[0]
 
-    def quote(self, contract: Contract) -> Quote:
+    def _quote_once(self, contract: Contract, requested_type: int) -> Quote:
         req_id = self._req_id()
         self._quotes[req_id] = {"market_data_type": 0}
-        self.reqMarketDataType(1)
+        error_offset = len(self._errors)
+        self.reqMarketDataType(requested_type)
         self.reqMktData(req_id, contract, "", True, False, [])
         self._wait(
-            lambda: req_id in self._quote_done or all(key in self._quotes[req_id] for key in ("bid", "ask", "last")),
+            lambda: req_id in self._quote_done
+            or all(key in self._quotes[req_id] for key in ("bid", "ask", "last"))
+            or any(item.get("request_id") == req_id for item in self._errors[error_offset:]),
             20,
             f"quote {contract.symbol}",
         )
         self.cancelMktData(req_id)
         values = self._quotes[req_id]
-        if values.get("market_data_type") != 1:
-            raise RuntimeError(f"Live market data is required for autonomous execution of {contract.symbol}.")
+        errors = [item for item in self._errors[error_offset:] if item.get("request_id") == req_id]
+        if errors:
+            raise RuntimeError(f"IBKR market data rejected for {contract.symbol}: {errors[-1]['message']}")
+        data_type = int(values.get("market_data_type", 0))
+        if data_type != requested_type:
+            raise RuntimeError(
+                f"IBKR returned market-data type {data_type} for {contract.symbol}; expected {requested_type}."
+            )
+        missing = [key for key in ("bid", "ask", "last") if Decimal(str(values.get(key, 0))) <= 0]
+        if missing:
+            raise RuntimeError(
+                f"IBKR {Quote(contract.symbol, Decimal('0'), Decimal('0'), Decimal('0'), data_type).source_label} "
+                f"quote for {contract.symbol} omitted {', '.join(missing)}."
+            )
         return Quote(
             symbol=contract.symbol,
             bid=Decimal(str(values.get("bid", 0))),
             ask=Decimal(str(values.get("ask", 0))),
             last=Decimal(str(values.get("last", 0))),
-            market_data_type=int(values.get("market_data_type", 0)),
+            market_data_type=data_type,
         )
+
+    def quote(self, contract: Contract) -> Quote:
+        """Return live data, or owner-authorized delayed data as a clear fallback."""
+        try:
+            return self._quote_once(contract, 1)
+        except Exception as live_error:
+            if not settings.allow_delayed_market_data:
+                raise RuntimeError(f"Live market data is required for {contract.symbol}: {live_error}") from live_error
+            try:
+                return self._quote_once(contract, 3)
+            except Exception as delayed_error:
+                raise RuntimeError(
+                    f"Neither live nor authorized delayed market data is usable for {contract.symbol}. "
+                    f"Live: {live_error}; delayed: {delayed_error}"
+                ) from delayed_error
 
     def submit_limit_order(
         self, contract: Contract, side: str, quantity: Decimal, limit_price: Decimal, order_ref: str,

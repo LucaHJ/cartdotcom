@@ -68,6 +68,9 @@ services:
       IBKR_HOST: 172.24.0.2
       IBKR_PORT: "4002"
       IBKR_CLIENT_ID: "41"
+      # The account owner has explicitly approved 10-15 minute delayed US
+      # quotes for this once-daily PAPER-only strategy.
+      ALLOW_DELAYED_MARKET_DATA: "true"
       IBKR_PAPER_ACCOUNT_FILE: /run/secrets/ibkr_paper_account
       INTERNAL_API_TOKEN_FILE: /run/secrets/internal_api_token
       CODEX_RUNNER_URL: http://codex-runner:3010/research

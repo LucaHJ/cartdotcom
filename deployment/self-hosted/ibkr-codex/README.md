@@ -42,4 +42,4 @@ docker compose logs --tail=100 codex-runner
 docker compose --profile tools run --rm backup
 ```
 
-The worker health-checks IBKR every five minutes and emails at most once per hour while login or capability intervention is required. It also recovers interrupted research runs fail-closed, engages the kill switch, and cancels any working order carrying this application's `codex-paper:` ownership prefix.
+The worker health-checks IBKR every five minutes and emails at most once per hour while login or capability intervention is required. It also recovers interrupted research runs fail-closed, engages the kill switch, and cancels any working order carrying this application's `codex-paper:` ownership prefix. Live US quotes are preferred; delayed 10-15 minute US quotes are accepted only when `ALLOW_DELAYED_MARKET_DATA=true` is explicitly configured, and are shown as delayed in the dashboard and run artifacts.

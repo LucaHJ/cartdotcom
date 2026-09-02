@@ -6,6 +6,7 @@ def test_dashboard_discloses_safety_boundary_and_limits() -> None:
     assert "PAPER ONLY" in value
     assert "Hard risk limits" in value
     assert "Engage kill switch" in value
+    assert "Delayed US quotes permitted" in value
     assert "backend/ibkr_codex" in value
 
 

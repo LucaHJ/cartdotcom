@@ -29,6 +29,9 @@ class Settings:
     ibkr_host: str = os.getenv("IBKR_HOST", "127.0.0.1")
     ibkr_port: int = int(os.getenv("IBKR_PORT", "4002"))
     ibkr_client_id: int = int(os.getenv("IBKR_CLIENT_ID", "41"))
+    # Delayed data is opt-in. It is appropriate only when the account owner
+    # explicitly accepts the 10-15 minute price delay for paper execution.
+    allow_delayed_market_data: bool = os.getenv("ALLOW_DELAYED_MARKET_DATA", "false").lower() == "true"
     ibkr_paper_account: str = _secret("IBKR_PAPER_ACCOUNT")
     internal_api_token: str = _secret("INTERNAL_API_TOKEN")
     codex_runner_url: str = os.getenv("CODEX_RUNNER_URL", "http://127.0.0.1:3010/research")

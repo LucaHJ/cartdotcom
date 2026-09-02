@@ -58,7 +58,7 @@ def broker_health() -> bool:
                 broker.cancel_and_wait(int(item["order_id"]), timeout=30)
         capability_row = fetch_one(
             "SELECT last_capability_probe_at FROM broker_status WHERE singleton=true "
-            "AND live_us_stock_quotes=true AND api_us_stock_order_access=true "
+            "AND (live_us_stock_quotes=true OR delayed_us_stock_quotes=true) AND api_us_stock_order_access=true "
             "AND last_capability_probe_at > now() - interval '24 hours'"
         )
         capability_update: dict[str, object] | None = None
@@ -67,18 +67,19 @@ def broker_health() -> bool:
             try:
                 contract = broker.resolve_stock("SPY")
                 quote = broker.quote(contract)
-                capability_update["live_us_stock_quotes"] = bool(
-                    quote.market_data_type == 1 and quote.bid > 0 and quote.ask > 0 and quote.last > 0
-                )
+                capability_update["live_us_stock_quotes"] = quote.market_data_type == 1
+                capability_update["delayed_us_stock_quotes"] = quote.is_delayed
                 capability_update["quote"] = {
                     "symbol": quote.symbol,
                     "market_data_type": quote.market_data_type,
+                    "source": quote.source_label,
                     "bid_available": quote.bid > 0,
                     "ask_available": quote.ask > 0,
                     "last_available": quote.last > 0,
                 }
             except Exception as exc:
                 capability_update["live_us_stock_quotes"] = False
+                capability_update["delayed_us_stock_quotes"] = False
                 capability_update["quote_error"] = str(exc)[:1000]
             try:
                 order_probe = broker.probe_us_stock_order_access("SPY")
@@ -103,25 +104,28 @@ def broker_health() -> bool:
             if capability_update is not None:
                 conn.execute(
                     "UPDATE broker_status SET live_us_stock_quotes=%s,api_us_stock_order_access=%s,"
-                    "capability_details=%s::jsonb,last_capability_probe_at=now() WHERE singleton=true",
+                    "delayed_us_stock_quotes=%s,capability_details=%s::jsonb,last_capability_probe_at=now() WHERE singleton=true",
                     (
                         capability_update.get("live_us_stock_quotes"),
                         capability_update.get("api_us_stock_order_access"),
+                        capability_update.get("delayed_us_stock_quotes"),
                         json.dumps(capability_update, default=str),
                     ),
                 )
             conn.commit()
         if capability_update is not None:
             execution_capable = bool(
-                capability_update.get("live_us_stock_quotes")
+                (capability_update.get("live_us_stock_quotes") or capability_update.get("delayed_us_stock_quotes"))
                 and capability_update.get("api_us_stock_order_access")
             )
         else:
             capabilities = fetch_one(
-                "SELECT live_us_stock_quotes,api_us_stock_order_access FROM broker_status WHERE singleton=true"
+                "SELECT live_us_stock_quotes,delayed_us_stock_quotes,api_us_stock_order_access FROM broker_status WHERE singleton=true"
             )
             execution_capable = bool(
-                capabilities and capabilities["live_us_stock_quotes"] and capabilities["api_us_stock_order_access"]
+                capabilities
+                and (capabilities["live_us_stock_quotes"] or capabilities["delayed_us_stock_quotes"])
+                and capabilities["api_us_stock_order_access"]
             )
         armed = fetch_one("SELECT value FROM app_settings WHERE key='initial_auto_arm_completed'")
         if not armed and execution_capable:
@@ -133,7 +137,7 @@ def broker_health() -> bool:
             set_setting("initial_auto_arm_completed", True, "automatic-paper-initialization")
         elif not armed:
             send_capability_reminder(
-                "Live US-stock quotes and a non-executing US-stock What-If order must both pass before automatic paper trading is armed."
+                "Live or owner-authorized delayed US-stock quotes and a non-executing US-stock What-If order must both pass before automatic paper trading is armed."
             )
         return True
     except Exception as exc:

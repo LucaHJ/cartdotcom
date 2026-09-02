@@ -165,12 +165,12 @@ def enable_paper_trading() -> dict[str, Any]:
         or broker["state"] != "connected"
         or not str(broker.get("account_id") or "").startswith("DU")
         or not broker.get("portfolio_readable")
-        or not broker.get("live_us_stock_quotes")
+        or not (broker.get("live_us_stock_quotes") or broker.get("delayed_us_stock_quotes"))
         or not broker.get("api_us_stock_order_access")
     ):
         raise HTTPException(
             status_code=409,
-            detail="A readable allowlisted DU paper account, live US-stock quotes, and successful What-If order probe are required.",
+            detail="A readable allowlisted DU paper account, live or owner-authorized delayed US-stock quotes, and successful What-If order probe are required.",
         )
     set_setting("trading_enabled", True, "dashboard")
     set_setting("kill_switch", False, "dashboard")
