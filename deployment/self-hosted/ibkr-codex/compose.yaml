@@ -12,6 +12,7 @@ services:
       - /srv/codex-lab/ibkr-codex/gateway-home:/home/ibgateway/Jts
     networks:
       broker:
+        ipv4_address: 172.24.0.2
       egress:
       edge:
         aliases: [ibkr-gateway]
@@ -61,7 +62,10 @@ services:
       PGPASSWORD_FILE: /run/secrets/postgres_password
       ARTIFACT_ROOT: /data/artifacts
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL}"
-      IBKR_HOST: ib-gateway
+      # The broker network pins Gateway to this private address. Using the
+      # service name would let Docker resolve its edge-network IP and bypass
+      # the narrow trusted-worker allowlist.
+      IBKR_HOST: 172.24.0.2
       IBKR_PORT: "4002"
       IBKR_CLIENT_ID: "41"
       IBKR_PAPER_ACCOUNT_FILE: /run/secrets/ibkr_paper_account
@@ -112,7 +116,13 @@ services:
     secrets: *app_secrets
     volumes:
       - /srv/codex-lab/ibkr-codex/artifacts:/data/artifacts
-    networks: [data, runtime, broker, egress, edge]
+    networks:
+      data:
+      runtime:
+      broker:
+        ipv4_address: 172.24.0.3
+      egress:
+      edge:
     mem_limit: 1g
     cpus: 2.0
     pids_limit: 384

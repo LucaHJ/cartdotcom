@@ -394,6 +394,11 @@ class PaperBroker(EWrapper, EClient):
         order.outsideRth = False
         order.transmit = True
         order.orderRef = order_ref
+        # Current IB Gateway rejects the legacy defaults emitted by some
+        # Python API package versions unless these retired attributes are
+        # explicitly disabled (error 10268/10269).
+        order.eTradeOnly = False
+        order.firmQuoteOnly = False
         self._order_states[order_id] = BrokerOrderState(order_id=order_id, remaining=quantity)
         self.placeOrder(order_id, contract, order)
         return order_id
@@ -416,6 +421,8 @@ class PaperBroker(EWrapper, EClient):
         order.transmit = True
         order.whatIf = True
         order.overridePercentageConstraints = True
+        order.eTradeOnly = False
+        order.firmQuoteOnly = False
         error_offset = len(self._errors)
         self.placeOrder(order_id, contract, order)
         self._wait(
