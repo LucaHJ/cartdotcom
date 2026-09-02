@@ -84,6 +84,7 @@ import {
   classifyInstagramMediaPayload,
   findInstagramCarouselMediaPayload,
   findInstagramPostMediaPayload,
+  validateInstagramPostMediaHandoff,
   findInstagramDirectPermalink,
   pendingPartIsTest,
   instagramDedupeKey,
@@ -4632,6 +4633,7 @@ async function handlePhase6Retry(request: Request, env: Env): Promise<Response> 
   const existing = await env.REEL_DB.prepare(
     `SELECT f.status AS fence_status,f.rollback_reason,f.source_message_id,f.local_lease_owner,
             j.status AS job_status,j.stage AS job_stage,j.attempts,j.created_at,j.completed_at,j.html_key,j.library_path,
+            j.source_url,j.canonical_url,j.source_media_json,
             EXISTS(
               SELECT 1 FROM job_events correction
               WHERE correction.job_id=j.id
@@ -4658,10 +4660,39 @@ async function handlePhase6Retry(request: Request, env: Env): Promise<Response> 
   ) {
     return json({ ok: false, error: "Phase 6 exact retry is not eligible", state: existing || null }, { status: 409 });
   }
+  let retrySourceMediaJson = String(existing.source_media_json || "").trim() || null;
+  let mediaEnrichment: { method: string; detail?: string; item_count: number } | null = null;
+  const retrySourceUrl = String(existing.canonical_url || existing.source_url || "");
+  const retryCanonical = canonicalizeInstagramUrl(retrySourceUrl);
+  if (retryCanonical?.url.includes("/p/") && !retrySourceMediaJson) {
+    const resolution = await env.REEL_DB.prepare(
+      `SELECT media_id,title FROM instagram_carousel_resolutions
+       WHERE source_message_id=? AND status='complete' AND media_id IS NOT NULL`,
+    ).bind(validated.sourceMessageId).first<{ media_id: string; title: string | null }>();
+    if (!resolution?.media_id) {
+      return json({ ok: false, error: "Phase 6 post retry requires its exact Meta media identifier" }, { status: 409 });
+    }
+    const resolved = await resolveInstagramCarouselPermalink(env, resolution.media_id, resolution.title);
+    const assessment = validateInstagramPostMediaHandoff({
+      sourceUrl: retrySourceUrl,
+      resolvedUrl: String(resolved.sourceUrl || ""),
+      sourceMediaJson: String(resolved.sourceMediaJson || ""),
+    });
+    if (!assessment.ok) {
+      return json({
+        ok: false,
+        error: "Phase 6 post retry could not recover a matching media payload",
+        resolution: { method: resolved.method, detail: resolved.detail || null, reason: assessment.reason },
+      }, { status: 409 });
+    }
+    retrySourceMediaJson = String(resolved.sourceMediaJson);
+    mediaEnrichment = { method: resolved.method, detail: resolved.detail, item_count: assessment.itemCount };
+  }
   const expiresAt = new Date(Date.now() + 6 * 60 * 60_000).toISOString();
   const queuedEmoji = await getEmoji(env, "queued");
   const marker = `phase6-retry:${authority.generation}:${validated.jobId}:${Number(existing.attempts || 0) + 1}`;
-  const detail = JSON.stringify({ marker, reason: validated.reason, lease_owner: validated.leaseOwner, previous: existing });
+  const { source_media_json: _sourceMediaJson, ...previousState } = existing;
+  const detail = JSON.stringify({ marker, reason: validated.reason, lease_owner: validated.leaseOwner, previous: previousState, media_enrichment: mediaEnrichment });
   const results = await env.REEL_DB.batch([
     env.REEL_DB.prepare(
       `UPDATE phase5_local_pilot_fences
@@ -4673,12 +4704,12 @@ async function handlePhase6Retry(request: Request, env: Env): Promise<Response> 
            AND j.html_key IS NULL AND j.library_path IS NULL AND j.attempts<3)`,
     ).bind(expiresAt, validated.pilotKey, validated.jobId, validated.sourceMessageId),
     env.REEL_DB.prepare(
-      `UPDATE jobs SET status='queued',stage='queued',status_emoji=?,error_code=NULL,error_message=NULL,
+      `UPDATE jobs SET status='queued',stage='queued',status_emoji=?,error_code=NULL,error_message=NULL,source_media_json=COALESCE(?,source_media_json),
        upload_token_hash=NULL,upload_token_expires_at=NULL,started_at=NULL,completed_at=NULL,processing_seconds=NULL,updated_at=CURRENT_TIMESTAMP
        WHERE id=? AND status IN ('queued','failed') AND completed_at IS NULL AND html_key IS NULL AND library_path IS NULL AND attempts<3
          AND EXISTS(SELECT 1 FROM phase5_local_pilot_fences f WHERE f.job_id=jobs.id
            AND f.pilot_key=? AND f.source_message_id=? AND f.status='armed')`,
-    ).bind(queuedEmoji.display, validated.jobId, validated.pilotKey, validated.sourceMessageId),
+    ).bind(queuedEmoji.display, retrySourceMediaJson, validated.jobId, validated.pilotKey, validated.sourceMessageId),
     env.REEL_DB.prepare(
       `INSERT INTO job_events(job_id,stage,status,emoji,detail)
        SELECT ?,'phase6_retry_armed','queued',?,?

@@ -586,6 +586,42 @@ export function findInstagramCarouselMediaPayload(value: unknown): { items: Arra
   return Array.isArray(media?.carousel_media) && media.carousel_media.length > 1 ? payload : null;
 }
 
+export function validateInstagramPostMediaHandoff(input: {
+  sourceUrl: string;
+  resolvedUrl: string;
+  sourceMediaJson: string;
+}): { ok: boolean; reason: string; itemCount: number } {
+  const source = canonicalizeInstagramUrl(input.sourceUrl);
+  const resolved = canonicalizeInstagramUrl(input.resolvedUrl);
+  if (!source || !resolved || source.shortcode !== resolved.shortcode) {
+    return { ok: false, reason: "resolved_shortcode_mismatch", itemCount: 0 };
+  }
+  if (!input.sourceMediaJson || input.sourceMediaJson.length > 2_000_000) {
+    return { ok: false, reason: "missing_or_oversized_media_payload", itemCount: 0 };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input.sourceMediaJson);
+  } catch {
+    return { ok: false, reason: "invalid_media_payload_json", itemCount: 0 };
+  }
+  const payload = findInstagramPostMediaPayload(parsed);
+  const media = payload?.items?.[0];
+  if (!media) return { ok: false, reason: "media_payload_not_found", itemCount: 0 };
+  const payloadCode = String(media.code || media.shortcode || "").trim();
+  if (payloadCode && payloadCode !== source.shortcode) {
+    return { ok: false, reason: "payload_shortcode_mismatch", itemCount: 0 };
+  }
+  const carousel = Array.isArray(media.carousel_media) ? media.carousel_media : [];
+  const imageVersions = media.image_versions2 as { candidates?: unknown[] } | undefined;
+  const hasDirectMedia = (Array.isArray(imageVersions?.candidates) && imageVersions.candidates.length > 0)
+    || (Array.isArray(media.video_versions) && media.video_versions.length > 0);
+  const itemCount = carousel.length || (hasDirectMedia ? 1 : 0);
+  return itemCount > 0
+    ? { ok: true, reason: "valid", itemCount }
+    : { ok: false, reason: "media_payload_has_no_downloadable_items", itemCount: 0 };
+}
+
 export function instagramDirectCarousels(payload: unknown): InstagramDirectCarousel[] {
   const found: InstagramDirectCarousel[] = [];
   const visit = (value: unknown): void => {

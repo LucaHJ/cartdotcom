@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyInstagramMediaPayload, findInstagramCarouselMediaPayload, findInstagramDirectPermalink, findInstagramPostMediaPayload, instagramDirectCarousels } from "../src/domain.ts";
+import { classifyInstagramMediaPayload, findInstagramCarouselMediaPayload, findInstagramDirectPermalink, findInstagramPostMediaPayload, instagramDirectCarousels, validateInstagramPostMediaHandoff } from "../src/domain.ts";
 
 test("classifies Instagram private media payloads before a carousel-only pilot", () => {
   assert.deepEqual(classifyInstagramMediaPayload({ items: [{ media_type: 8, carousel_media: [{ pk: "1" }, { pk: "2" }, { pk: "3" }] }] }), {
@@ -90,6 +90,28 @@ test("carries a matched single-image post into the processing hand-off", () => {
   assert.deepEqual(match?.mediaPayload, { items: [post] });
   assert.deepEqual(findInstagramPostMediaPayload(post), { items: [post] });
   assert.equal(findInstagramCarouselMediaPayload(post), null);
+});
+
+test("accepts only an exact downloadable single-image payload for a guarded retry", () => {
+  const sourceMediaJson = JSON.stringify({ items: [{
+    code: "DSingleImage1",
+    image_versions2: { candidates: [{ url: "https://cdn/single.jpg" }] },
+  }] });
+  assert.deepEqual(validateInstagramPostMediaHandoff({
+    sourceUrl: "https://www.instagram.com/p/DSingleImage1/",
+    resolvedUrl: "https://www.instagram.com/p/DSingleImage1/?img_index=1",
+    sourceMediaJson,
+  }), { ok: true, reason: "valid", itemCount: 1 });
+  assert.deepEqual(validateInstagramPostMediaHandoff({
+    sourceUrl: "https://www.instagram.com/p/DSingleImage1/",
+    resolvedUrl: "https://www.instagram.com/p/DWrongImage2/",
+    sourceMediaJson,
+  }), { ok: false, reason: "resolved_shortcode_mismatch", itemCount: 0 });
+  assert.deepEqual(validateInstagramPostMediaHandoff({
+    sourceUrl: "https://www.instagram.com/p/DSingleImage1/",
+    resolvedUrl: "https://www.instagram.com/p/DSingleImage1/",
+    sourceMediaJson: JSON.stringify({ items: [{ code: "DWrongImage2", image_versions2: { candidates: [{ url: "https://cdn/wrong.jpg" }] } }] }),
+  }), { ok: false, reason: "payload_shortcode_mismatch", itemCount: 0 });
 });
 
 test("normalises GraphQL sidecar children into the image hand-off schema", () => {

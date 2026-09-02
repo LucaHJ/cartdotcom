@@ -104,6 +104,9 @@ test("Phase 6 exact retry and terminal failure routes stay authenticated and job
   assert.match(workerSource, /f\.status='armed'/);
   assert.match(workerSource, /f\.status='rolled_back' AND f\.local_lease_owner=\?/);
   assert.match(workerSource, /f\.rollback_reason=\?/);
+  assert.match(workerSource, /validateInstagramPostMediaHandoff/);
+  assert.match(workerSource, /source_media_json=COALESCE\(\?,source_media_json\)/);
+  assert.match(workerSource, /Phase 6 post retry could not recover a matching media payload/);
 });
 
 test("Phase 6 admits only audited corrective resynthesis jobs across the cutover watermark", () => {
