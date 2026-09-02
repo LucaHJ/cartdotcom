@@ -27,6 +27,10 @@ def initialize_virtual_capital_reserve(snapshot: dict[str, object]) -> None:
     """Fix the protected base-currency principal once, never from a later sale."""
     existing = fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_principal'")
     if existing:
+        high_water = fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_accrued_baseline'")
+        accrued_cash = Decimal(str(snapshot["accrued_cash"]))
+        if high_water and accrued_cash > Decimal(str(high_water["value"])):
+            set_setting("virtual_cash_reserve_accrued_baseline", str(accrued_cash), "interest-accrual-protection")
         return
     total_cash = Decimal(str(snapshot["total_cash"]))
     virtual_capital = Decimal(settings.virtual_investable_capital)
