@@ -32,6 +32,9 @@ class Settings:
     # Delayed data is opt-in. It is appropriate only when the account owner
     # explicitly accepts the 10-15 minute price delay for paper execution.
     allow_delayed_market_data: bool = os.getenv("ALLOW_DELAYED_MARKET_DATA", "false").lower() == "true"
+    # Crypto is a separate, capability-gated paper allocation. It can never
+    # trade unless IBKR accepts a dedicated non-executing probe for the DU account.
+    allow_crypto_paper_trading: bool = os.getenv("ALLOW_CRYPTO_PAPER_TRADING", "false").lower() == "true"
     ibkr_paper_account: str = _secret("IBKR_PAPER_ACCOUNT")
     internal_api_token: str = _secret("INTERNAL_API_TOKEN")
     codex_runner_url: str = os.getenv("CODEX_RUNNER_URL", "http://127.0.0.1:3010/research")

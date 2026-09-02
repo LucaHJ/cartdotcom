@@ -132,6 +132,7 @@ class PaperBroker(EWrapper, EClient):
         self._contract_done: set[int] = set()
         self._quotes: dict[int, dict[str, Any]] = {}
         self._quote_done: set[int] = set()
+        self._delayed_quote_requests: set[int] = set()
         self._order_states: dict[int, BrokerOrderState] = {}
         self._what_if_states: dict[int, dict[str, Any]] = {}
         self._executions: list[dict[str, Any]] = []
@@ -188,7 +189,11 @@ class PaperBroker(EWrapper, EClient):
         # handoff ("Displaying delayed market data") as it uses for a true
         # missing-subscription error. The former is expected after an explicit
         # reqMarketDataType(3) request and the quote callbacks follow it.
-        delayed_handoff = errorCode == 354 and "Displaying delayed market data" in errorString
+        delayed_handoff = (
+            reqId in self._delayed_quote_requests
+            and errorCode == 354
+            and "displaying delayed market data" in errorString.lower()
+        )
         if errorCode not in {2104, 2106, 2107, 2108, 2158} and not delayed_handoff:
             self._errors.append({
                 "request_id": reqId,
@@ -371,20 +376,50 @@ class PaperBroker(EWrapper, EClient):
             raise RuntimeError(f"Ticker {symbol} did not resolve to exactly one USD stock contract.")
         return matches[0]
 
+    def resolve_crypto(self, symbol: str) -> Contract:
+        """Resolve only the two USD crypto contracts the policy permits."""
+        if symbol.upper() not in {"BTC", "ETH"}:
+            raise RuntimeError("Only BTC and ETH are permitted crypto contracts.")
+        req_id = self._req_id()
+        query = Contract()
+        query.symbol = symbol.upper()
+        query.secType = "CRYPTO"
+        query.exchange = "PAXOS"
+        query.currency = "USD"
+        self._contract_details[req_id] = []
+        self.reqContractDetails(req_id, query)
+        self._wait(lambda: req_id in self._contract_done, 20, f"crypto contract {symbol}")
+        matches = [
+            item.contract for item in self._contract_details.get(req_id, [])
+            if item.contract.secType == "CRYPTO" and item.contract.currency == "USD" and item.contract.exchange == "PAXOS"
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(f"Crypto ticker {symbol} did not resolve to exactly one USD PAXOS contract.")
+        return matches[0]
+
+    def resolve_instrument(self, symbol: str, asset_type: str) -> Contract:
+        if asset_type == "US_EQUITY":
+            return self.resolve_stock(symbol)
+        if asset_type == "CRYPTO":
+            return self.resolve_crypto(symbol)
+        raise RuntimeError(f"Unsupported asset type {asset_type}.")
+
     def _quote_once(self, contract: Contract, requested_type: int) -> Quote:
         req_id = self._req_id()
         self._quotes[req_id] = {"market_data_type": 0}
+        if requested_type == 3:
+            self._delayed_quote_requests.add(req_id)
         error_offset = len(self._errors)
         self.reqMarketDataType(requested_type)
         self.reqMktData(req_id, contract, "", True, False, [])
         self._wait(
-            lambda: req_id in self._quote_done
-            or all(key in self._quotes[req_id] for key in ("bid", "ask", "last"))
+            lambda: all(key in self._quotes[req_id] for key in ("bid", "ask", "last"))
             or any(item.get("request_id") == req_id for item in self._errors[error_offset:]),
             20,
             f"quote {contract.symbol}",
         )
         self.cancelMktData(req_id)
+        self._delayed_quote_requests.discard(req_id)
         values = self._quotes[req_id]
         errors = [item for item in self._errors[error_offset:] if item.get("request_id") == req_id]
         if errors:
@@ -428,8 +463,9 @@ class PaperBroker(EWrapper, EClient):
     ) -> int:
         if not self.isConnected() or self._next_order_id is None:
             raise RuntimeError("IBKR paper session is not connected.")
-        if side not in {"BUY", "SELL"} or quantity <= 0 or quantity != quantity.to_integral_value():
-            raise ValueError("Only positive whole-share BUY/SELL orders are supported.")
+        crypto = contract.secType == "CRYPTO"
+        if side not in {"BUY", "SELL"} or quantity <= 0 or (not crypto and quantity != quantity.to_integral_value()):
+            raise ValueError("Only positive whole-share stock or fractional BTC/ETH BUY/SELL orders are supported.")
         order_id = self._next_order_id
         self._next_order_id += 1
         order = Order()
@@ -438,8 +474,8 @@ class PaperBroker(EWrapper, EClient):
         order.orderType = "LMT"
         order.totalQuantity = quantity
         order.lmtPrice = float(limit_price)
-        order.tif = "DAY"
-        order.outsideRth = False
+        order.tif = "IOC" if crypto else "DAY"
+        order.outsideRth = crypto
         order.transmit = True
         order.orderRef = order_ref
         # Current IB Gateway rejects the legacy defaults emitted by some
@@ -478,6 +514,44 @@ class PaperBroker(EWrapper, EClient):
             or any(item.get("request_id") == order_id for item in self._errors[error_offset:]),
             20,
             "US-stock What-If capability probe",
+        )
+        errors = [item for item in self._errors[error_offset:] if item.get("request_id") == order_id]
+        state = self._what_if_states.get(order_id)
+        return {
+            "symbol": symbol,
+            "what_if": True,
+            "allowed": bool(state) and not errors and state.get("status") != "Inactive",
+            "order_state": state,
+            "errors": errors,
+        }
+
+    def probe_crypto_order_access(self, symbol: str = "BTC") -> dict[str, Any]:
+        """Submit a non-executing crypto What-If; failure leaves crypto disabled."""
+        contract = self.resolve_crypto(symbol)
+        if self._next_order_id is None:
+            raise RuntimeError("IBKR did not provide an order identifier for crypto capability probing.")
+        order_id = self._next_order_id
+        self._next_order_id += 1
+        order = Order()
+        order.account = self.account_id
+        order.action = "BUY"
+        order.orderType = "LMT"
+        order.totalQuantity = Decimal("0.0001")
+        order.lmtPrice = 100.0
+        order.tif = "IOC"
+        order.outsideRth = True
+        order.transmit = True
+        order.whatIf = True
+        order.overridePercentageConstraints = True
+        order.eTradeOnly = False
+        order.firmQuoteOnly = False
+        error_offset = len(self._errors)
+        self.placeOrder(order_id, contract, order)
+        self._wait(
+            lambda: order_id in self._what_if_states
+            or any(item.get("request_id") == order_id for item in self._errors[error_offset:]),
+            20,
+            "crypto What-If capability probe",
         )
         errors = [item for item in self._errors[error_offset:] if item.get("request_id") == order_id]
         state = self._what_if_states.get(order_id)

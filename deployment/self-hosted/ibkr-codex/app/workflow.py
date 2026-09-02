@@ -15,7 +15,7 @@ from app.broker import PaperBroker, Quote
 from app.config import settings
 from app.database import add_event, connection, fetch_one, setting_bool
 from app.notifications import send_failure
-from app.policy import POLICY, PolicyViolation, proposed_order, validate_decision_shape
+from app.policy import POLICY, PolicyViolation, asset_type_for_security_type, proposed_order, validate_decision_shape
 from app.prompt import research_prompt
 
 
@@ -57,14 +57,16 @@ def _news_context() -> dict[str, Any]:
 
 def _enrich_positions(broker: PaperBroker, snapshot: dict[str, Any]) -> None:
     for position in snapshot["positions"]:
-        if position["sec_type"] != "STK" or position["currency"] != "USD":
+        if position["sec_type"] not in {"STK", "CRYPTO"} or position["currency"] != "USD":
             position["market_data_error"] = "Unsupported existing holding type; no new order is permitted."
             continue
         try:
-            contract = broker.resolve_stock(position["symbol"])
+            asset_type = asset_type_for_security_type(position["sec_type"])
+            contract = broker.resolve_instrument(position["symbol"], asset_type)
             quote = broker.quote(contract)
             quantity = _decimal(position["quantity"])
             position.update({
+                "asset_type": asset_type,
                 "bid": str(quote.bid),
                 "ask": str(quote.ask),
                 "last": str(quote.last),
@@ -100,6 +102,13 @@ def _position(snapshot: dict[str, Any], symbol: str) -> dict[str, Any] | None:
     return next((item for item in snapshot["positions"] if item["symbol"].upper() == symbol.upper()), None)
 
 
+def _asset_class_value(snapshot: dict[str, Any], asset_type: str) -> Decimal:
+    return sum(
+        (_decimal(item.get("market_value", "0")) for item in snapshot["positions"] if item.get("asset_type") == asset_type),
+        Decimal("0"),
+    )
+
+
 def _insert_decisions(run_id: str, output: dict[str, Any]) -> list[dict[str, Any]]:
     action_count = sum(1 for item in output["decisions"] if item["action"] != "HOLD")
     if action_count > POLICY.max_orders_per_run:
@@ -115,10 +124,10 @@ def _insert_decisions(run_id: str, output: dict[str, Any]) -> list[dict[str, Any
             validate_decision_shape(decision)
             decision["id"] = str(uuid.uuid4())
             conn.execute(
-                "INSERT INTO decisions(id,run_id,symbol,action,target_weight_pct,confidence,thesis,risks,citations) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)",
+                "INSERT INTO decisions(id,run_id,symbol,asset_type,action,target_weight_pct,confidence,thesis,risks,citations) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)",
                 (
-                    decision["id"], run_id, decision["symbol"], decision["action"], decision["target_weight_pct"],
+                    decision["id"], run_id, decision["symbol"], decision["asset_type"], decision["action"], decision["target_weight_pct"],
                     decision["confidence"], decision["thesis"], json.dumps(decision["risks"]),
                     json.dumps(decision["citations"]),
                 ),
@@ -165,12 +174,17 @@ def _execute_decision(
         _record_validation(decision["id"], "accepted_no_order", "HOLD selected; no order is required.")
         return turnover_used, cash_available
     symbol = decision["symbol"]
+    asset_type = decision["asset_type"]
+    if asset_type == "CRYPTO":
+        capability = fetch_one("SELECT crypto_usd_order_access FROM broker_status WHERE singleton=true")
+        if not settings.allow_crypto_paper_trading or not capability or not capability.get("crypto_usd_order_access"):
+            raise PolicyViolation("BTC/ETH paper execution is unavailable because the dedicated IBKR crypto capability probe has not passed.")
     position = _position(snapshot, symbol)
     current_quantity = _decimal(position["quantity"]) if position else Decimal("0")
     current_value = _decimal(position.get("market_value", "0")) if position else Decimal("0")
-    contract = broker.resolve_stock(symbol)
-    if contract.secType != "STK" or contract.currency != "USD":
-        raise PolicyViolation("Only USD stocks and ordinary ETFs are accepted.")
+    contract = broker.resolve_instrument(symbol, asset_type)
+    if contract.currency != "USD" or (asset_type == "US_EQUITY" and contract.secType != "STK") or (asset_type == "CRYPTO" and contract.secType != "CRYPTO"):
+        raise PolicyViolation("The resolved contract does not match the approved USD asset type.")
     first_quote = broker.quote(contract)
     proposal = proposed_order(
         decision=decision,
@@ -178,6 +192,7 @@ def _execute_decision(
         cash=cash_available,
         current_quantity=current_quantity,
         current_market_value=current_value,
+        asset_class_value=_asset_class_value(snapshot, asset_type),
         bid=first_quote.bid,
         ask=first_quote.ask,
         turnover_used=turnover_used,
@@ -226,7 +241,7 @@ def _execute_decision(
                 (broker_order_id, order_db_id),
             )
             conn.commit()
-        add_event(run_id, "order.submitted", f"{proposal['side']} {remaining} {symbol} at limit {price}", {"attempt": attempt})
+        add_event(run_id, "order.submitted", f"{proposal['side']} {remaining} {symbol} at limit {price}", {"attempt": attempt, "asset_type": asset_type})
         state = _wait_terminal_with_gate(broker, broker_order_id, run_id)
         filled_total += state.filled
         executed_notional += state.filled * (state.avg_fill_price if state.avg_fill_price > 0 else price)
@@ -259,6 +274,11 @@ def execute_run(run_id: str) -> None:
         broker.connect_paper()
         snapshot = broker.portfolio_snapshot()
         _enrich_positions(broker, snapshot)
+        capability = fetch_one(
+            "SELECT live_us_stock_quotes,delayed_us_stock_quotes,api_us_stock_order_access,crypto_usd_order_access "
+            "FROM broker_status WHERE singleton=true"
+        ) or {}
+        snapshot["execution_capabilities"] = capability
         _store_snapshot(run_id, snapshot)
         news_context = _news_context()
         prompt = research_prompt(snapshot, news_context)

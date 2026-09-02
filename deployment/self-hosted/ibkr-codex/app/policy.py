@@ -10,6 +10,11 @@ from typing import Any
 class RiskPolicy:
     max_new_position_pct: Decimal = Decimal("5")
     max_total_position_pct: Decimal = Decimal("15")
+    equity_target_allocation_pct: Decimal = Decimal("85")
+    crypto_target_allocation_pct: Decimal = Decimal("10")
+    max_crypto_allocation_pct: Decimal = Decimal("10")
+    max_crypto_position_pct: Decimal = Decimal("5")
+    max_new_crypto_position_pct: Decimal = Decimal("3")
     max_turnover_pct: Decimal = Decimal("20")
     min_cash_reserve_pct: Decimal = Decimal("5")
     max_orders_per_run: int = 5
@@ -19,15 +24,31 @@ class RiskPolicy:
     max_slippage_pct: Decimal = Decimal("0.75")
     max_attempts: int = 3
     attempt_seconds: int = 300
-    allowed_security_types: tuple[str, ...] = ("STK",)
+    allowed_security_types: tuple[str, ...] = ("STK", "CRYPTO")
     allowed_currencies: tuple[str, ...] = ("USD",)
     fractional_shares: bool = False
     shorting: bool = False
     margin: bool = False
 
+    def allocation_targets(self) -> dict[str, Decimal]:
+        """Strategic paper allocations, deliberately leaving a cash buffer."""
+        return {
+            "US_EQUITY": self.equity_target_allocation_pct,
+            "CRYPTO": self.crypto_target_allocation_pct,
+            "CASH_RESERVE": self.min_cash_reserve_pct,
+        }
+
     def public(self) -> dict[str, Any]:
         result = asdict(self)
-        return {key: float(value) if isinstance(value, Decimal) else value for key, value in result.items()}
+        result["allocation_targets_pct"] = self.allocation_targets()
+        return {
+            key: (
+                {nested_key: float(nested_value) for nested_key, nested_value in value.items()}
+                if isinstance(value, dict)
+                else float(value) if isinstance(value, Decimal) else value
+            )
+            for key, value in result.items()
+        }
 
 
 POLICY = RiskPolicy()
@@ -41,17 +62,33 @@ def whole_shares(value: Decimal) -> Decimal:
     return value.quantize(Decimal("1"), rounding=ROUND_DOWN)
 
 
+def asset_type_for_security_type(security_type: str) -> str:
+    return "CRYPTO" if security_type.upper() == "CRYPTO" else "US_EQUITY"
+
+
+def quantity_for_asset_type(value: Decimal, asset_type: str) -> Decimal:
+    if asset_type == "CRYPTO":
+        return value.quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+    return whole_shares(value)
+
+
 def validate_decision_shape(decision: dict[str, Any]) -> None:
     symbol = str(decision.get("symbol", "")).strip().upper()
     action = str(decision.get("action", "")).upper()
+    asset_type = str(decision.get("asset_type", "")).upper()
     if not symbol or len(symbol) > 12 or not all(c.isalnum() or c in ".-" for c in symbol):
         raise PolicyViolation("Invalid ticker symbol.")
     if action not in {"BUY", "SELL", "HOLD"}:
         raise PolicyViolation("Action must be BUY, SELL, or HOLD.")
+    if asset_type not in {"US_EQUITY", "CRYPTO"}:
+        raise PolicyViolation("asset_type must be US_EQUITY or CRYPTO.")
+    if asset_type == "CRYPTO" and symbol not in {"BTC", "ETH"}:
+        raise PolicyViolation("Only BTC and ETH USD crypto contracts are allowed.")
     target = Decimal(str(decision.get("target_weight_pct", 0)))
     confidence = Decimal(str(decision.get("confidence", 0)))
-    if target < 0 or target > POLICY.max_total_position_pct:
-        raise PolicyViolation("Target weight exceeds the 15% long-only position cap.")
+    position_cap = POLICY.max_crypto_position_pct if asset_type == "CRYPTO" else POLICY.max_total_position_pct
+    if target < 0 or target > position_cap:
+        raise PolicyViolation(f"Target weight exceeds the {position_cap}% {asset_type} position cap.")
     if confidence < 0 or confidence > 1:
         raise PolicyViolation("Confidence must be between zero and one.")
     citations = decision.get("citations")
@@ -68,37 +105,43 @@ def proposed_order(
     cash: Decimal,
     current_quantity: Decimal,
     current_market_value: Decimal,
+    asset_class_value: Decimal,
     bid: Decimal,
     ask: Decimal,
     turnover_used: Decimal,
 ) -> dict[str, Any] | None:
     validate_decision_shape(decision)
     action = str(decision["action"]).upper()
+    asset_type = str(decision["asset_type"]).upper()
     if action == "HOLD":
         return None
     if net_liquidation <= 0 or bid <= 0 or ask <= 0:
         raise PolicyViolation("Portfolio value and valid bid/ask prices are required.")
     mid = (bid + ask) / 2
     spread_pct = (ask - bid) / mid * 100
-    if mid < POLICY.min_share_price:
+    if asset_type == "US_EQUITY" and mid < POLICY.min_share_price:
         raise PolicyViolation("Penny stocks below $5 are not permitted.")
     if spread_pct > POLICY.max_spread_pct:
         raise PolicyViolation("Bid/ask spread exceeds 1%.")
 
     target_pct = Decimal(str(decision["target_weight_pct"]))
     desired_value = net_liquidation * target_pct / 100
-    max_total = net_liquidation * POLICY.max_total_position_pct / 100
+    position_cap = POLICY.max_crypto_position_pct if asset_type == "CRYPTO" else POLICY.max_total_position_pct
+    allocation_cap = POLICY.max_crypto_allocation_pct if asset_type == "CRYPTO" else (Decimal("100") - POLICY.min_cash_reserve_pct)
+    max_total = net_liquidation * position_cap / 100
     desired_value = min(desired_value, max_total)
 
     if action == "BUY":
         desired_increase = max(Decimal("0"), desired_value - current_market_value)
-        max_new = net_liquidation * POLICY.max_new_position_pct / 100
+        max_new_pct = POLICY.max_new_crypto_position_pct if asset_type == "CRYPTO" else POLICY.max_new_position_pct
+        max_new = net_liquidation * max_new_pct / 100
+        allocation_remaining = max(Decimal("0"), net_liquidation * allocation_cap / 100 - asset_class_value)
         reserve = net_liquidation * POLICY.min_cash_reserve_pct / 100
         affordable = max(Decimal("0"), cash - reserve)
-        notional = min(desired_increase, max_new, affordable)
+        notional = min(desired_increase, max_new, allocation_remaining, affordable)
         price = ask * (Decimal("1") + POLICY.initial_slippage_pct / 100)
         risk_price = ask * (Decimal("1") + POLICY.max_slippage_pct / 100)
-        quantity = whole_shares(notional / risk_price)
+        quantity = quantity_for_asset_type(notional / risk_price, asset_type)
         side = "BUY"
     else:
         desired_decrease = max(Decimal("0"), current_market_value - desired_value)
@@ -106,7 +149,7 @@ def proposed_order(
         # A sell can receive price improvement up to the ask; use that larger
         # notional for the turnover cap even though the working limit is lower.
         risk_price = ask
-        quantity = min(current_quantity, whole_shares(desired_decrease / price))
+        quantity = min(current_quantity, quantity_for_asset_type(desired_decrease / price, asset_type))
         side = "SELL"
 
     if quantity <= 0:
@@ -115,7 +158,7 @@ def proposed_order(
     turnover_cap = net_liquidation * POLICY.max_turnover_pct / 100
     if turnover_used + notional > turnover_cap:
         remaining = max(Decimal("0"), turnover_cap - turnover_used)
-        quantity = whole_shares(remaining / risk_price)
+        quantity = quantity_for_asset_type(remaining / risk_price, asset_type)
         notional = quantity * risk_price
     if quantity <= 0:
         raise PolicyViolation("The 20% per-run turnover cap leaves no order capacity.")
@@ -123,6 +166,7 @@ def proposed_order(
         raise PolicyViolation("Sell quantity exceeds current long holdings.")
     return {
         "symbol": str(decision["symbol"]).upper(),
+        "asset_type": asset_type,
         "side": side,
         "quantity": quantity,
         "limit_price": price.quantize(Decimal("0.01")),

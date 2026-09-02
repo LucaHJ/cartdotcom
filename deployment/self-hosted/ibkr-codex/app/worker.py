@@ -59,7 +59,10 @@ def broker_health() -> bool:
         capability_row = fetch_one(
             "SELECT last_capability_probe_at FROM broker_status WHERE singleton=true "
             "AND (live_us_stock_quotes=true OR delayed_us_stock_quotes=true) AND api_us_stock_order_access=true "
+            "AND (%s=false OR crypto_usd_order_access=true) "
             "AND last_capability_probe_at > now() - interval '24 hours'"
+            ,
+            (settings.allow_crypto_paper_trading,),
         )
         capability_update: dict[str, object] | None = None
         if not capability_row:
@@ -88,6 +91,14 @@ def broker_health() -> bool:
             except Exception as exc:
                 capability_update["api_us_stock_order_access"] = False
                 capability_update["order_probe_error"] = str(exc)[:1000]
+            if settings.allow_crypto_paper_trading:
+                try:
+                    crypto_probe = broker.probe_crypto_order_access("BTC")
+                    capability_update["crypto_usd_order_access"] = bool(crypto_probe["allowed"])
+                    capability_update["crypto_order_probe"] = crypto_probe
+                except Exception as exc:
+                    capability_update["crypto_usd_order_access"] = False
+                    capability_update["crypto_order_probe_error"] = str(exc)[:1000]
         with connection() as conn:
             conn.execute(
                 "UPDATE broker_status SET state='connected',account_id=%s,message=%s,portfolio_readable=true,"
@@ -104,11 +115,12 @@ def broker_health() -> bool:
             if capability_update is not None:
                 conn.execute(
                     "UPDATE broker_status SET live_us_stock_quotes=%s,api_us_stock_order_access=%s,"
-                    "delayed_us_stock_quotes=%s,capability_details=%s::jsonb,last_capability_probe_at=now() WHERE singleton=true",
+                    "delayed_us_stock_quotes=%s,crypto_usd_order_access=%s,capability_details=%s::jsonb,last_capability_probe_at=now() WHERE singleton=true",
                     (
                         capability_update.get("live_us_stock_quotes"),
                         capability_update.get("api_us_stock_order_access"),
                         capability_update.get("delayed_us_stock_quotes"),
+                        capability_update.get("crypto_usd_order_access", False),
                         json.dumps(capability_update, default=str),
                     ),
                 )

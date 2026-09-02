@@ -71,8 +71,13 @@ def policy() -> dict[str, Any]:
         "limits": POLICY.public(),
         "prohibited": [
             "live accounts", "short sales", "margin borrowing", "options", "futures",
-            "forex", "crypto", "fractional shares", "after-hours orders", "market orders",
+            "forex", "fractional stock shares", "after-hours stock orders", "market orders",
         ],
+        "asset_classes": {
+            "US_EQUITY": "Liquid US-listed stocks and ordinary unleveraged ETFs; 85% strategic target.",
+            "CRYPTO": "BTC and ETH USD on PAXOS only; 10% strategic target and a successful dedicated IBKR paper capability probe are required.",
+            "CASH_RESERVE": "At least 5% is retained as cash.",
+        },
         "execution": "DAY limit orders; monitor each attempt, reprice at most 3 times, then cancel and reconcile.",
     }
 
