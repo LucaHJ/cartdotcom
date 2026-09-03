@@ -73,6 +73,9 @@ Code commit: `ffb7e08`. Worker deployment:
 - At 14:23Z both D1 and PostgreSQL showed one complete, two running and eight
   queued from this incident. Remaining work continues under the normal bounded
   dispatchers; this report does not claim all eleven have completed.
+- Final 14:24Z D1 check: two complete, two synthesising, seven queued. The two
+  oldest expired reservations have both renewed and started automatically, with
+  one renewal audit each. Descriptor count is 4 idle / 6 during a live request.
 - Browser verification at `/backend/reel-library`, Status: both new check rows
   visible; healthy fresh handover and processing/queued counts display correctly.
 - News/Reel/Caddy/PostgreSQL remained healthy. Host disk 17% used, ~12 GiB RAM
