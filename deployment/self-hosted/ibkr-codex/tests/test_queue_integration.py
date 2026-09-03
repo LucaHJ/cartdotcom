@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from app import database as db, execution, workflow
 from app.broker import Quote
+from app.fx import ExternalFxRate
 
 
 class FakeBroker:
@@ -143,9 +144,43 @@ class QueueIntegrationTests(unittest.TestCase):
         execution.process_next_execution()
         self.assertEqual(self.queue_status(run_id), "completed")
         self.assertEqual(len(FakeBroker.submissions), 1)
+
         self.assertEqual(db.fetch_one("SELECT count(*) AS n FROM executions")["n"], 1)
         execution.process_next_execution()
         self.assertEqual(len(FakeBroker.submissions), 1)
+
+    def test_aud_fx_permission_failure_executes_with_audited_fallback(self):
+        run_id = self.research()
+        db.set_setting("virtual_cash_reserve_currency", "AUD", "test")
+        original_snapshot = FakeBroker.portfolio_snapshot
+
+        def aud_snapshot(broker):
+            return {**original_snapshot(broker), "currency": "AUD"}
+
+        external = ExternalFxRate("AUD", "USD", Decimal("0.72"), datetime.now(UTC).date(),
+                                  datetime.now(UTC), "ECB reference rate", "integration-test-hash")
+        with patch.object(FakeBroker, "portfolio_snapshot", aud_snapshot), \
+             patch.object(FakeBroker, "resolve_base_to_usd_fx", side_effect=RuntimeError("FX permission denied")), \
+             patch.object(workflow, "external_fx_rate", return_value=external):
+            execution.process_next_execution()
+        self.assertEqual(self.queue_status(run_id), "completed")
+        self.assertEqual(len(FakeBroker.submissions), 1)
+        event = db.fetch_one("SELECT details FROM run_events WHERE run_id=%s AND event_type='execution.fx_fallback'", (run_id,))
+        self.assertEqual(event["details"]["safety_haircut_pct"], "2")
+        snapshot = db.fetch_one("SELECT execution_context FROM portfolio_snapshots WHERE run_id=%s ORDER BY captured_at DESC LIMIT 1", (run_id,))
+        self.assertEqual(snapshot["execution_context"]["base_to_usd"], "0.7056")
+
+    def test_ten_actionable_decisions_are_accepted_but_eleven_are_rejected(self):
+        template = self.output["decisions"][0]
+        self.output["decisions"] = [{**template, "symbol": f"TEST{i}"} for i in range(10)]
+        run_id = self.research()
+        self.assertEqual(db.fetch_one("SELECT count(*) AS n FROM decisions WHERE run_id=%s", (run_id,))["n"], 10)
+        self.output["decisions"].append({**template, "symbol": "TEST10"})
+        second = workflow.queue_run(datetime.now(UTC), "test")
+        workflow.execute_run(second)
+        row = db.fetch_one("SELECT status,error FROM research_runs WHERE id=%s", (second,))
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("more than 10", row["error"])
 
     def test_lost_ack_reconciles_fill_without_duplicate(self):
         run_id = self.research()
