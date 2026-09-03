@@ -165,7 +165,6 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
             raise RuntimeError("Waiting for the stock paper-order capability check to pass.")
         decisions = fetch_all("SELECT * FROM decisions WHERE run_id=%s ORDER BY created_at", (run_id,))
         fallback_logged = bool(fetch_one("SELECT id FROM run_events WHERE run_id=%s AND event_type='execution.fx_fallback' LIMIT 1", (run_id,)))
-        last_capital = None
         for decision in decisions:
             if decision["validation_status"] in FINAL_DECISIONS:
                 continue
@@ -183,7 +182,6 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
             if any(p.get("market_data_error") for p in snapshot["positions"] if Decimal(str(p["quantity"])) != 0):
                 raise RuntimeError("A current holding cannot be valued safely; queued decisions remain pending.")
             capital = _virtual_capital_context(broker, snapshot)
-            last_capital = capital
             _store_snapshot(run_id, snapshot, capital)
             if capital.get("fx_details", {}).get("fallback") and not fallback_logged:
                 add_event(run_id, "execution.fx_fallback", "Using official ECB FX reference data with a conservative sizing haircut.", capital["fx_details"])
@@ -202,7 +200,7 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
         if final["open_orders"]:
             raise RuntimeError("Open orders remain during final reconciliation.")
         _enrich_positions(broker, final)
-        _store_snapshot(run_id, final, last_capital)
+        _store_snapshot(run_id, final)
         with connection() as conn:
             conn.execute("UPDATE portfolio_cache SET snapshot=%s::jsonb,captured_at=now() WHERE singleton=true",
                          (json.dumps(final, default=str),))

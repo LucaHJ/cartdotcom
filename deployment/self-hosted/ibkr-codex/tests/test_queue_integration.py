@@ -167,7 +167,7 @@ class QueueIntegrationTests(unittest.TestCase):
         self.assertEqual(len(FakeBroker.submissions), 1)
         event = db.fetch_one("SELECT details FROM run_events WHERE run_id=%s AND event_type='execution.fx_fallback'", (run_id,))
         self.assertEqual(event["details"]["safety_haircut_pct"], "2")
-        snapshot = db.fetch_one("SELECT execution_context FROM portfolio_snapshots WHERE run_id=%s ORDER BY captured_at DESC LIMIT 1", (run_id,))
+        snapshot = db.fetch_one("SELECT execution_context FROM portfolio_snapshots WHERE run_id=%s AND execution_context ? 'fx_details' ORDER BY captured_at DESC LIMIT 1", (run_id,))
         self.assertEqual(snapshot["execution_context"]["base_to_usd"], "0.7056")
 
     def test_ten_actionable_decisions_are_accepted_but_eleven_are_rejected(self):
