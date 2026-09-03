@@ -254,6 +254,21 @@ or Phase 7 evidence.
 
 ## Troubleshooting
 
+### Green cloud checks but queued jobs do not start
+
+Use the Reel Library Status page's `handover` and `queue_progress` checks.
+The Worker/D1/R2 configuration checks alone do not prove processing health.
+`curl --max-time 5 --noproxy '*' http://172.19.0.1:3110/healthz` on Ubuntu must
+show a fresh successful drain. `storage_unavailable` or an empty reply indicates
+an origin failure; the watchdog now recovers three consecutive transport/storage
+failures without resetting cursor or receipt data. It must not auto-repair a
+semantic mirror divergence. Check the origin process's `/proc/<pid>/fd` count
+against its open-file limit if exhaustion is suspected.
+
+Untouched queued jobs whose reservation expires remain eligible for a guarded
+six-hour renewal at exact claim. Do not manually rewrite expiry on running or
+published work. See `QUEUE_HANDLE_EXHAUSTION_RECOVERY_2026-09-04.md`.
+
 ### Control checkpoint signature mismatch
 
 Do not edit the checkpoint. Confirm that the same approved Worker control token

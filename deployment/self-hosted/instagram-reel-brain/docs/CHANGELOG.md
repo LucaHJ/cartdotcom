@@ -1,5 +1,13 @@
 # Instagram Reel Self-Hosted Changelog
 
+## 2026-09-04
+
+- Fixed Phase 7 origin SQLite handle leakage, responsive watchdog recovery and
+  operational status checks after eleven live jobs stalled behind the handover.
+  Never-started current-generation reservations now renew safely at exact claim
+  after a long queue wait. No backlog or authority change. See
+  `QUEUE_HANDLE_EXHAUSTION_RECOVERY_2026-09-04.md` (code `ffb7e08`).
+
 ## 2026-08-26
 
 - Recovered five new Reels stranded at `queued` after a legitimate corrective

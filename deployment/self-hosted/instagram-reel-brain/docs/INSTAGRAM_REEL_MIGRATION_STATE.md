@@ -2,6 +2,14 @@
 
 Status: **Phase 7 primary-data path active by explicit user override.**
 
+2026-09-04 operational recovery: SQLite descriptor exhaustion in the private
+origin stalled eleven new jobs despite green cloud checks. Commit `ffb7e08`
+closes handles deterministically, supervises responsiveness, exposes handover
+and queue progress in the dashboard, and renews expired never-started reservations
+at authenticated exact claim. Queue movement and first completion verified;
+authority generation 2 and backlog-off state unchanged. See
+`QUEUE_HANDLE_EXHAUSTION_RECOVERY_2026-09-04.md` for evidence and recovery.
+
 At `2026-08-26T00:39:05+10:00`, Phase 7 was activated despite the preserved
 failed/incomplete Phase 6 soak. This is explicit risk acceptance, not a Phase
 6 gate pass. PostgreSQL schema `reel_phase7_primary_20260825_133007` is the
