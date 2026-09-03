@@ -164,6 +164,7 @@ def format_run_report(
     for item in decisions:
         lines.append(
             f"- {item.get('symbol')} {item.get('action')} | target {item.get('target_weight_pct')}% | "
+            f"sleeve {item.get('allocation_bucket', 'DOMESTIC_DIVERSIFIED')} | "
             f"confidence {item.get('confidence')} | {item.get('validation_status')}"
         )
         if item.get("thesis"):

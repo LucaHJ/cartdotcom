@@ -74,10 +74,13 @@ def policy() -> dict[str, Any]:
             "crypto", "forex", "fractional stock shares", "after-hours stock orders", "market orders",
         ],
         "asset_classes": {
-            "US_EQUITY": "Liquid US-listed stocks and ordinary unleveraged ETFs; 95% strategic target.",
+            "US_EQUITY": "Liquid US-listed USD stocks and ordinary unleveraged ETFs, including international underlying exposure; 95% total strategic target.",
             "CASH_RESERVE": "At least 5% is retained as cash.",
         },
-        "execution": "DAY limit orders; monitor each attempt, reprice at most 3 times, then cancel and reconcile.",
+        "execution": "DAY limit orders; monitor each attempt, reprice at most 3 times, then cancel and reconcile. "
+                     "International/power allocations are standing research targets, not forced trades. "
+                     f"FX: prefer IBKR; fallback to official daily ECB reference rates, at most {settings.fx_fallback_max_age_days} calendar days old, "
+                     f"with a {settings.fx_fallback_haircut_pct}% conservative sizing haircut. Stock bid/ask quotes still come from IBKR.",
     }
 
 
@@ -109,6 +112,7 @@ def status() -> dict[str, Any]:
             "early_close_adjusted": True,
         },
         "retention": retention_status(),
+        "fx_reference": fetch_one("SELECT * FROM fx_rate_cache WHERE base_currency='AUD' AND quote_currency='USD'"),
         "capital_protection": {
             "reserve_principal": fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_principal'"),
             "interest_baseline": fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_accrued_baseline'"),

@@ -17,9 +17,15 @@ Runner results are compressed and persisted before HTTP delivery. Retrying the s
 - Total position: at most 15%.
 - Per-run turnover: at most 20%.
 - Cash reserve: at least 5%.
-- At most 5 decisions per run; no shares below $5; live or explicitly authorized delayed quotes and a spread at or below 1% required.
+- At most 10 BUY/SELL decisions per run (HOLD decisions do not consume the limit); no shares below $5; live or explicitly authorized delayed stock quotes and a spread at or below 1% required.
 - At most 3 monitored limit-order attempts with a maximum 0.75% slippage envelope; remaining quantity is cancelled.
 - The dashboard kill switch pauses execution, not research. Startup reconciles uncertain submissions using broker order references and permanent identifiers; unknown submissions are never blindly replayed.
+
+## Standing allocation targets and independent FX data
+
+Every future research prompt targets 25% international equities, 15% power/grid infrastructure, 55% other diversified US equities, and at least 5% cash. International holdings use liquid US-listed, USD-traded unleveraged ETFs with predominantly non-US underlying exposure; foreign listings and FX trades remain prohibited. Each decision records a mutually exclusive allocation bucket. The agent must assess current/proposed sleeve weights, gaps and overlap, investigate power demand from data centres/mining, and explain any shortfall. These are strategic research targets, not forced trades or exceptions to existing risk limits; changes may be staged and HOLD remains valid.
+
+IBKR is the preferred AUD/USD pricing source. When its FX feed is unavailable, the executor fetches official daily ECB reference data directly from the ECB Data API and calculates the AUD/USD cross from matching EUR-based observations. It rejects invalid, future-dated or over-four-calendar-day-old data and applies a 2% conservative haircut to available USD capital. This is daily reference data, not an intraday quote. A validated local cache refreshes every six hours; network failures may use it only within the same maximum observation age. The source, reference date, rate, retrieval time, response hash and haircut are recorded with execution snapshots. Stock bid/ask prices still require the existing IBKR live/authorized-delayed quote checks; the fallback does not bypass account connectivity, cash protection or order reconciliation.
 
 ## Deployment state
 

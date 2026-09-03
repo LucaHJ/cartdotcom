@@ -8,6 +8,9 @@ def test_dashboard_discloses_safety_boundary_and_limits() -> None:
     assert "Engage kill switch" in value
     assert "Delayed US quotes permitted" in value
     assert "backend/ibkr_codex" in value
+    assert "International target" in value
+    assert "Power / grid target" in value
+    assert "Execution FX" in value
 
 
 def test_compose_fixes_gateway_to_paper_port() -> None:

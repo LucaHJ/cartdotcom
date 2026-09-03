@@ -11,9 +11,12 @@ class RiskPolicy:
     max_new_position_pct: Decimal = Decimal("5")
     max_total_position_pct: Decimal = Decimal("15")
     equity_target_allocation_pct: Decimal = Decimal("95")
+    international_equity_target_pct: Decimal = Decimal("25")
+    power_and_grid_target_pct: Decimal = Decimal("15")
+    domestic_diversified_target_pct: Decimal = Decimal("55")
     max_turnover_pct: Decimal = Decimal("20")
     min_cash_reserve_pct: Decimal = Decimal("5")
-    max_orders_per_run: int = 5
+    max_orders_per_run: int = 10
     min_share_price: Decimal = Decimal("5")
     max_spread_pct: Decimal = Decimal("1")
     initial_slippage_pct: Decimal = Decimal("0.20")
@@ -29,7 +32,9 @@ class RiskPolicy:
     def allocation_targets(self) -> dict[str, Decimal]:
         """Strategic paper allocations, deliberately leaving a cash buffer."""
         return {
-            "US_EQUITY": self.equity_target_allocation_pct,
+            "DOMESTIC_DIVERSIFIED": self.domestic_diversified_target_pct,
+            "INTERNATIONAL_EQUITY": self.international_equity_target_pct,
+            "POWER_AND_GRID": self.power_and_grid_target_pct,
             "CASH_RESERVE": self.min_cash_reserve_pct,
         }
 
@@ -71,12 +76,15 @@ def validate_decision_shape(decision: dict[str, Any]) -> None:
     symbol = str(decision.get("symbol", "")).strip().upper()
     action = str(decision.get("action", "")).upper()
     asset_type = str(decision.get("asset_type", "")).upper()
+    allocation_bucket = str(decision.get("allocation_bucket", "DOMESTIC_DIVERSIFIED")).upper()
     if not symbol or len(symbol) > 12 or not all(c.isalnum() or c in ".-" for c in symbol):
         raise PolicyViolation("Invalid ticker symbol.")
     if action not in {"BUY", "SELL", "HOLD"}:
         raise PolicyViolation("Action must be BUY, SELL, or HOLD.")
     if asset_type != "US_EQUITY":
         raise PolicyViolation("Crypto and all non-US-equity asset types are prohibited.")
+    if allocation_bucket not in {"DOMESTIC_DIVERSIFIED", "INTERNATIONAL_EQUITY", "POWER_AND_GRID"}:
+        raise PolicyViolation("Invalid strategic allocation bucket.")
     target = Decimal(str(decision.get("target_weight_pct", 0)))
     confidence = Decimal(str(decision.get("confidence", 0)))
     position_cap = POLICY.max_total_position_pct

@@ -36,6 +36,9 @@ class Settings:
     # trade unless IBKR accepts a dedicated non-executing probe for the DU account.
     allow_crypto_paper_trading: bool = os.getenv("ALLOW_CRYPTO_PAPER_TRADING", "false").lower() == "true"
     virtual_investable_capital: str = os.getenv("VIRTUAL_INVESTABLE_CAPITAL", "20000")
+    fx_fallback_max_age_days: int = int(os.getenv("FX_FALLBACK_MAX_AGE_DAYS", "4"))
+    fx_fallback_cache_hours: int = int(os.getenv("FX_FALLBACK_CACHE_HOURS", "6"))
+    fx_fallback_haircut_pct: str = os.getenv("FX_FALLBACK_HAIRCUT_PCT", "2")
     ibkr_paper_account: str = _secret("IBKR_PAPER_ACCOUNT")
     internal_api_token: str = _secret("INTERNAL_API_TOKEN")
     codex_runner_url: str = os.getenv("CODEX_RUNNER_URL", "http://127.0.0.1:3010/research")

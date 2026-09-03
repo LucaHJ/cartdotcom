@@ -100,7 +100,8 @@ class QueueIntegrationTests(unittest.TestCase):
             conn.execute("INSERT INTO portfolio_cache(singleton,snapshot) VALUES(true,%s::jsonb)", (json.dumps(snapshot),))
             conn.commit()
         self.output = dict(run_summary="Offline research test", decisions=[dict(symbol="SPY", asset_type="US_EQUITY",
-                           action="BUY", target_weight_pct=5, confidence=0.7, thesis="Test", risks=[],
+                           allocation_bucket="DOMESTIC_DIVERSIFIED", action="BUY", target_weight_pct=5,
+                           confidence=0.7, thesis="Test", risks=[],
                            citations=["https://www.sec.gov/"])])
         self.payload = dict(ok=True, result=self.output, events=[], usage=dict(input_tokens=100, output_tokens=20),
                             runtime_seconds=1, completed_at=datetime.now(UTC).isoformat())

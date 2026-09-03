@@ -15,6 +15,7 @@ from app.artifacts import read_artifact, store_json, store_text
 from app.broker import PaperBroker, Quote
 from app.capital import protected_cash_floor, virtual_cash_available
 from app.config import settings
+from app.fx import external_fx_rate
 from app.database import add_event, connection, fetch_all, fetch_one, setting_bool
 from app.notifications import send_run_report
 from app.policy import POLICY, PolicyViolation, asset_type_for_security_type, proposed_order, validate_decision_shape
@@ -75,17 +76,18 @@ def _enrich_positions(broker: PaperBroker, snapshot: dict[str, Any]) -> None:
             position["market_data_error"] = str(exc)
 
 
-def _store_snapshot(run_id: str, snapshot: dict[str, Any]) -> str:
+def _store_snapshot(run_id: str, snapshot: dict[str, Any], execution_context: dict[str, Any] | None = None) -> str:
     snapshot_id = str(uuid.uuid4())
     with connection() as conn:
         conn.execute(
             "INSERT INTO portfolio_snapshots(id,run_id,account_id,currency,net_liquidation,total_cash,accrued_cash,"
-            "available_funds,buying_power,excess_liquidity,positions,open_orders) "
-            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)",
+            "available_funds,buying_power,excess_liquidity,positions,open_orders,execution_context) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb)",
             (
                 snapshot_id, run_id, snapshot["account_id"], snapshot["currency"], snapshot["net_liquidation"],
                 snapshot["total_cash"], snapshot["accrued_cash"], snapshot["available_funds"], snapshot["buying_power"],
                 snapshot["excess_liquidity"], json.dumps(snapshot["positions"]), json.dumps(snapshot["open_orders"]),
+                json.dumps(execution_context or {}, default=str),
             ),
         )
         conn.execute("UPDATE research_runs SET portfolio_snapshot_id=%s WHERE id=%s", (snapshot_id, run_id))
@@ -111,7 +113,7 @@ def _setting_decimal(key: str) -> Decimal:
     return _decimal(row["value"])
 
 
-def _virtual_capital_context(broker: PaperBroker, snapshot: dict[str, Any]) -> dict[str, Decimal | str]:
+def _virtual_capital_context(broker: PaperBroker, snapshot: dict[str, Any]) -> dict[str, Any]:
     reserve_currency = fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_currency'")
     if not reserve_currency or str(reserve_currency["value"]).upper() != str(snapshot["currency"]).upper():
         raise PolicyViolation("Account base currency changed; capital reserve must be revalidated.")
@@ -120,8 +122,22 @@ def _virtual_capital_context(broker: PaperBroker, snapshot: dict[str, Any]) -> d
     protected_floor = protected_cash_floor(principal, _decimal(snapshot["accrued_cash"]), accrued_baseline)
     available_base_cash = virtual_cash_available(_decimal(snapshot["total_cash"]), protected_floor)
     base_currency = str(snapshot["currency"]).upper()
-    fx_contract = broker.resolve_base_to_usd_fx(base_currency)
-    base_to_usd = Decimal("1") if fx_contract is None else broker.quote(fx_contract).bid
+    fx_details: dict[str, Any] = {"source": "identity" if base_currency == "USD" else "IBKR bid quote", "fallback": False}
+    try:
+        fx_contract = broker.resolve_base_to_usd_fx(base_currency)
+        base_to_usd = Decimal("1") if fx_contract is None else broker.quote(fx_contract).bid
+        if not base_to_usd.is_finite() or base_to_usd <= 0:
+            raise ValueError("IBKR FX quote is invalid.")
+    except Exception as exc:
+        external = external_fx_rate(base_currency)
+        haircut = Decimal(settings.fx_fallback_haircut_pct)
+        if not Decimal("0") < haircut <= Decimal("10"):
+            raise PolicyViolation("External FX safety haircut must be between zero and ten percent.")
+        base_to_usd = external.rate * (Decimal("1") - haircut / 100)
+        fx_details = {"source": external.source, "fallback": True, "reference_rate": str(external.rate),
+                      "observation_date": external.observation_date.isoformat(),
+                      "retrieved_at": external.retrieved_at.isoformat(), "safety_haircut_pct": str(haircut),
+                      "response_sha256": external.response_sha256, "ibkr_error": str(exc)[:2000]}
     if not base_to_usd.is_finite() or base_to_usd <= 0:
         raise PolicyViolation("A valid base-currency-to-USD quote is required before any USD order.")
     held_usd_value = sum(
@@ -132,6 +148,7 @@ def _virtual_capital_context(broker: PaperBroker, snapshot: dict[str, Any]) -> d
         "protected_floor": protected_floor,
         "available_base_cash": available_base_cash,
         "base_to_usd": base_to_usd,
+        "fx_details": fx_details,
         "cash_usd": available_base_cash * base_to_usd,
         "net_liquidation_usd": available_base_cash * base_to_usd + held_usd_value,
     }
@@ -143,7 +160,7 @@ def _insert_decisions(run_id: str, output: dict[str, Any]) -> list[dict[str, Any
         return existing  # Same immutable result after a worker restart; never duplicate decisions.
     action_count = sum(1 for item in output["decisions"] if item["action"] != "HOLD")
     if action_count > POLICY.max_orders_per_run:
-        raise PolicyViolation("Codex returned more than five actionable decisions.")
+        raise PolicyViolation(f"Codex returned more than {POLICY.max_orders_per_run} actionable decisions.")
     symbols = [str(item.get("symbol", "")).upper() for item in output["decisions"]]
     if len(symbols) != len(set(symbols)):
         raise PolicyViolation("Codex returned duplicate decisions for the same ticker.")
@@ -155,12 +172,13 @@ def _insert_decisions(run_id: str, output: dict[str, Any]) -> list[dict[str, Any
             validate_decision_shape(decision)
             decision["id"] = str(uuid.uuid4())
             conn.execute(
-                "INSERT INTO decisions(id,run_id,symbol,asset_type,action,target_weight_pct,confidence,thesis,risks,citations) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)",
+                "INSERT INTO decisions(id,run_id,symbol,asset_type,action,target_weight_pct,confidence,thesis,risks,citations,allocation_bucket) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s)",
                 (
                     decision["id"], run_id, decision["symbol"], decision["asset_type"], decision["action"], decision["target_weight_pct"],
                     decision["confidence"], decision["thesis"], json.dumps(decision["risks"]),
                     json.dumps(decision["citations"]),
+                    decision.get("allocation_bucket", "DOMESTIC_DIVERSIFIED"),
                 ),
             )
             stored.append(decision)

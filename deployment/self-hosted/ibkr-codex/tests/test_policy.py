@@ -67,8 +67,15 @@ def test_policy_defaults_match_the_published_limits() -> None:
     assert POLICY.max_total_position_pct == Decimal("15")
     assert POLICY.max_turnover_pct == Decimal("20")
     assert POLICY.min_cash_reserve_pct == Decimal("5")
-    assert POLICY.max_orders_per_run == 5
+    assert POLICY.max_orders_per_run == 10
     assert POLICY.max_attempts == 3
+
+
+def test_standing_allocation_targets_are_complete() -> None:
+    targets = POLICY.allocation_targets()
+    assert targets == {"DOMESTIC_DIVERSIFIED": Decimal("55"), "INTERNATIONAL_EQUITY": Decimal("25"),
+                       "POWER_AND_GRID": Decimal("15"), "CASH_RESERVE": Decimal("5")}
+    assert sum(targets.values()) == Decimal("100")
 
 
 def test_buy_reserves_cash_at_the_maximum_permitted_reprice() -> None:
