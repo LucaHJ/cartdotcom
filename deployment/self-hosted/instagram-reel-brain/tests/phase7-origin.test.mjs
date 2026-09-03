@@ -111,7 +111,7 @@ db.execute("INSERT INTO wake_receipts(wake_id,path,received_at,completed_at,resu
 db.commit()
 `], { encoding: "utf8" });
 
-  let inserted = insert("failed-wake", "2026-08-26T01:00:00.000Z", false, 1);
+  let inserted = insert("failed-wake", new Date(Date.now() - 60000).toISOString(), false, 1);
   assert.equal(inserted.status, 0, inserted.stderr);
   let response = await fetch(healthUrl);
   assert.equal(response.status, 503);
@@ -123,7 +123,7 @@ db.commit()
   payload = await response.json();
   assert.equal(payload.wake_id, "failed-wake");
 
-  inserted = insert("successful-wake", "2026-08-26T01:01:00.000Z", true, 0);
+  inserted = insert("successful-wake", new Date().toISOString(), true, 0);
   assert.equal(inserted.status, 0, inserted.stderr);
   response = await fetch(healthUrl);
   assert.equal(response.status, 200);

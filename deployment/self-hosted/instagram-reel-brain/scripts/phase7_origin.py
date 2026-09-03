@@ -22,6 +22,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -30,6 +31,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 MAX_JSON_BYTES = 16 * 1024
 MAX_OBJECT_BYTES = 2 * 1024 * 1024 * 1024
 MAX_LIBRARY_METADATA_BYTES = 8 * 1024
+MIRROR_STALE_SECONDS = 600  # Two missed five-minute safety polls.
 
 
 def utc_now() -> str:
@@ -83,10 +85,17 @@ class OriginState:
         self.work_lock = threading.Lock()
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         connection = sqlite3.connect(self.db_path, timeout=30)
-        connection.execute("PRAGMA journal_mode=WAL")
-        return connection
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+            # sqlite3's own context manager commits/rolls back; it does NOT
+            # close the handle. Never rely on cyclic GC in a long-lived server.
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _init_db(self) -> None:
         with self._connect() as db:
@@ -121,6 +130,12 @@ class OriginState:
         return hmac.compare_digest(header[7:].encode("utf-8"), self.token)
 
     def mirror_health(self, wake_id: str | None = None) -> dict[str, object]:
+        try:
+            return self._mirror_health(wake_id)
+        except (sqlite3.Error, OSError):
+            return {"ok": False, "service": "phase7-origin", "mirror_state": "storage_unavailable"}
+
+    def _mirror_health(self, wake_id: str | None = None) -> dict[str, object]:
         if wake_id:
             with self._connect() as db:
                 row = db.execute(
@@ -164,11 +179,18 @@ class OriginState:
                 consecutive_failures += 1
             else:
                 break
-        healthy = latest_result.get("ok") is True
+        try:
+            last_completed = datetime.fromisoformat(rows[0][1].replace("Z", "+00:00"))
+            age = max(0, (datetime.now(timezone.utc) - last_completed).total_seconds())
+        except (ValueError, TypeError):
+            age = MIRROR_STALE_SECONDS + 1
+        stale = age > MIRROR_STALE_SECONDS
+        healthy = latest_result.get("ok") is True and not stale
         return {
             "ok": healthy,
             "service": "phase7-origin",
-            "mirror_state": "healthy" if healthy else "degraded",
+            "mirror_state": "stale" if stale else "healthy" if healthy else "degraded",
+            "last_drain_age_seconds": round(age, 1),
             "consecutive_failures": consecutive_failures,
             "last_wake_id": rows[0][0],
             "last_completed_at": rows[0][1],
@@ -196,14 +218,17 @@ class OriginState:
                 "--token-file", self.args.mirror_token_file,
                 "--limit", "100",
             ]
-            result = subprocess.run(command, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=240, check=False)
-            outcome = {
-                "ok": result.returncode == 0,
-                "returncode": result.returncode,
-                "finished_at": utc_now(),
-                "output_tail": (result.stdout if result.returncode == 0 else result.stderr)[-1200:],
-            }
-            if result.returncode == 0:
+            try:
+                result = subprocess.run(command, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=240, check=False)
+                outcome = {
+                    "ok": result.returncode == 0,
+                    "returncode": result.returncode,
+                    "finished_at": utc_now(),
+                    "output_tail": (result.stdout if result.returncode == 0 else result.stderr)[-1200:],
+                }
+            except (subprocess.TimeoutExpired, OSError) as error:
+                outcome = {"ok": False, "returncode": -1, "finished_at": utc_now(), "error": type(error).__name__}
+            if outcome["ok"]:
                 self.signal_dispatchers()
             with self._connect() as db:
                 db.execute(
@@ -403,7 +428,11 @@ class Handler(BaseHTTPRequestHandler):
         except (KeyError, ValueError, json.JSONDecodeError, TypeError):
             self.respond_json(400, {"ok": False, "error": "invalid_wake"})
             return
-        accepted = self.state.accept_wake(wake_id, path)
+        try:
+            accepted = self.state.accept_wake(wake_id, path)
+        except (sqlite3.Error, OSError):
+            self.respond_json(503, {"ok": False, "error": "receipt_storage_unavailable"})
+            return
         self.respond_json(202, {"ok": True, "accepted": accepted, "duplicate": not accepted})
 
     def do_PUT(self) -> None:  # noqa: N802

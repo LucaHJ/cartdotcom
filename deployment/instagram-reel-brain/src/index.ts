@@ -6,6 +6,8 @@ import {
   takePendingInstructionForShare,
 } from "./adjacent-pairing";
 import { correctiveClaimApplied, correctivelyResynthesiseOne } from "./corrective-resynthesis";
+import { probeOriginHealth, queueProgressHealth, type QueueProgress } from "./pipeline-health";
+import { renewUnstartedQueueFence } from "./queued-fence-renewal";
 import {
   decodePhase4Cursor,
   phase4DeltaQuery,
@@ -4499,7 +4501,12 @@ async function phase6NextCandidate(env: Env, owner: string): Promise<Record<stri
                   THEN CAST(json_extract(correction.detail, '$.marker') AS TEXT) END,'') LIKE 'corrective-resynthesis:%'
             ) THEN 1 ELSE 0 END AS corrective_resynthesis
      FROM phase5_local_pilot_fences f JOIN jobs j ON j.id=f.job_id
-     WHERE f.pilot_key LIKE ? AND datetime(f.expires_at)>datetime('now')
+     WHERE f.pilot_key LIKE ? AND (datetime(f.expires_at)>datetime('now') OR (
+       f.status='armed' AND f.local_lease_owner IS NULL AND f.local_lease_expires_at IS NULL
+       AND j.status='queued' AND j.stage='queued' AND j.attempts=0 AND j.started_at IS NULL
+       AND j.completed_at IS NULL AND j.html_key IS NULL AND j.upload_token_hash IS NULL
+       AND j.source_message_id=f.source_message_id
+     ))
        AND j.pilot_run_id IS NULL AND (
          datetime(j.created_at)>=datetime(?) OR EXISTS(
            SELECT 1 FROM job_events correction
@@ -4584,6 +4591,10 @@ async function handlePhase6Claim(request: Request, env: Env, release = false): P
     return json({ ok: true, released: (result.meta.changes || 0) === 1, pilot_key: validated.pilotKey, job_id: validated.jobId });
   }
   const requestedExpiry = new Date(Date.now() + validated.leaseMinutes * 60_000).toISOString();
+  await renewUnstartedQueueFence(env.REEL_DB, {
+    pilotKey: validated.pilotKey, jobId: validated.jobId,
+    sourceMessageId: validated.sourceMessageId, generation: authority.generation,
+  });
   const result = await env.REEL_DB.prepare(
     `UPDATE phase5_local_pilot_fences SET status='local_claimed',local_lease_owner=?,
        local_lease_expires_at=CASE WHEN datetime(expires_at)<datetime(?) THEN expires_at ELSE ? END,updated_at=CURRENT_TIMESTAMP
@@ -6469,11 +6480,25 @@ async function handleReelLibraryStatus(request: Request, env: Env): Promise<Resp
   }
   const backlogProcessing = await backlogProcessingActive(env);
   const authority = await phase6Authority(env);
+  const [handover, queueProgress] = await Promise.all([
+    authority.mode === "self_hosted"
+      ? probeOriginHealth(env.PHASE7_ORIGIN_URL, env.PHASE7_ORIGIN_TOKEN,
+          (originRequest) => env.REEL_ORIGIN ? env.REEL_ORIGIN.fetch(originRequest) : fetch(originRequest))
+      : Promise.resolve({ ok: true, state: "cloud", detail: "Cloud processing authority; Ubuntu handover not required" }),
+    env.REEL_DB.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END),0) AS queued,
+      COALESCE(SUM(CASE WHEN status='running' THEN 1 ELSE 0 END),0) AS running,
+      MIN(CASE WHEN status='queued' THEN created_at END) AS oldest_queued_at,
+      MIN(CASE WHEN status='running' THEN updated_at END) AS oldest_running_update
+      FROM jobs WHERE status IN ('queued','running') AND pilot_run_id IS NULL`).first<QueueProgress>(),
+  ]);
   return json({
     ok: true,
     generated_at: new Date().toISOString(),
     service: { name: "Instagram Reel Brain", ingest_mode: env.INGEST_MODE || "disabled", backlog_processing: backlogProcessing, processing_authority: authority.mode, authority_generation: authority.generation, model: env.CODEX_RESEARCH_MODEL || "gpt-5.6-luna", reasoning: env.CODEX_RESEARCH_REASONING_EFFORT || "medium" },
     checks: {
+      handover,
+      queue_progress: queueProgressHealth(queueProgress || { queued: 0, running: 0, oldest_queued_at: null, oldest_running_update: null }),
       worker: { ok: true, detail: "Worker request completed" },
       database: { ok: true, detail: "D1 queries completed" },
       archive: { ok: Boolean(archiveHead), detail: archiveHead ? `Latest archived object available (${archiveHead.size} bytes)` : "No archived object verified" },
