@@ -15,11 +15,13 @@ from app.capital import initial_protected_principal
 from app.config import settings
 from app.database import add_event, connection, fetch_one, migrate, set_setting
 from app.notifications import send_capability_reminder, send_gateway_reminder
-from app.workflow import execute_run, queue_run
+from app.execution import process_next_execution, retry_reports
+from app.schedule import scheduled_time
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ibkr-worker")
+logging.getLogger("ibapi").setLevel(logging.WARNING)
 ET = ZoneInfo("America/New_York")
 
 
@@ -39,16 +41,6 @@ def initialize_virtual_capital_reserve(snapshot: dict[str, object]) -> None:
     set_setting("virtual_cash_reserve_accrued_baseline", str(snapshot["accrued_cash"]), "virtual-capital-initialization")
     set_setting("virtual_cash_reserve_currency", str(snapshot["currency"]), "virtual-capital-initialization")
     set_setting("virtual_investable_capital", str(virtual_capital), "virtual-capital-initialization")
-
-
-def scheduled_time(now: datetime) -> datetime | None:
-    local = now.astimezone(ET)
-    schedule = mcal.get_calendar("NYSE").schedule(start_date=local.date(), end_date=local.date())
-    if schedule.empty:
-        return None
-    market_open = schedule.iloc[0]["market_open"].to_pydatetime()
-    market_close = schedule.iloc[0]["market_close"].to_pydatetime()
-    return market_open + (market_close - market_open) / 2
 
 
 def broker_health() -> bool:
@@ -71,10 +63,15 @@ def broker_health() -> bool:
         broker.connect_paper(timeout=10)
         snapshot = broker.portfolio_snapshot()
         initialize_virtual_capital_reserve(snapshot)
+        with connection() as cache_conn:
+            cache_conn.execute(
+                "INSERT INTO portfolio_cache(singleton,snapshot,captured_at) VALUES(true,%s::jsonb,now()) "
+                "ON CONFLICT(singleton) DO UPDATE SET snapshot=excluded.snapshot,captured_at=excluded.captured_at",
+                (json.dumps(snapshot, default=str),))
+            cache_conn.commit()
         orphaned = [item for item in snapshot["open_orders"] if str(item.get("order_ref", "")).startswith("codex-paper:")]
         if orphaned:
-            set_setting("kill_switch", True, "worker-recovery")
-            set_setting("trading_enabled", False, "worker-recovery")
+            # Recover working owned orders before the durable queue can submit again.
             for item in orphaned:
                 broker.cancel_and_wait(int(item["order_id"]), timeout=30)
         capability_row = fetch_one(
@@ -190,65 +187,40 @@ def broker_health() -> bool:
 
 
 def scheduler_loop() -> None:
-    log.info("paper-only scheduler started")
+    log.info("paper execution worker started; research has a separate worker")
     last_health = 0.0
     last_retention = 0.0
-    broker_ready = False
+    last_reports = 0.0
     while True:
-        now = datetime.now(UTC)
-        if time.monotonic() - last_health >= 300:
-            broker_ready = broker_health()
-            if not broker_ready:
-                send_gateway_reminder()
-            last_health = time.monotonic()
-        due = scheduled_time(now)
-        if due and broker_ready and 0 <= (now - due).total_seconds() < 300:
-            existing = fetch_one(
-                "SELECT id,status FROM research_runs WHERE trigger='schedule' "
-                "AND (scheduled_for AT TIME ZONE 'America/New_York')::date=(%s AT TIME ZONE 'America/New_York')::date",
-                (due,),
-            )
-            if not existing:
-                run_id = queue_run(due, "schedule")
-                log.info("queued scheduled run %s", run_id)
-        queued = fetch_one("SELECT id FROM research_runs WHERE status='queued' ORDER BY created_at LIMIT 1")
-        if queued:
-            try:
-                execute_run(str(queued["id"]))
-            except Exception:
-                log.exception("run %s failed closed", queued["id"])
-        if time.monotonic() - last_retention >= 86400:
-            removed = enforce_retention()
-            log.info("retention check removed %d expired artifacts", removed)
-            last_retention = time.monotonic()
+        try:
+            if time.monotonic() - last_health >= 300:
+                if not broker_health():
+                    send_gateway_reminder()
+                last_health = time.monotonic()
+            process_next_execution()
+            if time.monotonic() - last_reports >= 60:
+                retry_reports()
+                last_reports = time.monotonic()
+            if time.monotonic() - last_retention >= 86400:
+                enforce_retention()
+                last_retention = time.monotonic()
+        except Exception:
+            log.exception("Execution worker cycle failed; queued decisions and research remain saved")
         time.sleep(15)
 
 
 def main() -> None:
     migrate()
-    stale = []
-    with connection() as conn:
-        stale = list(conn.execute(
-            "SELECT id FROM research_runs WHERE status IN ('snapshotting','researching','validating','executing','reconciling')"
-        ).fetchall())
-        if stale:
-            conn.execute(
-                "UPDATE research_runs SET status='failed',finished_at=now(),error='Worker restarted during an incomplete run; fail-closed recovery engaged.' "
-                "WHERE status IN ('snapshotting','researching','validating','executing','reconciling')"
-            )
-            conn.execute("UPDATE app_settings SET value='true'::jsonb,updated_at=now() WHERE key='kill_switch'")
-            conn.execute("UPDATE app_settings SET value='false'::jsonb,updated_at=now() WHERE key='trading_enabled'")
-            conn.commit()
-    for row in stale:
-        add_event(str(row["id"]), "run.recovered", "Worker restart detected; run failed closed and any owned order will be cancelled.")
     with connection() as conn:
         acquired = conn.execute("SELECT pg_try_advisory_lock(491720260901)").fetchone()
+        conn.commit()
         if not acquired or not acquired["pg_try_advisory_lock"]:
-            raise RuntimeError("Another IBKR scheduler holds the single-writer lock.")
+            raise RuntimeError("Another IBKR execution worker holds the single-writer lock.")
+        conn.execute(
+            "UPDATE execution_queue SET status='needs_reconciliation',next_attempt_at=now(),"
+            "reason='Execution worker restarted; checking broker state before resuming.' WHERE status='executing'")
         conn.commit()
         try:
-            # PostgreSQL advisory locks belong to a database session, so the
-            # scheduler must retain this pooled connection for its full life.
             scheduler_loop()
         finally:
             conn.execute("SELECT pg_advisory_unlock(491720260901)")

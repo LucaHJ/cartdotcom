@@ -87,7 +87,7 @@ def status() -> dict[str, Any]:
     broker = fetch_one("SELECT * FROM broker_status WHERE singleton=true")
     queued = fetch_one("SELECT count(*) AS count FROM research_runs WHERE status='queued'")
     running = fetch_one(
-        "SELECT * FROM research_runs WHERE status IN ('snapshotting','researching','validating','executing','reconciling') "
+        "SELECT * FROM research_runs WHERE status IN ('snapshotting','researching','validating') "
         "ORDER BY started_at DESC LIMIT 1"
     )
     return jsonable_encoder({
@@ -98,6 +98,9 @@ def status() -> dict[str, Any]:
         "latest_run": latest,
         "active_run": running,
         "queued_runs": int(queued["count"]) if queued else 0,
+        "execution_queue": fetch_all(
+            "SELECT q.*,r.decision_summary FROM execution_queue q JOIN research_runs r ON r.id=q.run_id "
+            "ORDER BY q.created_at DESC LIMIT 20"),
         "schedule": {
             "strategy": "NYSE session midpoint",
             "regular_time": settings.trading_time_et,
@@ -130,6 +133,7 @@ def run_detail(run_id: uuid.UUID) -> Any:
         "events": fetch_all("SELECT * FROM run_events WHERE run_id=%s ORDER BY created_at", (run_id,)),
         "decisions": fetch_all("SELECT * FROM decisions WHERE run_id=%s ORDER BY created_at", (run_id,)),
         "orders": fetch_all("SELECT * FROM orders WHERE run_id=%s ORDER BY created_at", (run_id,)),
+        "execution": fetch_one("SELECT * FROM execution_queue WHERE run_id=%s", (run_id,)),
         "snapshots": fetch_all("SELECT * FROM portfolio_snapshots WHERE run_id=%s ORDER BY captured_at", (run_id,)),
     })
 
@@ -150,7 +154,9 @@ def artifact(run_id: uuid.UUID, kind: str) -> Response:
 
 @app.get("/api/portfolio/latest", dependencies=[Depends(dashboard_auth)])
 def latest_portfolio() -> Any:
-    return jsonable_encoder(fetch_one("SELECT * FROM portfolio_snapshots ORDER BY captured_at DESC LIMIT 1"))
+    cached = fetch_one("SELECT snapshot,captured_at FROM portfolio_cache WHERE singleton=true")
+    return jsonable_encoder({**cached["snapshot"], "captured_at": cached["captured_at"]} if cached else
+                            fetch_one("SELECT * FROM portfolio_snapshots ORDER BY captured_at DESC LIMIT 1"))
 
 
 @app.get("/api/orders", dependencies=[Depends(dashboard_auth)])
@@ -189,11 +195,8 @@ def enable_paper_trading() -> dict[str, Any]:
 
 @app.post("/api/control/run-now", dependencies=[Depends(dashboard_auth)])
 def run_now() -> dict[str, Any]:
-    broker = fetch_one("SELECT state,portfolio_readable FROM broker_status WHERE singleton=true")
-    if not broker or broker["state"] != "connected" or not broker["portfolio_readable"]:
-        raise HTTPException(status_code=409, detail="Connect and validate the DU paper account before starting research.")
     active = fetch_one(
-        "SELECT id FROM research_runs WHERE status IN ('queued','snapshotting','researching','validating','executing','reconciling') LIMIT 1"
+        "SELECT id FROM research_runs WHERE status IN ('queued','snapshotting','researching','validating') LIMIT 1"
     )
     if active:
         raise HTTPException(status_code=409, detail=f"Run {active['id']} is already active or queued.")

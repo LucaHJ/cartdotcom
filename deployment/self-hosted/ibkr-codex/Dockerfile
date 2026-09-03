@@ -6,6 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN useradd --create-home --uid 1000 app
 WORKDIR /app
+COPY scripts/install_ibapi.py /tmp/install_ibapi.py
+RUN python /tmp/install_ibapi.py
 COPY pyproject.toml ./
 COPY app ./app
 RUN pip install .

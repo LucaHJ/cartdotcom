@@ -116,7 +116,6 @@ services:
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
-      codex-runner: { condition: service_healthy }
     environment: *app_environment
     secrets: *app_secrets
     volumes:
@@ -128,6 +127,23 @@ services:
         ipv4_address: 172.24.0.3
       egress:
       edge:
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 384
+    security_opt: ["no-new-privileges:true"]
+
+  research-worker:
+    build: .
+    command: ["python", "-m", "app.research_worker"]
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      codex-runner: { condition: service_healthy }
+    environment: *app_environment
+    secrets: *app_secrets
+    volumes:
+      - /srv/codex-lab/ibkr-codex/artifacts:/data/artifacts
+    networks: [data, runtime, edge]
     mem_limit: 1g
     cpus: 2.0
     pids_limit: 384

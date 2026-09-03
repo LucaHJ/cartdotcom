@@ -28,6 +28,7 @@ def migrate() -> None:
     open_pool()
     root = Path(__file__).resolve().parent.parent / "migrations"
     with pool.connection() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(491720260900)")
         for path in sorted(root.glob("*.sql")):
             conn.execute(path.read_text(encoding="utf-8"), prepare=False)
         conn.commit()
@@ -80,4 +81,3 @@ def add_event(run_id: str, event_type: str, message: str, details: dict[str, Any
         "INSERT INTO run_events(run_id,event_type,message,details) VALUES(%s,%s,%s,%s::jsonb)",
         (run_id, event_type, message, json.dumps(details or {})),
     )
-

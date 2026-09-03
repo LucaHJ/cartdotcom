@@ -6,18 +6,20 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from pathlib import Path
 
 import httpx
 import pandas_market_calendars as mcal
 
-from app.artifacts import store_json, store_text
+from app.artifacts import read_artifact, store_json, store_text
 from app.broker import PaperBroker, Quote
 from app.capital import protected_cash_floor, virtual_cash_available
 from app.config import settings
-from app.database import add_event, connection, fetch_one, setting_bool
+from app.database import add_event, connection, fetch_all, fetch_one, setting_bool
 from app.notifications import send_run_report
 from app.policy import POLICY, PolicyViolation, asset_type_for_security_type, proposed_order, validate_decision_shape
 from app.prompt import research_prompt
+from app.schedule import execution_window_sufficient
 
 
 def _decimal(value: Any) -> Decimal:
@@ -25,15 +27,7 @@ def _decimal(value: Any) -> Decimal:
 
 
 def _execution_window_sufficient(actionable_decisions: int) -> bool:
-    if actionable_decisions <= 0:
-        return True
-    now = datetime.now(UTC)
-    schedule = mcal.get_calendar("NYSE").schedule(start_date=now.date(), end_date=now.date())
-    if schedule.empty:
-        return False
-    market_close = schedule.iloc[0]["market_close"].to_pydatetime()
-    worst_case = actionable_decisions * POLICY.max_attempts * POLICY.attempt_seconds
-    return now + timedelta(seconds=worst_case + 120) <= market_close
+    return execution_window_sufficient(actionable_decisions)
 
 
 def _news_context() -> dict[str, Any]:
@@ -118,14 +112,17 @@ def _setting_decimal(key: str) -> Decimal:
 
 
 def _virtual_capital_context(broker: PaperBroker, snapshot: dict[str, Any]) -> dict[str, Decimal | str]:
+    reserve_currency = fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_currency'")
+    if not reserve_currency or str(reserve_currency["value"]).upper() != str(snapshot["currency"]).upper():
+        raise PolicyViolation("Account base currency changed; capital reserve must be revalidated.")
     principal = _setting_decimal("virtual_cash_reserve_principal")
     accrued_baseline = _setting_decimal("virtual_cash_reserve_accrued_baseline")
     protected_floor = protected_cash_floor(principal, _decimal(snapshot["accrued_cash"]), accrued_baseline)
     available_base_cash = virtual_cash_available(_decimal(snapshot["total_cash"]), protected_floor)
     base_currency = str(snapshot["currency"]).upper()
     fx_contract = broker.resolve_base_to_usd_fx(base_currency)
-    base_to_usd = Decimal("1") if fx_contract is None else broker.quote(fx_contract).last
-    if base_to_usd <= 0:
+    base_to_usd = Decimal("1") if fx_contract is None else broker.quote(fx_contract).bid
+    if not base_to_usd.is_finite() or base_to_usd <= 0:
         raise PolicyViolation("A valid base-currency-to-USD quote is required before any USD order.")
     held_usd_value = sum(
         (_decimal(item.get("market_value", "0")) for item in snapshot["positions"]), Decimal("0")
@@ -141,6 +138,9 @@ def _virtual_capital_context(broker: PaperBroker, snapshot: dict[str, Any]) -> d
 
 
 def _insert_decisions(run_id: str, output: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = fetch_all("SELECT * FROM decisions WHERE run_id=%s ORDER BY created_at", (run_id,))
+    if existing:
+        return existing  # Same immutable result after a worker restart; never duplicate decisions.
     action_count = sum(1 for item in output["decisions"] if item["action"] != "HOLD")
     if action_count > POLICY.max_orders_per_run:
         raise PolicyViolation("Codex returned more than five actionable decisions.")
@@ -201,10 +201,11 @@ def _execute_decision(
     policy_net_liquidation: Decimal,
 ) -> tuple[Decimal, Decimal]:
     if setting_bool("kill_switch", True) or not setting_bool("trading_enabled", False):
-        raise PolicyViolation("The execution gate closed before this decision was submitted.")
+        raise RuntimeError("The execution gate closed; decision remains queued.")
     if decision["action"] == "HOLD":
         _record_validation(decision["id"], "accepted_no_order", "HOLD selected; no order is required.")
         return turnover_used, cash_available
+    validate_decision_shape(decision)
     symbol = decision["symbol"]
     asset_type = decision["asset_type"]
     position = _position(snapshot, symbol)
@@ -225,21 +226,33 @@ def _execute_decision(
         ask=first_quote.ask,
         turnover_used=turnover_used,
     )
+    prior = fetch_all("SELECT * FROM orders WHERE decision_id=%s ORDER BY attempt", (decision["id"],))
+    if any(not item["terminal"] for item in prior):
+        raise RuntimeError("A previous attempt must be reconciled before any new submission.")
+    filled_total = sum((_decimal(item["filled_quantity"]) for item in prior), Decimal("0"))
     if proposal is None:
-        _record_validation(decision["id"], "accepted_no_order", "Target already satisfied or HOLD selected.")
+        _record_validation(decision["id"], "executed" if filled_total else "accepted_no_order",
+                           f"Target satisfied; prior confirmed fills: {filled_total}. No further order required.")
         return turnover_used, cash_available
     _record_validation(decision["id"], "accepted", "Passed contract, market-data, and deterministic risk validation.")
 
     remaining = _decimal(proposal["quantity"])
-    filled_total = Decimal("0")
+    if prior:
+        remaining = min(remaining, max(Decimal("0"), _decimal(prior[0]["requested_quantity"]) - filled_total))
+    start_attempt = max((item["attempt"] for item in prior), default=0) + 1
     executed_notional = Decimal("0")
     base_mid = (first_quote.bid + first_quote.ask) / 2
-    for attempt in range(1, POLICY.max_attempts + 1):
+    for attempt in range(start_attempt, POLICY.max_attempts + 1):
         if remaining <= 0:
             break
         if setting_bool("kill_switch", True) or not setting_bool("trading_enabled", False):
-            add_event(run_id, "execution.stopped", "The kill switch stopped further order attempts.")
-            break
+            raise RuntimeError("The kill switch paused further order attempts; decision remains queued.")
+        expiry = fetch_one("SELECT expires_at FROM execution_queue WHERE run_id=%s", (run_id,))
+        if not expiry or expiry["expires_at"] <= datetime.now(UTC) or not execution_window_sufficient(1):
+            raise RuntimeError("Signal expired or the regular-session execution window closed.")
+        if fetch_one("SELECT id FROM research_runs WHERE status='completed' AND created_at > "
+                     "(SELECT created_at FROM research_runs WHERE id=%s) LIMIT 1", (run_id,)):
+            raise RuntimeError("Newer research supersedes this signal; no further submissions.")
         quote = broker.quote(contract)
         slippage_pct = min(POLICY.max_slippage_pct, POLICY.initial_slippage_pct + Decimal("0.275") * (attempt - 1))
         if proposal["side"] == "BUY":
@@ -254,7 +267,7 @@ def _execute_decision(
             )
         price = price.quantize(Decimal("0.01"))
         order_db_id = str(uuid.uuid4())
-        order_ref = f"codex-paper:{run_id[:8]}:{decision['id'][:8]}:{attempt}"
+        order_ref = f"codex-paper:{str(run_id)[:8]}:{str(decision['id'])[:8]}:{attempt}"
         with connection() as conn:
             conn.execute(
                 "INSERT INTO orders(id,run_id,decision_id,order_ref,symbol,side,requested_quantity,remaining_quantity,"
@@ -284,6 +297,8 @@ def _execute_decision(
         add_event(run_id, "order.terminal", f"{symbol} attempt {attempt}: {state.status}, filled {state.filled}")
         if state.status == "Inactive":
             break
+    status = "executed" if remaining <= 0 else "partially_filled" if filled_total > 0 else "unfilled"
+    _record_validation(decision["id"], status, f"Confirmed filled {filled_total}; unfilled {remaining}; broker attempts monitored.")
     if proposal["side"] == "BUY":
         cash_available -= executed_notional
     else:
@@ -291,141 +306,137 @@ def _execute_decision(
     return turnover_used + executed_notional, cash_available
 
 
+def research_context() -> dict[str, Any]:
+    """Read saved inputs only. Market data and broker connectivity are execution concerns."""
+    cached = fetch_one("SELECT snapshot,captured_at FROM portfolio_cache WHERE singleton=true")
+    if cached:
+        snapshot = dict(cached["snapshot"])
+        captured = cached["captured_at"]
+        metadata = {
+            "portfolio_known": True, "source": "last_saved_ibkr_snapshot",
+            "captured_at": captured.isoformat(),
+            "age_seconds": max(0, round((datetime.now(UTC) - captured).total_seconds())),
+            "note": "Saved holdings may be stale. Research independently using current public sources. Execution will refresh and verify all holdings.",
+        }
+    else:
+        snapshot = {"positions": [], "currency": None, "total_cash": None, "net_liquidation": None}
+        metadata = {
+            "portfolio_known": False, "source": "unavailable", "captured_at": None,
+            "note": "No trustworthy saved portfolio exists. Discover candidates; do not assume that the account is empty.",
+        }
+    snapshot["research_data_status"] = metadata
+    capital = fetch_one("SELECT value FROM app_settings WHERE key='virtual_investable_capital'")
+    currency = fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_currency'")
+    snapshot["strategy_budget"] = {
+        "initial_capital": capital["value"] if capital else settings.virtual_investable_capital,
+        "currency": currency["value"] if currency else "account base currency",
+        "note": "All target weights apply to this virtual portfolio, never to the full broker balance. Fresh FX and protected cash checks run at execution.",
+    }
+    return snapshot
+
+
 def execute_run(run_id: str) -> None:
-    broker = PaperBroker()
+    """Complete research and persist intents without constructing a PaperBroker."""
+    from app.schedule import decision_expiry
     started = time.monotonic()
     try:
         with connection() as conn:
-            conn.execute("UPDATE research_runs SET status='snapshotting',started_at=now() WHERE id=%s", (run_id,))
+            claimed = conn.execute(
+                "UPDATE research_runs SET status='snapshotting',started_at=COALESCE(started_at,now()),error=NULL "
+                "WHERE id=%s AND status='queued' RETURNING id", (run_id,)).fetchone()
             conn.commit()
-        add_event(run_id, "run.started", "Capturing the allowlisted IBKR paper portfolio.")
-        broker.connect_paper()
-        snapshot = broker.portfolio_snapshot()
-        _enrich_positions(broker, snapshot)
-        capability = fetch_one(
-            "SELECT live_us_stock_quotes,delayed_us_stock_quotes,api_us_stock_order_access,crypto_usd_order_access "
-            "FROM broker_status WHERE singleton=true"
-        ) or {}
-        snapshot["execution_capabilities"] = capability
-        capital = _virtual_capital_context(broker, snapshot)
-        snapshot["capital_protection"] = {
-            "base_currency": capital["base_currency"],
-            "protected_cash_floor": str(capital["protected_floor"]),
-            "available_base_cash": str(capital["available_base_cash"]),
-            "base_to_usd": str(capital["base_to_usd"]),
-            "virtual_cash_usd": str(capital["cash_usd"]),
-            "virtual_net_liquidation_usd": str(capital["net_liquidation_usd"]),
-        }
-        _store_snapshot(run_id, snapshot)
-        news_context = _news_context()
-        prompt = research_prompt(snapshot, news_context)
+        if not claimed:
+            return
+        previous = fetch_one("SELECT research_context,prompt_path FROM research_runs WHERE id=%s", (run_id,))
+        if previous["research_context"] and previous["prompt_path"]:
+            snapshot = previous["research_context"]
+            prompt = read_artifact(previous["prompt_path"])
+        else:
+            snapshot = research_context()
+            prompt = research_prompt(snapshot, _news_context())
+        add_event(run_id, "run.started", "Research is using saved portfolio context independently of IBKR.",
+                  snapshot["research_data_status"])
         prompt_artifact = store_text(run_id, "prompt", prompt)
         with connection() as conn:
             conn.execute(
-                "UPDATE research_runs SET status='researching',prompt_path=%s,prompt_sha256=%s,artifact_bytes=%s WHERE id=%s",
-                (prompt_artifact.path, prompt_artifact.sha256, prompt_artifact.bytes, run_id),
-            )
+                "UPDATE research_runs SET status='researching',research_context=%s::jsonb,"
+                "prompt_path=%s,prompt_sha256=%s,artifact_bytes=%s WHERE id=%s",
+                (json.dumps(snapshot, default=str), prompt_artifact.path, prompt_artifact.sha256, prompt_artifact.bytes, run_id))
             conn.commit()
         add_event(run_id, "research.started", "Codex deep-dive research started with a two-hour ceiling.")
-        response = httpx.post(
-            settings.codex_runner_url,
-            json={"run_id": run_id, "prompt": prompt},
-            timeout=settings.codex_timeout_seconds + 120,
-        )
-        response.raise_for_status()
+        response = httpx.post(settings.codex_runner_url, json={"run_id": run_id, "prompt": prompt},
+                              timeout=settings.codex_timeout_seconds + 120)
+        if response.status_code == 429:
+            with connection() as conn:
+                conn.execute("UPDATE research_runs SET status='queued',error='Research runner is busy; retrying.' WHERE id=%s", (run_id,))
+                conn.commit()
+            return
+        if response.is_error:
+            raise RuntimeError(f"Research runner returned {response.status_code}: {response.text[:4000]}")
         payload = response.json()
-        output = payload["result"]
-        output_artifact = store_json(run_id, "output", output)
+        output = payload.get("result")
+        output_artifact = store_json(run_id, "output", output if output is not None else {"error": payload.get("error")})
+        runner_path = settings.artifact_root / "runner-results" / f"{run_id}.json.gz"
+        runner_bytes = runner_path.stat().st_size if runner_path.exists() else 0
         event_artifact = store_json(run_id, "codex-events", payload.get("events", []))
         usage = payload.get("usage", {})
         with connection() as conn:
             conn.execute(
                 "UPDATE research_runs SET status='validating',output_path=%s,event_path=%s,output_sha256=%s,"
                 "input_tokens=%s,output_tokens=%s,cached_input_tokens=%s,codex_runtime_seconds=%s,"
-                "decision_summary=%s,artifact_bytes=artifact_bytes+%s WHERE id=%s",
-                (
-                    output_artifact.path, event_artifact.path, output_artifact.sha256,
-                    usage.get("input_tokens", 0), usage.get("output_tokens", 0), usage.get("cached_input_tokens", 0),
-                    payload.get("runtime_seconds", 0), output["run_summary"], output_artifact.bytes + event_artifact.bytes, run_id,
-                ),
-            )
+                "decision_summary=%s,artifact_bytes=artifact_bytes+%s,runner_result_path=%s WHERE id=%s",
+                (output_artifact.path, event_artifact.path, output_artifact.sha256,
+                 usage.get("input_tokens", 0), usage.get("output_tokens", 0), usage.get("cached_input_tokens", 0),
+                 payload.get("runtime_seconds", 0), output.get("run_summary") if output else None,
+                 output_artifact.bytes + event_artifact.bytes + runner_bytes, str(runner_path) if runner_bytes else None, run_id))
             conn.commit()
+        if payload.get("ok") is False or output is None:
+            raise RuntimeError(payload.get("error", "Research returned no result."))
         decisions = _insert_decisions(run_id, output)
-        add_event(run_id, "research.completed", output["run_summary"], {"decisions": len(decisions), "usage": usage})
-
-        actionable = sum(1 for decision in decisions if decision["action"] != "HOLD")
-        execution_window_open = _execution_window_sufficient(actionable)
-        if setting_bool("kill_switch", True) or not setting_bool("trading_enabled", False):
-            for decision in decisions:
-                _record_validation(decision["id"], "blocked", "Trading is disabled or the kill switch is engaged.")
-            add_event(run_id, "execution.blocked", "Research was recorded, but the paper execution gate is closed.")
-        elif not execution_window_open:
-            for decision in decisions:
-                _record_validation(decision["id"], "blocked", "Insufficient regular-session time remains for monitored execution.")
-            add_event(
-                run_id,
-                "execution.blocked",
-                "Research was recorded, but worst-case monitored order handling would extend beyond the NYSE close.",
-            )
-        else:
-            with connection() as conn:
-                conn.execute("UPDATE research_runs SET status='executing' WHERE id=%s", (run_id,))
-                conn.commit()
-            turnover = Decimal("0")
-            cash_available = _decimal(capital["cash_usd"])
-            policy_net_liquidation = _decimal(capital["net_liquidation_usd"])
-            for decision in decisions:
-                try:
-                    turnover, cash_available = _execute_decision(
-                        broker, run_id, decision, snapshot, turnover, cash_available, policy_net_liquidation,
-                    )
-                except PolicyViolation as exc:
-                    _record_validation(decision["id"], "rejected", str(exc))
-                    add_event(run_id, "decision.rejected", f"{decision['symbol']}: {exc}")
-
+        actionable = sum(item["action"] != "HOLD" for item in decisions)
         with connection() as conn:
-            conn.execute("UPDATE research_runs SET status='reconciling' WHERE id=%s", (run_id,))
-            conn.commit()
-        final_snapshot = broker.portfolio_snapshot()
-        _enrich_positions(broker, final_snapshot)
-        _store_snapshot(run_id, final_snapshot)
-        executions = broker.executions()
-        with connection() as conn:
-            for execution in executions:
-                conn.execute(
-                    "INSERT INTO executions(exec_id,order_id,account_id,symbol,side,shares,price,executed_at,raw) "
-                    "VALUES(%s,(SELECT id FROM orders WHERE broker_order_id=%s ORDER BY created_at DESC LIMIT 1),"
-                    "%s,%s,%s,%s,%s,now(),%s::jsonb) ON CONFLICT(exec_id) DO NOTHING",
-                    (
-                        execution["exec_id"], execution["order_id"], execution["account"], execution["symbol"], execution["side"],
-                        execution["shares"], execution["price"], json.dumps(execution),
-                    ),
-                )
+            # New research replaces older intents only when they have never reached IBKR.
+            conn.execute(
+                "UPDATE execution_queue q SET status='superseded',reason='Replaced by newer completed research.',finished_at=now() "
+                "WHERE status='pending' AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.run_id=q.run_id)")
+            conn.execute(
+                "INSERT INTO execution_queue(run_id,status,reason,expires_at,finished_at) "
+                "VALUES(%s,%s,%s,%s,CASE WHEN %s THEN NULL ELSE now() END) ON CONFLICT(run_id) DO NOTHING",
+                (run_id, "pending" if actionable else "completed",
+                 "Awaiting fresh broker checks and an execution window." if actionable else "HOLD: no orders required.",
+                 decision_expiry(datetime.fromisoformat(payload["completed_at"]) if payload.get("completed_at") else datetime.now(UTC)), bool(actionable)))
+            conn.execute(
+                "UPDATE decisions SET validation_status=CASE WHEN action='HOLD' THEN 'accepted_no_order' ELSE 'queued' END,"
+                "validation_message=CASE WHEN action='HOLD' THEN 'HOLD selected; no order required.' "
+                "ELSE 'Queued for fresh IBKR portfolio, FX, quote and risk checks.' END WHERE run_id=%s", (run_id,))
             conn.execute(
                 "UPDATE research_runs SET status='completed',finished_at=now(),runtime_seconds=%s WHERE id=%s",
-                (round(time.monotonic() - started, 3), run_id),
-            )
+                (round(time.monotonic() - started, 3), run_id))
             conn.commit()
-        add_event(run_id, "run.completed", "Paper account, terminal orders, executions, and final positions were reconciled.")
-        if not send_run_report(run_id):
-            add_event(run_id, "notification.failed", "The completion report email could not be delivered.")
+        add_event(run_id, "research.completed", output["run_summary"], {"decisions": len(decisions), "usage": usage})
+        add_event(run_id, "execution.queued" if actionable else "execution.no_action",
+                  f"{actionable} trade decisions queued." if actionable else "Research chose no paper trades.")
+    except httpx.TransportError as exc:
+        with connection() as conn:
+            conn.execute("UPDATE research_runs SET status='queued',error=%s WHERE id=%s",
+                         (f"Research transport interrupted; retrieving durable result on retry: {exc}"[:4000], run_id))
+            conn.commit()
+        add_event(run_id, "research.retry", "Runner connection interrupted; saved prompt and result will be reused.")
+        return
     except Exception as exc:
         message = str(exc)[:12000]
         with connection() as conn:
             conn.execute(
                 "UPDATE research_runs SET status='failed',finished_at=now(),runtime_seconds=%s,error=%s WHERE id=%s",
-                (round(time.monotonic() - started, 3), message, run_id),
-            )
-            conn.execute(
-                "INSERT INTO app_settings(key,value) VALUES('kill_switch','true'::jsonb) "
-                "ON CONFLICT(key) DO UPDATE SET value='true'::jsonb,updated_at=now()"
-            )
+                (round(time.monotonic() - started, 3), message, run_id))
             conn.commit()
-        add_event(run_id, "run.failed", message)
+        add_event(run_id, "research.failed", message)
+        # A research/transport failure never toggles the trading kill switch.
+    try:
         send_run_report(run_id)
-        raise
-    finally:
-        broker.disconnect_paper()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Research report email failed; research artifacts remain saved")
 
 
 def queue_run(scheduled_for: datetime, trigger: str) -> str:

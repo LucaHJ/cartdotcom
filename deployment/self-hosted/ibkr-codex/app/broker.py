@@ -10,6 +10,7 @@ from ibapi.client import EClient
 from ibapi.contract import Contract
 from ibapi.execution import ExecutionFilter
 from ibapi.order import Order
+from ibapi.order_cancel import OrderCancel
 from ibapi.wrapper import EWrapper
 
 from app.config import settings
@@ -52,8 +53,8 @@ class PaperAccountDiscovery(EWrapper, EClient):
             self._received = True
             self._condition.notify_all()
 
-    def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = "") -> None:
-        del reqId, errorCode, errorString, advancedOrderRejectJson
+    def error(self, reqId: int, errorTime: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = "") -> None:
+        del reqId, errorTime, errorCode, errorString, advancedOrderRejectJson
 
     def discover(self, timeout: float = 15) -> list[str]:
         self.connect(settings.ibkr_host, 4002, clientId=settings.ibkr_client_id + 1)
@@ -138,6 +139,8 @@ class PaperBroker(EWrapper, EClient):
         self._executions: list[dict[str, Any]] = []
         self._execution_done: set[int] = set()
         self._request_id = 1000
+        self._completed_orders: list[dict[str, Any]] = []
+        self._completed_orders_done = False
 
     def _notify(self) -> None:
         with self._condition:
@@ -184,14 +187,14 @@ class PaperBroker(EWrapper, EClient):
             self._accounts = [item.strip() for item in accountsList.split(",") if item.strip()]
             self._condition.notify_all()
 
-    def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = "") -> None:
+    def error(self, reqId: int, errorTime: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = "") -> None:
         # IBKR uses the same callback for its informational delayed-data
         # handoff ("Displaying delayed market data") as it uses for a true
         # missing-subscription error. The former is expected after an explicit
         # reqMarketDataType(3) request and the quote callbacks follow it.
         delayed_handoff = (
             reqId in self._delayed_quote_requests
-            and errorCode == 354
+            and errorCode in {354, 10167}
             and "displaying delayed market data" in errorString.lower()
         )
         if errorCode not in {2104, 2106, 2107, 2108, 2158} and not delayed_handoff:
@@ -273,7 +276,7 @@ class PaperBroker(EWrapper, EClient):
 
     def tickPrice(self, reqId: int, tickType: int, price: float, attrib: Any) -> None:  # noqa: N802
         # Delayed snapshots use a parallel set of tick fields: 66/67/68
-        # correspond to the ordinary live fields 1/2/4. Normalize both
+        # correspond to the ordinary live fields 1/2/4.  Normalize both
         # protocols so the later order-validation path remains identical.
         field = {1: "bid", 2: "ask", 4: "last", 66: "bid", 67: "ask", 68: "last"}.get(tickType)
         if field and price > 0:
@@ -434,15 +437,19 @@ class PaperBroker(EWrapper, EClient):
         error_offset = len(self._errors)
         self.reqMarketDataType(requested_type)
         self.reqMktData(req_id, contract, "", True, False, [])
-        self._wait(
-            lambda: all(key in self._quotes[req_id] for key in ("bid", "ask", "last"))
-            or any(item.get("request_id") == req_id for item in self._errors[error_offset:]),
-            20,
-            f"quote {contract.symbol}",
-        )
-        self.cancelMktData(req_id)
-        self._delayed_quote_requests.discard(req_id)
+        try:
+            self._wait(
+                lambda: all(key in self._quotes[req_id] for key in (("bid", "ask") if contract.secType == "CASH" else ("bid", "ask", "last")))
+                or any(item.get("request_id") == req_id for item in self._errors[error_offset:]),
+                20,
+                f"quote {contract.symbol}",
+            )
+        finally:
+            self.cancelMktData(req_id)
+            self._delayed_quote_requests.discard(req_id)
         values = self._quotes[req_id]
+        if contract.secType == "CASH" and values.get("bid", 0) > 0 and values.get("ask", 0) > 0:
+            values.setdefault("last", (values["bid"] + values["ask"]) / 2)
         errors = [item for item in self._errors[error_offset:] if item.get("request_id") == req_id]
         if errors:
             raise RuntimeError(f"IBKR market data rejected for {contract.symbol}: {errors[-1]['message']}")
@@ -453,10 +460,7 @@ class PaperBroker(EWrapper, EClient):
             )
         missing = [key for key in ("bid", "ask", "last") if Decimal(str(values.get(key, 0))) <= 0]
         if missing:
-            raise RuntimeError(
-                f"IBKR {Quote(contract.symbol, Decimal('0'), Decimal('0'), Decimal('0'), data_type).source_label} "
-                f"quote for {contract.symbol} omitted {', '.join(missing)}."
-            )
+            raise RuntimeError(f"IBKR {Quote(contract.symbol, Decimal('0'), Decimal('0'), Decimal('0'), data_type).source_label} quote for {contract.symbol} omitted {', '.join(missing)}.")
         return Quote(
             symbol=contract.symbol,
             bid=Decimal(str(values.get("bid", 0))),
@@ -485,9 +489,11 @@ class PaperBroker(EWrapper, EClient):
     ) -> int:
         if not self.isConnected() or self._next_order_id is None:
             raise RuntimeError("IBKR paper session is not connected.")
-        crypto = contract.secType == "CRYPTO"
-        if side not in {"BUY", "SELL"} or quantity <= 0 or (not crypto and quantity != quantity.to_integral_value()):
-            raise ValueError("Only positive whole-share stock or fractional BTC/ETH BUY/SELL orders are supported.")
+        settings.validate_paper_boundary(self.account_id)
+        if contract.secType != "STK" or contract.currency != "USD":
+            raise ValueError("Only USD stock contracts may receive orders; crypto is prohibited.")
+        if side not in {"BUY", "SELL"} or quantity <= 0 or quantity != quantity.to_integral_value():
+            raise ValueError("Only positive whole-share stock BUY/SELL orders are supported.")
         order_id = self._next_order_id
         self._next_order_id += 1
         order = Order()
@@ -496,8 +502,8 @@ class PaperBroker(EWrapper, EClient):
         order.orderType = "LMT"
         order.totalQuantity = quantity
         order.lmtPrice = float(limit_price)
-        order.tif = "IOC" if crypto else "DAY"
-        order.outsideRth = crypto
+        order.tif = "DAY"
+        order.outsideRth = False
         order.transmit = True
         order.orderRef = order_ref
         # Current IB Gateway rejects the legacy defaults emitted by some
@@ -594,8 +600,27 @@ class PaperBroker(EWrapper, EClient):
         return self._order_states[order_id]
 
     def cancel_and_wait(self, order_id: int, timeout: int = 30) -> BrokerOrderState:
-        self.cancelOrder(order_id, "paper-execution-timeout")
+        self.cancelOrder(order_id, OrderCancel())
         return self.wait_order(order_id, timeout)
+
+    def completedOrder(self, contract: Contract, order: Order, orderState: Any) -> None:  # noqa: N802
+        if order.account == self.account_id:
+            self._completed_orders.append({
+                "order_id": order.orderId, "perm_id": order.permId,
+                "order_ref": order.orderRef, "status": orderState.status,
+                "filled": str(order.filledQuantity),
+            })
+
+    def completedOrdersEnd(self) -> None:  # noqa: N802
+        self._completed_orders_done = True
+        self._notify()
+
+    def completed_orders(self) -> list[dict[str, Any]]:
+        self._completed_orders = []
+        self._completed_orders_done = False
+        self.reqCompletedOrders(False)
+        self._wait(lambda: self._completed_orders_done, 20, "completed orders")
+        return list(self._completed_orders)
 
     def executions(self) -> list[dict[str, Any]]:
         req_id = self._req_id()

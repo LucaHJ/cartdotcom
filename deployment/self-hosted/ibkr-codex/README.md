@@ -2,19 +2,24 @@
 
 Paper-only autonomous portfolio research and execution for `cartdotcom-server`. The runtime is hard-locked to IB Gateway paper port `4002` and an allowlisted account identifier beginning with `DU`. There is no live-account mode.
 
-The scheduled worker runs at the actual midpoint of each official NYSE session (12:45 PM America/New_York on regular days and earlier on shortened sessions). It snapshots the portfolio, launches an isolated `gpt-5.6-sol` Codex research process at `xhigh` effort with a two-hour deadline, records all artifacts, validates any proposed trades against deterministic risk limits, and only then submits monitored whole-share DAY limit orders. HOLD is a first-class valid outcome.
+The independent research worker runs at the actual midpoint of each official NYSE session (12:45 PM America/New_York on regular days and earlier on shortened sessions). It uses the last saved portfolio with a visible capture time (or explicitly unknown holdings), launches isolated `gpt-5.6-sol` research at `xhigh` effort with a two-hour deadline, and saves research and target-weight decisions without connecting to IBKR. HOLD, including an empty decision list, is valid.
+
+A separate execution worker consumes the durable PostgreSQL queue. It refreshes the portfolio, AUD/USD conversion, quotes, cash protection and risk checks only at execution. Connection or data failures defer execution without failing research or changing the kill switch. Signals expire at the current NYSE close (or next session close for after-hours research); newer completed research supersedes unsubmitted older signals. Changed or previously unknown holdings trigger fresh research before trading. Only monitored whole-share DAY limit orders on the allowlisted paper account are allowed.
+
+Runner results are compressed and persisted before HTTP delivery. Retrying the same run uses its saved prompt and result. Research and execution reports are separate, so an email never implies queued orders have already filled.
 
 ## Safety defaults
 
 - Startup: kill switch engaged and trading disabled.
-- Assets: long-only USD-listed stocks and ordinary ETFs.
+- Assets: long-only USD-listed stocks and ordinary ETFs; crypto remains prohibited.
+- Sizing uses the virtual 20,000 account-base-currency budget, not the full broker balance. The 980,000 principal plus protected interest remains unavailable.
 - New position: at most 5% of net liquidation value.
 - Total position: at most 15%.
 - Per-run turnover: at most 20%.
 - Cash reserve: at least 5%.
-- At most 5 orders per run; no shares below $5; live quotes and a spread at or below 1% required.
+- At most 5 decisions per run; no shares below $5; live or explicitly authorized delayed quotes and a spread at or below 1% required.
 - At most 3 monitored limit-order attempts with a maximum 0.75% slippage envelope; remaining quantity is cancelled.
-- Any error or interrupted run engages the kill switch. Startup recovery cancels owned orphaned paper orders.
+- The dashboard kill switch pauses execution, not research. Startup reconciles uncertain submissions using broker order references and permanent identifiers; unknown submissions are never blindly replayed.
 
 ## Deployment state
 
@@ -38,8 +43,11 @@ If API order access is blocked, disable IB Gateway's read-only API setting while
 cd /srv/codex-lab/ibkr-codex/source
 docker compose ps
 docker compose logs --tail=100 worker
+docker compose logs --tail=100 research-worker
 docker compose logs --tail=100 codex-runner
 docker compose --profile tools run --rm backup
 ```
 
-The worker health-checks IBKR every five minutes and emails at most once per hour while login or capability intervention is required. It also recovers interrupted research runs fail-closed, engages the kill switch, and cancels any working order carrying this application's `codex-paper:` ownership prefix. Live US quotes are preferred; delayed 10-15 minute US quotes are accepted only when `ALLOW_DELAYED_MARKET_DATA=true` is explicitly configured, and are shown as delayed in the dashboard and run artifacts.
+The Python IBKR SDK is pinned to the official 10.50.1 distribution and SHA-256 verified by `scripts/install_ibapi.py`; the obsolete PyPI 9.81 client cannot request fractional-size-aware FX quotes. For local setup, run that installer before installing this project. Integration tests use a disposable database named `ibkr_queue_test_*` and fake every broker/runner interaction: `PGDATABASE=ibkr_queue_test_<suffix> python tests/test_queue_integration.py`.
+
+The worker health-checks IBKR every five minutes and emails at most once per hour while login or capability intervention is required. A separate research-worker continues scheduling during broker outages. Execution retries are checked every minute; interrupted submissions are reconciled before any further trading. Owned working orders carry a `codex-paper:` prefix and cancellation must be confirmed. Live US quotes are preferred; delayed 10-15 minute US quotes are accepted only when `ALLOW_DELAYED_MARKET_DATA=true` is explicitly configured, and are shown as delayed in the dashboard and run artifacts.

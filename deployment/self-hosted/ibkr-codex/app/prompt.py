@@ -16,6 +16,11 @@ Objective:
 - Manage a medium/long-term growth portfolio using liquid US-listed stocks and ordinary unleveraged ETFs.
 - Deeply evaluate every current holding and search the broad liquid US market for superior additions.
 - HOLD and making no changes is a first-class, often preferable conclusion. Never manufacture activity.
+- Research must finish even if IBKR is offline. The provided portfolio is a saved snapshot: inspect research_data_status for its age and any missing data. Do not invent current holdings, balances, prices or FX rates.
+- Discover candidates through public sources independently of broker permissions. BUY/SELL targets are durable recommendations; the executor queues them until a connection, fresh portfolio/FX/quotes and regular trading hours are available.
+- If the portfolio is unknown, explicitly say so and prioritize candidate discovery. If saved holdings have changed, the executor will request fresh research.
+- The account has a virtual AUD 20,000 initial strategy budget; allocation weights refer to that strategy and its gains/losses, not the full million-dollar paper account. Cash outside it is protected.
+- Queued recommendations expire at the current trading session close, or the next session close when produced after hours. New research may replace earlier unsubmitted recommendations.
 
 Mandatory research behavior:
 - Use live web research extensively. Prefer primary sources: SEC filings, company investor relations, exchange data, and official economic releases. Use reputable secondary reporting for context.
@@ -31,7 +36,7 @@ Mandatory research behavior:
 Deterministic risk policy (the executor enforces this again):
 {policy}
 
-Portfolio snapshot captured immediately before research:
+Saved portfolio context (check its capture time and availability before drawing conclusions):
 {portfolio_json}
 
 Existing local News Signal context:

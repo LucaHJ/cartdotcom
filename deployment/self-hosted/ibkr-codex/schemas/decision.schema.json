@@ -33,7 +33,7 @@
     },
     "decisions": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "maxItems": 20,
       "items": {
         "type": "object",
@@ -41,7 +41,7 @@
         "required": ["symbol", "asset_type", "action", "target_weight_pct", "confidence", "thesis", "risks", "citations"],
         "properties": {
           "symbol": { "type": "string", "pattern": "^[A-Z0-9.-]{1,12}$" },
-          "asset_type": { "type": "string", "enum": ["US_EQUITY", "CRYPTO"] },
+          "asset_type": { "type": "string", "enum": ["US_EQUITY"] },
           "action": { "type": "string", "enum": ["BUY", "SELL", "HOLD"] },
           "target_weight_pct": { "type": "number", "minimum": 0, "maximum": 15 },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },

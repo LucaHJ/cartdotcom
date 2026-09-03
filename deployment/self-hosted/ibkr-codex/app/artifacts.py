@@ -73,13 +73,13 @@ def enforce_retention() -> int:
         return 0
     cutoff = datetime.now(UTC) - timedelta(days=365)
     rows = fetch_all(
-        "SELECT id,prompt_path,output_path,event_path FROM research_runs "
+        "SELECT id,prompt_path,output_path,event_path,runner_result_path FROM research_runs "
         "WHERE created_at < %s AND artifact_bytes > 0",
         (cutoff,),
     )
     removed = 0
     for row in rows:
-        for field in ("prompt_path", "output_path", "event_path"):
+        for field in ("prompt_path", "output_path", "event_path", "runner_result_path"):
             path = row.get(field)
             if path:
                 candidate = Path(path).resolve()
@@ -89,10 +89,9 @@ def enforce_retention() -> int:
                     removed += 1
         with connection() as conn:
             conn.execute(
-                "UPDATE research_runs SET prompt_path=NULL,output_path=NULL,event_path=NULL,artifact_bytes=0 "
+                "UPDATE research_runs SET prompt_path=NULL,output_path=NULL,event_path=NULL,runner_result_path=NULL,artifact_bytes=0 "
                 "WHERE id=%s",
                 (row["id"],),
             )
             conn.commit()
     return removed
-

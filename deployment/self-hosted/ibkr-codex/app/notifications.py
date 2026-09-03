@@ -141,13 +141,14 @@ def format_run_report(
 ) -> str:
     """Produce a compact, complete email while the dashboard retains raw artifacts."""
     completed = str(run.get("status")) == "completed"
-    outcome = "completed and reconciled" if completed else f"ended {run.get('status', 'unknown')}"
+    outcome = "completed" if completed else f"ended {run.get('status', 'unknown')}"
     lines = [
         f"IBKR Codex paper-trading research {outcome}.",
         "All activity is confined to the allowlisted IBKR paper account.",
         "",
         f"Run: {run.get('id')}",
         f"Trigger: {run.get('trigger', 'unknown')}",
+        f"Execution: {run.get('execution_status', 'not started')} — {run.get('execution_reason', '')}",
         f"Runtime: {run.get('runtime_seconds', 0)}s total; {run.get('codex_runtime_seconds', 0)}s Codex",
         "Tokens: "
         f"{run.get('input_tokens', 0)} input / {run.get('output_tokens', 0)} output / "
@@ -189,17 +190,21 @@ def format_run_report(
     return "\n".join(lines)
 
 
-def send_run_report(run_id: str) -> bool:
+def send_run_report(run_id: str, phase: str = "research") -> bool:
     run = fetch_one("SELECT * FROM research_runs WHERE id=%s", (run_id,))
     if not run:
         return False
+    queue = fetch_one("SELECT status,reason FROM execution_queue WHERE run_id=%s", (run_id,))
+    run["execution_status"] = queue["status"] if queue else "not started"
+    run["execution_reason"] = queue["reason"] if queue else "No queued orders."
     decisions = fetch_all("SELECT * FROM decisions WHERE run_id=%s ORDER BY created_at", (run_id,))
     orders = fetch_all("SELECT * FROM orders WHERE run_id=%s ORDER BY created_at", (run_id,))
     executions = fetch_all("SELECT * FROM executions WHERE order_id IN (SELECT id FROM orders WHERE run_id=%s) ORDER BY executed_at", (run_id,))
     completed = run["status"] == "completed"
     return send_email(
         "run_report",
-        f"run-report:{run_id}",
+        f"execution-report:{run_id}" if phase == "execution" else f"run-report:{run_id}",
+        "IBKR Codex paper execution update" if phase == "execution" else
         "IBKR Codex paper research completed" if completed else "IBKR Codex paper-trading run failed",
         format_run_report(run, decisions, orders, executions),
         settings.public_base_url,

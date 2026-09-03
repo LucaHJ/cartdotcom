@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import gzip
+import hashlib
+from datetime import UTC, datetime
+from uuid import UUID
 import os
 import tempfile
 import time
@@ -19,6 +23,7 @@ MODEL = os.getenv("CODEX_MODEL", "gpt-5.6-sol")
 EFFORT = os.getenv("CODEX_REASONING_EFFORT", "xhigh")
 TIMEOUT = int(os.getenv("CODEX_TIMEOUT_SECONDS", "7200"))
 EVENT_URL = os.getenv("INTERNAL_EVENT_URL", "")
+RESULT_ROOT = Path(os.getenv("ARTIFACT_ROOT", "/data/artifacts")) / "runner-results"
 SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "decision.schema.json"
 active_run: str | None = None
 app = FastAPI(title="IBKR Codex isolated runner")
@@ -83,7 +88,7 @@ def _usage(event: dict[str, Any]) -> dict[str, int] | None:
             return {
                 "input_tokens": int(value.get("input_tokens", 0)),
                 "output_tokens": int(value.get("output_tokens", 0)),
-                "cached_input_tokens": int(details.get("cached_tokens", 0)),
+                "cached_input_tokens": int(value.get("cached_input_tokens", details.get("cached_tokens", 0))),
             }
     return None
 
@@ -96,12 +101,40 @@ async def health() -> dict[str, Any]:
 @app.post("/research")
 async def research(request: ResearchRequest) -> dict[str, Any]:
     global active_run
+    try:
+        run_id = str(UUID(request.run_id))
+    except ValueError as exc:
+        raise HTTPException(422, "A UUID run id is required.") from exc
+    RESULT_ROOT.mkdir(parents=True, exist_ok=True)
+    saved = RESULT_ROOT / f"{run_id}.json.gz"
+    prompt_hash = hashlib.sha256(request.prompt.encode()).hexdigest()
+    if saved.exists():
+        cached = json.loads(gzip.decompress(saved.read_bytes()))
+        if cached.get("prompt_sha256") != prompt_hash:
+            raise HTTPException(409, "This run id already has a result for a different prompt.")
+        return cached
     if active_run:
         raise HTTPException(429, "The research runner is already active.")
     active_run = request.run_id
     started = time.monotonic()
     usage = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
     events: list[dict[str, Any]] = []
+    process = None
+
+    def persist(result=None, error=None):
+        payload = {
+            "ok": error is None, "result": result, "error": error,
+            "events": events, "usage": usage,
+            "runtime_seconds": round(time.monotonic() - started, 3),
+            "completed_at": datetime.now(UTC).isoformat(),
+            "model": MODEL, "reasoning_effort": EFFORT,
+            "prompt_sha256": prompt_hash,
+        }
+        temporary = saved.with_suffix(".tmp")
+        temporary.write_bytes(gzip.compress(json.dumps(payload).encode(), mtime=0))
+        temporary.replace(saved)
+        return payload
+
     try:
         with tempfile.TemporaryDirectory(dir="/work") as temp:
             output = Path(temp) / "output.json"
@@ -114,6 +147,7 @@ async def research(request: ResearchRequest) -> dict[str, Any]:
             ]
             process = await asyncio.create_subprocess_exec(
                 *args,
+                limit=4 * 1024 * 1024,
                 cwd="/work",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
@@ -142,6 +176,13 @@ async def research(request: ResearchRequest) -> dict[str, Any]:
                         usage.update(found)
                     await publish(request.run_id, event)
 
+            async def drain_stderr() -> str:
+                tail = b""
+                while chunk := await process.stderr.read(8192):
+                    tail = (tail + chunk)[-12000:]
+                return tail.decode(errors="replace")
+
+            stderr_task = asyncio.create_task(drain_stderr())
             try:
                 await asyncio.wait_for(asyncio.gather(consume(), process.wait()), timeout=TIMEOUT)
             except TimeoutError:
@@ -150,21 +191,20 @@ async def research(request: ResearchRequest) -> dict[str, Any]:
                     await asyncio.wait_for(process.wait(), timeout=10)
                 except TimeoutError:
                     process.kill()
+                    await process.wait()
                 raise HTTPException(504, "Codex research exceeded the two-hour limit.")
             if process.returncode != 0:
-                stderr = (await process.stderr.read()).decode(errors="replace")[-12000:]
+                stderr = await stderr_task
                 raise HTTPException(500, f"Codex exited with {process.returncode}: {stderr}")
             result = json.loads(output.read_text(encoding="utf-8"))
-            return {
-                "ok": True,
-                "result": result,
-                "events": events,
-                "usage": usage,
-                "runtime_seconds": round(time.monotonic() - started, 3),
-                "model": MODEL,
-                "reasoning_effort": EFFORT,
-            }
+            await stderr_task
+            return persist(result=result)
+    except Exception as exc:
+        return persist(error=str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
     finally:
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.wait()
         active_run = None
 
 
