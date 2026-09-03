@@ -9,6 +9,7 @@ from typing import Any
 from ibapi.client import EClient
 from ibapi.contract import Contract
 from ibapi.execution import ExecutionFilter
+from ibapi.message import OUT
 from ibapi.order import Order
 from ibapi.order_cancel import OrderCancel
 from ibapi.wrapper import EWrapper
@@ -125,6 +126,7 @@ class PaperBroker(EWrapper, EClient):
         self._accounts: list[str] = []
         self._errors: list[dict[str, Any]] = []
         self._account_values: dict[str, str] = {}
+        self._account_summary_request_id: int | None = None
         self._positions: list[dict[str, Any]] = []
         self._positions_done = False
         self._open_orders: list[dict[str, Any]] = []
@@ -141,6 +143,15 @@ class PaperBroker(EWrapper, EClient):
         self._request_id = 1000
         self._completed_orders: list[dict[str, Any]] = []
         self._completed_orders_done = False
+
+    def useProtoBuf(self, msgId: int) -> bool:  # noqa: N802
+        # With SDK 10.50.1 / Gateway protocol 223, protobuf summary cancellation
+        # leaves subscriptions active and the third request fails with code 322.
+        # The legacy cancellation frame was verified against the paper gateway.
+        # Keep SDK protocol selection unchanged for every other message/order.
+        if msgId == OUT.CANCEL_ACCOUNT_SUMMARY:
+            return False
+        return super().useProtoBuf(msgId)
 
     def _notify(self) -> None:
         with self._condition:
@@ -207,13 +218,22 @@ class PaperBroker(EWrapper, EClient):
         self._notify()
 
     def accountSummary(self, reqId: int, account: str, tag: str, value: str, currency: str) -> None:  # noqa: N802
-        if account == self.account_id:
-            self._account_values[tag] = value
-            self._account_values[f"{tag}Currency"] = currency
+        with self._condition:
+            if reqId == self._account_summary_request_id and account == self.account_id:
+                self._account_values[tag] = value
+                self._account_values[f"{tag}Currency"] = currency
 
     def accountSummaryEnd(self, reqId: int) -> None:  # noqa: N802
-        self._account_values["_done"] = str(reqId)
-        self._notify()
+        with self._condition:
+            if reqId == self._account_summary_request_id:
+                self._account_values["_done"] = str(reqId)
+                self._condition.notify_all()
+
+    def _account_summary_complete(self, req_id: int) -> bool:
+        failure = next((item for item in self._errors if item["request_id"] == req_id), None)
+        if failure:
+            raise RuntimeError(f"IBKR account summary rejected (code {failure['code']}): {failure['message']}")
+        return self._account_values.get("_done") == str(req_id)
 
     def position(self, account: str, contract: Contract, position: Any, avgCost: float) -> None:
         if account != self.account_id:
@@ -330,11 +350,17 @@ class PaperBroker(EWrapper, EClient):
     def portfolio_snapshot(self) -> dict[str, Any]:
         self.connect_paper()
         req_id = self._req_id()
-        self._account_values = {}
+        with self._condition:
+            self._account_values = {}
+            self._account_summary_request_id = req_id
         tags = "NetLiquidation,TotalCashValue,AccruedCash,AvailableFunds,BuyingPower,ExcessLiquidity,Currency"
-        self.reqAccountSummary(req_id, "All", tags)
-        self._wait(lambda: self._account_values.get("_done") == str(req_id), 20, "account summary")
-        self.cancelAccountSummary(req_id)
+        try:
+            self.reqAccountSummary(req_id, "All", tags)
+            self._wait(lambda: self._account_summary_complete(req_id), 20, "account summary")
+        finally:
+            with self._condition:
+                self._account_summary_request_id = None
+            self.cancelAccountSummary(req_id)
 
         self._positions = []
         self._positions_done = False

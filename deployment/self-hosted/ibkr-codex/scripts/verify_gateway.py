@@ -29,10 +29,12 @@ try:
         original(req_id, account, tag, value, currency)
     broker.accountSummary = ledger_value
     req_id = broker._req_id()
-    broker.reqAccountSummary(req_id, "All", "$LEDGER:ALL")
+    broker._account_summary_request_id = req_id
     try:
-        broker._wait(lambda: broker._account_values.get("_done") == str(req_id), 20, "ledger snapshot")
+        broker.reqAccountSummary(req_id, "All", "$LEDGER:ALL")
+        broker._wait(lambda: broker._account_summary_complete(req_id), 20, "ledger snapshot")
     finally:
+        broker._account_summary_request_id = None
         broker.cancelAccountSummary(req_id)
     result["ledger_fx"] = ledger
     result["error_codes"] = sorted(set(x["code"] for x in broker._errors))

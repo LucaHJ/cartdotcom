@@ -1,7 +1,9 @@
 from decimal import Decimal
 
 from app.broker import PaperBroker
+from ibapi.client import EClient
 from ibapi.contract import Contract
+from ibapi.message import OUT
 from ibapi.order_cancel import OrderCancel
 import pytest
 
@@ -66,3 +68,72 @@ def test_cancel_uses_current_sdk_order_cancel_type(monkeypatch):
     monkeypatch.setattr(broker, "wait_order", lambda *_: "confirmed")
     assert broker.cancel_and_wait(1) == "confirmed"
     assert isinstance(captured[0][1], OrderCancel)
+
+
+def test_account_summary_cancel_uses_legacy_frame_only(monkeypatch):
+    broker = PaperBroker("DU123456")
+    monkeypatch.setattr(EClient, "useProtoBuf", lambda self, msg: True)
+    assert broker.useProtoBuf(OUT.CANCEL_ACCOUNT_SUMMARY) is False
+    assert broker.useProtoBuf(OUT.PLACE_ORDER) is True
+    assert broker.useProtoBuf(OUT.REQ_ACCOUNT_SUMMARY) is True
+    monkeypatch.setattr(broker, "isConnected", lambda: True)
+    captured = []
+    monkeypatch.setattr(broker, "sendMsg", lambda *args: captured.append(args))
+    monkeypatch.setattr(broker, "sendMsgProtoBuf", lambda *_: pytest.fail("Unexpected protobuf cancellation"))
+    broker.cancelAccountSummary(1001)
+    assert captured == [(OUT.CANCEL_ACCOUNT_SUMMARY, "1\0" + "1001\0")]
+
+
+def test_account_summary_rejection_is_immediate_and_cleans_up(monkeypatch):
+    broker = PaperBroker("DU123456")
+    cancelled = []
+    monkeypatch.setattr(broker, "connect_paper", lambda: None)
+    monkeypatch.setattr(broker, "cancelAccountSummary", cancelled.append)
+    monkeypatch.setattr(broker, "reqPositions", lambda: pytest.fail("Must not proceed after rejection"))
+    monkeypatch.setattr(broker, "reqAccountSummary", lambda req, *_: broker.error(req, 0, 322, "Maximum account summary requests exceeded"))
+    # A rejected request must raise before waiting, not consume the 20-second timeout.
+    monkeypatch.setattr(broker._condition, "wait", lambda *_: pytest.fail("Rejection was ignored"))
+    with pytest.raises(RuntimeError, match="code 322"):
+        broker.portfolio_snapshot()
+    assert cancelled == [1001]
+    assert broker._account_summary_request_id is None
+
+
+def test_account_summary_timeout_always_cancels(monkeypatch):
+    broker = PaperBroker("DU123456")
+    cancelled = []
+    monkeypatch.setattr(broker, "connect_paper", lambda: None)
+    monkeypatch.setattr(broker, "reqAccountSummary", lambda *_: None)
+    monkeypatch.setattr(broker, "cancelAccountSummary", cancelled.append)
+    def timeout(*_):
+        raise TimeoutError("test account summary timeout")
+    monkeypatch.setattr(broker, "_wait", timeout)
+    with pytest.raises(TimeoutError):
+        broker.portfolio_snapshot()
+    assert cancelled == [1001]
+    assert broker._account_summary_request_id is None
+
+
+def test_repeated_snapshots_ignore_late_callbacks_and_cancel_each_request(monkeypatch):
+    broker = PaperBroker("DU123456")
+    cancelled = []
+    monkeypatch.setattr(broker, "connect_paper", lambda: None)
+    monkeypatch.setattr(broker, "cancelAccountSummary", cancelled.append)
+    monkeypatch.setattr(broker, "reqPositions", broker.positionEnd)
+    monkeypatch.setattr(broker, "cancelPositions", lambda: None)
+    monkeypatch.setattr(broker, "reqAllOpenOrders", broker.openOrderEnd)
+    def reply(req, *_):
+        for tag in ("NetLiquidation", "TotalCashValue", "AccruedCash", "AvailableFunds", "BuyingPower", "ExcessLiquidity"):
+            broker.accountSummary(req, broker.account_id, tag, "1000", "USD")
+        broker.accountSummaryEnd(req)
+        broker.accountSummary(req - 1, broker.account_id, "TotalCashValue", "999999", "USD")
+        broker.accountSummaryEnd(req - 1)
+        broker.accountSummary(req, "DUOTHER", "TotalCashValue", "999999", "USD")
+    monkeypatch.setattr(broker, "reqAccountSummary", reply)
+    for _ in range(4):
+        snapshot = broker.portfolio_snapshot()
+        assert snapshot["total_cash"] == "1000"
+        assert broker._account_summary_request_id is None
+    assert cancelled == [1001, 1002, 1003, 1004]
+    broker.accountSummary(1004, broker.account_id, "TotalCashValue", "999999", "USD")
+    assert broker._account_values["TotalCashValue"] == "1000"
