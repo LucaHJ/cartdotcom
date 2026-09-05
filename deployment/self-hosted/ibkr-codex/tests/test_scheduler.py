@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from app.worker import scheduled_time
-from app.schedule import execution_window_sufficient, decision_expiry
+from app.schedule import decision_expiry, execution_window_sufficient, next_execution_window
 
 
 def test_schedule_is_1245_new_york_on_regular_market_day() -> None:
@@ -30,3 +30,7 @@ def test_after_hours_expiry_is_before_next_research_and_skips_weekend_and_holida
 
 def test_expiry_uses_actual_early_close_research_midpoint():
     assert decision_expiry(datetime(2026, 11, 26, 18, 0, tzinfo=UTC)) == datetime(2026, 11, 27, 16, 10, tzinfo=UTC)
+
+
+def test_closed_market_queue_sleeps_until_next_open_across_holiday():
+    assert next_execution_window(datetime(2026, 9, 4, 21, 0, tzinfo=UTC)) == datetime(2026, 9, 8, 13, 30, tzinfo=UTC)

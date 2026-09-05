@@ -28,6 +28,21 @@ def execution_window_sufficient(count: int, now: datetime | None = None) -> bool
     return opening <= now and now + timedelta(seconds=count * POLICY.max_attempts * POLICY.attempt_seconds + 120) <= closing
 
 
+def next_execution_window(now: datetime | None = None) -> datetime:
+    """Return now during a usable session, otherwise the next NYSE open."""
+    now = now or datetime.now(UTC)
+    if execution_window_sufficient(1, now):
+        return now
+    local = now.astimezone(ET)
+    schedule = mcal.get_calendar("NYSE").schedule(
+        start_date=local.date(), end_date=local.date() + timedelta(days=30))
+    for opening in schedule["market_open"]:
+        candidate = opening.to_pydatetime()
+        if candidate > now:
+            return candidate
+    raise RuntimeError("No upcoming NYSE execution window was found.")
+
+
 def decision_expiry(now: datetime) -> datetime:
     """Expire five minutes before the next scheduled research session.
 

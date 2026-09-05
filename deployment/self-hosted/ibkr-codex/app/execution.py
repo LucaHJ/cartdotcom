@@ -11,7 +11,7 @@ from app.broker import PaperBroker, TERMINAL_ORDER_STATES
 from app.database import add_event, connection, fetch_all, fetch_one, setting_bool
 from app.notifications import send_run_report
 from app.policy import PolicyViolation
-from app.schedule import execution_window_sufficient
+from app.schedule import execution_window_sufficient, next_execution_window
 from app.workflow import _enrich_positions, _execute_decision, _store_snapshot, _virtual_capital_context, queue_run
 
 log = logging.getLogger(__name__)
@@ -41,12 +41,21 @@ def holdings_match_fills(context: dict[str, Any], snapshot: dict[str, Any], orde
     return {k: v for k, v in expected.items() if v} == {k: v for k, v in actual.items() if v}
 
 
-def set_queue_status(run_id: str, status: str, reason: str, terminal: bool = False) -> None:
+def set_queue_status(
+    run_id: str,
+    status: str,
+    reason: str,
+    terminal: bool = False,
+    retry_at: datetime | None = None,
+) -> None:
     with connection() as conn:
         previous = conn.execute("SELECT status,reason FROM execution_queue WHERE run_id=%s", (run_id,)).fetchone()
         conn.execute(
-            "UPDATE execution_queue SET status=%s,reason=%s,next_attempt_at=now()+interval '60 seconds',"
-            "finished_at=CASE WHEN %s THEN now() ELSE NULL END WHERE run_id=%s", (status, reason[:4000], terminal, run_id))
+            "UPDATE execution_queue SET status=%s,reason=%s,"
+            "next_attempt_at=COALESCE(%s,now()+interval '60 seconds'),"
+            "finished_at=CASE WHEN %s THEN now() ELSE NULL END WHERE run_id=%s",
+            (status, reason[:4000], retry_at, terminal, run_id),
+        )
         conn.commit()
     if not previous or previous["status"] != status or previous["reason"] != reason[:4000]:
         add_event(run_id, f"execution.{status}", reason[:4000])
@@ -127,7 +136,12 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
                 set_queue_status(run_id, "pending", "Waiting: the dashboard execution gate is closed.")
                 return
             if not execution_window_sufficient(1):
-                set_queue_status(run_id, "pending", "Waiting for a regular NYSE session with enough time to monitor orders.")
+                set_queue_status(
+                    run_id,
+                    "pending",
+                    "Waiting for a regular NYSE session with enough time to monitor orders.",
+                    retry_at=next_execution_window(),
+                )
                 return
         broker = PaperBroker()
         broker.connect_paper()
@@ -147,7 +161,12 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
             set_queue_status(run_id, "pending", "Waiting: the dashboard execution gate is closed.")
             return
         if not execution_window_sufficient(1):
-            set_queue_status(run_id, "pending", "Waiting for a regular NYSE session with enough time to monitor orders.")
+            set_queue_status(
+                run_id,
+                "pending",
+                "Waiting for a regular NYSE session with enough time to monitor orders.",
+                retry_at=next_execution_window(),
+            )
             return
         if fetch_one("SELECT id FROM research_runs WHERE status='completed' AND created_at > "
                      "(SELECT created_at FROM research_runs WHERE id=%s) LIMIT 1", (run_id,)):
@@ -169,7 +188,12 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
             if decision["validation_status"] in FINAL_DECISIONS:
                 continue
             if not execution_window_sufficient(1):
-                set_queue_status(run_id, "pending", "Remaining decisions are waiting for the next execution window.")
+                set_queue_status(
+                    run_id,
+                    "pending",
+                    "Remaining decisions are waiting for the next execution window.",
+                    retry_at=next_execution_window(),
+                )
                 return
             snapshot = broker.portfolio_snapshot()
             if snapshot["open_orders"]:
