@@ -37,6 +37,18 @@ def test_fill_status_is_first_and_distinguishes_terminal_outcomes() -> None:
     assert str(result["headline"]).startswith("ORDER FILL STATUS: PARTIALLY FILLED")
 
 
+def test_fill_status_says_when_nothing_reached_the_broker() -> None:
+    result = order_fill_summary(
+        "expired",
+        [{"action": "BUY", "validation_status": "queued"}],
+        [],
+    )
+
+    assert result["headline"] == (
+        "ORDER FILL STATUS: NOT FILLED — 0/1 decisions satisfied; no broker orders were submitted"
+    )
+
+
 def test_fill_status_recognises_recovered_execution() -> None:
     decisions = [
         {"action": "BUY", "validation_status": "executed"},

@@ -178,6 +178,12 @@ def order_fill_summary(
             f"ORDER FILL STATUS: PARTIALLY FILLED — {len(satisfied)}/{len(actionable)} decisions satisfied; "
             f"{filled}/{submitted} submitted shares filled"
         )
+    elif terminal and not orders:
+        outcome = "unfilled"
+        headline = (
+            f"ORDER FILL STATUS: NOT FILLED — {len(satisfied)}/{len(actionable)} decisions satisfied; "
+            "no broker orders were submitted"
+        )
     elif terminal:
         outcome = "unfilled"
         headline = (
@@ -186,9 +192,13 @@ def order_fill_summary(
         )
     else:
         outcome = "pending"
+        order_progress = (
+            f"{filled}/{submitted} submitted shares filled"
+            if orders else "no broker orders submitted yet"
+        )
         headline = (
             f"ORDER FILL STATUS: PENDING — {len(satisfied)}/{len(actionable)} decisions satisfied; "
-            f"{filled}/{submitted} submitted shares filled"
+            f"{order_progress}"
         )
     return {
         "outcome": outcome,
