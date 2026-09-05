@@ -27,8 +27,7 @@ PRICE_CACHE_FRESH_SECONDS = 15 * 60
 PRICE_CACHE_MAX_AGE_DAYS = 7
 PERFORMANCE_REFRESH_SECONDS = 60 * 60
 PERFORMANCE_ARCHIVE_DAILY_BYTES = 4096 * 1024
-# Reserve one newline byte per JSONL record while remaining under the daily cap.
-PERFORMANCE_ARCHIVE_HOURLY_BYTES = PERFORMANCE_ARCHIVE_DAILY_BYTES // 24 - 1
+PERFORMANCE_ARCHIVE_HOURLY_BYTES = PERFORMANCE_ARCHIVE_DAILY_BYTES // 24
 
 
 def _decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
@@ -244,40 +243,32 @@ def _compact_payload(value: dict[str, Any]) -> bytes:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True, default=str).encode("utf-8")
 
 
-def _daily_archive_path(day: datetime) -> Path:
-    return settings.artifact_root / "performance" / day.strftime("%Y/%m") / f"{day:%Y-%m-%d}.jsonl.gz"
-
-
-def _rewrite_daily_archive(day: datetime) -> dict[str, Any]:
-    """Atomically maintain one compressed JSONL file per UTC day."""
-    start = day.replace(hour=0, minute=0, second=0, microsecond=0)
-    rows = fetch_all(
-        "SELECT observed_hour,captured_at,snapshot,payload_bytes FROM portfolio_performance_history "
-        "WHERE observed_hour >= %s AND observed_hour < %s ORDER BY observed_hour",
-        (start, start + timedelta(days=1)),
+def _hourly_archive_path(observed_hour: datetime) -> Path:
+    observed_hour = observed_hour.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    return (
+        settings.artifact_root
+        / "performance"
+        / observed_hour.strftime("%Y/%m")
+        / f"{observed_hour:%Y-%m-%dT%H-00-00Z}.json.gz"
     )
-    records = [
-        {
-            "observed_hour": row["observed_hour"].isoformat(),
-            "captured_at": row["captured_at"].isoformat(),
-            "performance": row["snapshot"],
-        }
-        for row in rows
-    ]
-    payload = b"\n".join(_compact_payload(record) for record in records) + (b"\n" if records else b"")
-    if len(payload) > PERFORMANCE_ARCHIVE_DAILY_BYTES:
-        raise RuntimeError(
-            f"Daily performance archive would exceed {PERFORMANCE_ARCHIVE_DAILY_BYTES} bytes; nothing was written."
-        )
+
+
+def _write_hourly_archive(observed_hour: datetime, payload: bytes) -> dict[str, Any]:
+    """Atomically maintain one timestamped compressed file per UTC hour."""
     compressed = gzip.compress(payload, compresslevel=9, mtime=0)
-    path = _daily_archive_path(start)
+    path = _hourly_archive_path(observed_hour)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_bytes(compressed)
     temporary.replace(path)
+
+    # Remove the superseded one-file-per-day layout after the first successful
+    # timestamped write. PostgreSQL remains the canonical history source.
+    legacy = path.parent / f"{observed_hour:%Y-%m-%d}.jsonl.gz"
+    if legacy.exists():
+        legacy.unlink()
     return {
         "path": str(path),
-        "snapshots": len(records),
         "uncompressed_bytes": len(payload),
         "compressed_bytes": len(compressed),
     }
@@ -297,7 +288,18 @@ def archive_strategy_performance(result: dict[str, Any], captured_at: datetime |
         raise RuntimeError(
             f"Hourly performance record is {len(payload)} bytes; the limit is {PERFORMANCE_ARCHIVE_HOURLY_BYTES}."
         )
+    day_start = observed_hour.replace(hour=0)
     with connection() as conn:
+        daily = conn.execute(
+            "SELECT COALESCE(sum(payload_bytes),0) AS payload_bytes FROM portfolio_performance_history "
+            "WHERE observed_hour >= %s AND observed_hour < %s AND observed_hour <> %s",
+            (day_start, day_start + timedelta(days=1), observed_hour),
+        ).fetchone()
+        daily_bytes = int(daily["payload_bytes"] if daily else 0) + len(payload)
+        if daily_bytes > PERFORMANCE_ARCHIVE_DAILY_BYTES:
+            raise RuntimeError(
+                f"Daily performance records would exceed {PERFORMANCE_ARCHIVE_DAILY_BYTES} bytes; nothing was written."
+            )
         conn.execute(
             "INSERT INTO portfolio_performance_history(observed_hour,captured_at,snapshot,payload_bytes) "
             "VALUES(%s,%s,%s::jsonb,%s) ON CONFLICT(observed_hour) DO UPDATE SET "
@@ -305,7 +307,7 @@ def archive_strategy_performance(result: dict[str, Any], captured_at: datetime |
             (observed_hour, captured_at, json.dumps(result, separators=(",", ":"), default=str), len(payload)),
         )
         conn.commit()
-    return _rewrite_daily_archive(captured_at)
+    return _write_hourly_archive(observed_hour, payload)
 
 
 def refresh_strategy_performance() -> dict[str, Any]:
@@ -389,6 +391,7 @@ def strategy_performance_history(limit: int = 24) -> dict[str, Any]:
             {
                 "observed_hour": row["observed_hour"].isoformat(),
                 "captured_at": row["captured_at"].isoformat(),
+                "archive_file": _hourly_archive_path(row["observed_hour"]).name,
                 "payload_bytes": row["payload_bytes"],
                 "performance": row["snapshot"],
             }

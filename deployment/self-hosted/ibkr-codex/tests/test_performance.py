@@ -57,28 +57,22 @@ def test_missing_price_makes_totals_explicitly_incomplete() -> None:
     assert "excluded from totals" in result["positions"][0]["performance_status"]
 
 
-def test_daily_archive_is_one_compact_deterministic_file(tmp_path) -> None:
+def test_hourly_archive_is_one_compact_timestamped_file_per_hour(tmp_path) -> None:
     hour = datetime(2026, 9, 5, 1, tzinfo=UTC)
-    rows = [
-        {"observed_hour": hour, "captured_at": hour + timedelta(minutes=2),
-         "snapshot": {"strategy_value": "20001", "positions": [{"symbol": "SCHB", "market_value_usd": "1000"}]},
-         "payload_bytes": 100},
-        {"observed_hour": hour + timedelta(hours=1), "captured_at": hour + timedelta(hours=1, minutes=2),
-         "snapshot": {"strategy_value": "20002", "positions": [{"symbol": "SCHB", "market_value_usd": "1001"}]},
-         "payload_bytes": 100},
-    ]
-    with (
-        patch.object(performance, "settings", SimpleNamespace(artifact_root=tmp_path)),
-        patch.object(performance, "fetch_all", return_value=rows),
-    ):
-        result = performance._rewrite_daily_archive(hour)
-        second = performance._rewrite_daily_archive(hour)
+    record = {
+        "observed_hour": hour.isoformat(),
+        "captured_at": (hour + timedelta(minutes=2)).isoformat(),
+        "performance": {"strategy_value": "20001", "positions": [{"symbol": "SCHB", "market_value_usd": "1000"}]},
+    }
+    payload = performance._compact_payload(record)
+    with patch.object(performance, "settings", SimpleNamespace(artifact_root=tmp_path)):
+        result = performance._write_hourly_archive(hour, payload)
+        second = performance._write_hourly_archive(hour, payload)
 
-    files = list(tmp_path.rglob("*.jsonl.gz"))
+    files = list(tmp_path.rglob("*.json.gz"))
     assert len(files) == 1
+    assert files[0].name == "2026-09-05T01-00-00Z.json.gz"
     assert result["path"] == second["path"]
-    payload = gzip.decompress(files[0].read_bytes())
+    assert json.loads(gzip.decompress(files[0].read_bytes())) == record
     assert len(payload) <= PERFORMANCE_ARCHIVE_DAILY_BYTES
-    records = [json.loads(line) for line in payload.splitlines()]
-    assert [item["performance"]["strategy_value"] for item in records] == ["20001", "20002"]
-    assert PERFORMANCE_ARCHIVE_HOURLY_BYTES == 174761
+    assert PERFORMANCE_ARCHIVE_HOURLY_BYTES == 174762
