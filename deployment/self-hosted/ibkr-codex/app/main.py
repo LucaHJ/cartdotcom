@@ -17,7 +17,9 @@ from app.artifacts import read_artifact, retention_status
 from app.config import settings
 from app.database import add_event, fetch_all, fetch_one, migrate, set_setting, setting_bool
 from app.notifications import validation_token_valid
+from app.performance import latest_strategy_performance
 from app.policy import POLICY
+from app.schedule import daily_checkpoint_time, research_day_status
 from app.workflow import queue_run
 
 
@@ -86,6 +88,8 @@ def policy() -> dict[str, Any]:
 
 @app.get("/api/status", dependencies=[Depends(dashboard_auth)])
 def status() -> dict[str, Any]:
+    now = datetime.now(UTC)
+    day = research_day_status(now)
     latest = fetch_one("SELECT * FROM research_runs ORDER BY created_at DESC LIMIT 1")
     broker = fetch_one("SELECT * FROM broker_status WHERE singleton=true")
     queued = fetch_one("SELECT count(*) AS count FROM research_runs WHERE status='queued'")
@@ -105,11 +109,13 @@ def status() -> dict[str, Any]:
             "SELECT q.*,r.decision_summary FROM execution_queue q JOIN research_runs r ON r.id=q.run_id "
             "ORDER BY q.created_at DESC LIMIT 20"),
         "schedule": {
-            "strategy": "NYSE session midpoint",
+            "strategy": "Daily US-calendar checkpoint; Codex runs only on regular, non-holiday NYSE days",
             "regular_time": settings.trading_time_et,
             "timezone": "America/New_York",
-            "calendar": "NYSE",
+            "calendar": "US federal holidays and NYSE",
             "early_close_adjusted": True,
+            "current": day,
+            "today_checkpoint": daily_checkpoint_time(now),
         },
         "retention": retention_status(),
         "fx_reference": fetch_one("SELECT * FROM fx_rate_cache WHERE base_currency='AUD' AND quote_currency='USD'"),
@@ -132,13 +138,24 @@ def run_detail(run_id: uuid.UUID) -> Any:
     run = fetch_one("SELECT * FROM research_runs WHERE id=%s", (run_id,))
     if not run:
         raise HTTPException(status_code=404, detail="Run not found.")
+    public_run = dict(run)
+    context = dict(public_run.get("research_context") or {})
+    for key in ("net_liquidation", "total_cash", "available_funds", "buying_power", "excess_liquidity", "accrued_cash"):
+        context.pop(key, None)
+    if context:
+        public_run["research_context"] = context
+    snapshots = fetch_all("SELECT * FROM portfolio_snapshots WHERE run_id=%s ORDER BY captured_at", (run_id,))
+    for snapshot in snapshots:
+        for key in ("net_liquidation", "total_cash", "available_funds", "buying_power", "excess_liquidity", "accrued_cash"):
+            snapshot.pop(key, None)
     return jsonable_encoder({
-        "run": run,
+        "run": public_run,
         "events": fetch_all("SELECT * FROM run_events WHERE run_id=%s ORDER BY created_at", (run_id,)),
         "decisions": fetch_all("SELECT * FROM decisions WHERE run_id=%s ORDER BY created_at", (run_id,)),
         "orders": fetch_all("SELECT * FROM orders WHERE run_id=%s ORDER BY created_at", (run_id,)),
         "execution": fetch_one("SELECT * FROM execution_queue WHERE run_id=%s", (run_id,)),
-        "snapshots": fetch_all("SELECT * FROM portfolio_snapshots WHERE run_id=%s ORDER BY captured_at", (run_id,)),
+        "snapshots": snapshots,
+        "portfolio_performance": latest_strategy_performance(),
     })
 
 
@@ -158,9 +175,7 @@ def artifact(run_id: uuid.UUID, kind: str) -> Response:
 
 @app.get("/api/portfolio/latest", dependencies=[Depends(dashboard_auth)])
 def latest_portfolio() -> Any:
-    cached = fetch_one("SELECT snapshot,captured_at FROM portfolio_cache WHERE singleton=true")
-    return jsonable_encoder({**cached["snapshot"], "captured_at": cached["captured_at"]} if cached else
-                            fetch_one("SELECT * FROM portfolio_snapshots ORDER BY captured_at DESC LIMIT 1"))
+    return jsonable_encoder(latest_strategy_performance())
 
 
 @app.get("/api/orders", dependencies=[Depends(dashboard_auth)])

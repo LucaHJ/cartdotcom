@@ -18,9 +18,10 @@ from app.config import settings
 from app.fx import external_fx_rate
 from app.database import add_event, connection, fetch_all, fetch_one, setting_bool
 from app.notifications import send_run_report
+from app.performance import latest_strategy_performance
 from app.policy import POLICY, PolicyViolation, asset_type_for_security_type, proposed_order, validate_decision_shape
 from app.prompt import research_prompt
-from app.schedule import execution_window_sufficient
+from app.schedule import execution_window_sufficient, research_day_status
 
 
 def _decimal(value: Any) -> Decimal:
@@ -342,6 +343,12 @@ def research_context() -> dict[str, Any]:
             "portfolio_known": False, "source": "unavailable", "captured_at": None,
             "note": "No trustworthy saved portfolio exists. Discover candidates; do not assume that the account is empty.",
         }
+    # Full-account balances are retained only in the broker cache and audit
+    # snapshots. They must not influence research or leak into its artifacts:
+    # Codex manages the protected strategy sleeve, not the million-dollar paper
+    # account in which that sleeve happens to reside.
+    for key in ("net_liquidation", "total_cash", "available_funds", "buying_power", "excess_liquidity", "accrued_cash"):
+        snapshot.pop(key, None)
     snapshot["research_data_status"] = metadata
     capital = fetch_one("SELECT value FROM app_settings WHERE key='virtual_investable_capital'")
     currency = fetch_one("SELECT value FROM app_settings WHERE key='virtual_cash_reserve_currency'")
@@ -350,6 +357,8 @@ def research_context() -> dict[str, Any]:
         "currency": currency["value"] if currency else "account base currency",
         "note": "All target weights apply to this virtual portfolio, never to the full broker balance. Fresh FX and protected cash checks run at execution.",
     }
+    snapshot["calendar"] = research_day_status(datetime.now(UTC))
+    snapshot["strategy_performance"] = latest_strategy_performance()
     return snapshot
 
 

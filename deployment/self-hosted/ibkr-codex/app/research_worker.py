@@ -4,16 +4,37 @@ import time
 from datetime import UTC, datetime
 
 from app.database import connection, fetch_one, migrate
+from app.notifications import send_market_closed_report
+from app.performance import latest_strategy_performance
 from app.workflow import execute_run, queue_run
-from app.schedule import scheduled_time
+from app.schedule import daily_checkpoint_time, research_day_status, scheduled_time
 
 log = logging.getLogger("ibkr-research")
+_last_closed_report_attempt: dict[str, float] = {}
 
 
 def queue_scheduled_research(now: datetime) -> None:
+    day = research_day_status(now)
+    checkpoint = daily_checkpoint_time(now)
+    if now < checkpoint:
+        return
+    if day["skip_research"]:
+        local_date = str(day["local_date"])
+        existing = fetch_one(
+            "SELECT status FROM notifications WHERE dedupe_key=%s",
+            (f"market-closed-report:{local_date}",),
+        )
+        if existing and existing["status"] == "sent":
+            return
+        last_attempt = _last_closed_report_attempt.get(local_date, 0)
+        if time.monotonic() - last_attempt < 300:
+            return
+        _last_closed_report_attempt[local_date] = time.monotonic()
+        send_market_closed_report(day, latest_strategy_performance())
+        return
     due = scheduled_time(now)
     # Catch up after a restart on the same NY trading date, even if IBKR is down.
-    if due and now >= due:
+    if due:
         existing = fetch_one(
             "SELECT id FROM research_runs WHERE trigger='schedule' "
             "AND (scheduled_for AT TIME ZONE 'America/New_York')::date="

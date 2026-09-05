@@ -15,6 +15,7 @@ from app.capital import initial_protected_principal
 from app.config import settings
 from app.database import add_event, connection, fetch_one, migrate, set_setting
 from app.notifications import send_capability_reminder, send_gateway_reminder
+from app.performance import refresh_strategy_performance
 from app.execution import process_next_execution, retry_reports
 from app.schedule import scheduled_time
 
@@ -189,6 +190,7 @@ def broker_health() -> bool:
 def scheduler_loop() -> None:
     log.info("paper execution worker started; research has a separate worker")
     last_health = 0.0
+    last_performance = 0.0
     last_retention = 0.0
     last_reports = 0.0
     while True:
@@ -197,6 +199,12 @@ def scheduler_loop() -> None:
                 if not broker_health():
                     send_gateway_reminder()
                 last_health = time.monotonic()
+            if time.monotonic() - last_performance >= 900:
+                try:
+                    refresh_strategy_performance()
+                except Exception as exc:
+                    log.warning("Strategy performance refresh deferred: %s", exc)
+                last_performance = time.monotonic()
             process_next_execution()
             if time.monotonic() - last_reports >= 60:
                 retry_reports()

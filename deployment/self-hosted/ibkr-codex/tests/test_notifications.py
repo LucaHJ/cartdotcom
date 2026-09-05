@@ -1,4 +1,4 @@
-from app.notifications import format_run_report, order_fill_summary
+from app.notifications import format_market_closed_report, format_run_report, order_fill_summary
 
 
 def test_run_report_includes_research_and_paper_actions() -> None:
@@ -61,3 +61,38 @@ def test_fill_status_recognises_recovered_execution() -> None:
 
     assert result["outcome"] == "filled"
     assert result["headline"] == "ORDER FILL STATUS: FILLED — 2/2 decisions satisfied; 4/4 submitted shares filled"
+
+
+def test_market_closed_report_starts_with_status_and_strategy_performance() -> None:
+    report = format_market_closed_report(
+        {
+            "day_of_week": "Monday",
+            "local_date": "2026-09-07",
+            "timezone": "America/New_York",
+            "reason": "Public/market holiday: Labor Day",
+        },
+        {
+            "available": True,
+            "complete": True,
+            "currency": "AUD",
+            "initial_budget": "20000",
+            "strategy_value": "20100",
+            "total_return": "100",
+            "total_return_pct": "0.5",
+            "strategy_cash": "8000",
+            "invested_value": "12100",
+            "positions": [{
+                "symbol": "SCHB", "quantity": "100", "last_usd": "60", "market_value_usd": "6000",
+                "unrealized_pnl_usd": "200", "total_return_pct": "3.45", "latest_day_change_pct": "0.4",
+                "performance_status": "ok",
+            }],
+            "price_sources": ["Yahoo Finance chart API"],
+            "prices_observed_through": "2026-09-04T13:30:00+00:00",
+            "captured_at": "2026-09-07T16:45:00+00:00",
+        },
+    )
+
+    assert report.startswith("ORDER FILL STATUS: NO RESEARCH OR ORDERS SCHEDULED")
+    assert "Labor Day" in report
+    assert "Initial budget: AUD 20,000.00" in report
+    assert "SCHB" in report

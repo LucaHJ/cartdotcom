@@ -129,6 +129,77 @@ def send_failure(run_id: str, message: str) -> bool:
     )
 
 
+def _metric(value: object, places: int = 2) -> str:
+    if value is None:
+        return "unavailable"
+    parsed = _decimal(value)
+    return f"{parsed:,.{places}f}"
+
+
+def format_market_closed_report(day: dict[str, object], performance: dict[str, object]) -> str:
+    """Explain a skipped session and summarize only the virtual strategy slice."""
+    lines = [
+        "ORDER FILL STATUS: NO RESEARCH OR ORDERS SCHEDULED",
+        "",
+        "Scheduled Codex research did not run.",
+        f"Date: {day.get('day_of_week')}, {day.get('local_date')} ({day.get('timezone')})",
+        f"Reason: {day.get('reason')}",
+        "No Codex instance was launched and no buy/sell decisions were created.",
+        "",
+        "Strategy portfolio performance:",
+    ]
+    if not performance.get("available"):
+        lines.append("- Unavailable: no safely calculated $20,000 strategy-slice snapshot exists yet.")
+    else:
+        currency = str(performance.get("currency") or "")
+        complete = bool(performance.get("complete"))
+        lines.extend([
+            f"- Initial budget: {currency} {_metric(performance.get('initial_budget'))}",
+            f"- Current strategy value: {currency} {_metric(performance.get('strategy_value'))}",
+            f"- Total return: {currency} {_metric(performance.get('total_return'))} "
+            f"({_metric(performance.get('total_return_pct'))}%)",
+            f"- Strategy cash: {currency} {_metric(performance.get('strategy_cash'))}",
+            f"- Invested value: {currency} {_metric(performance.get('invested_value'))}",
+            f"- Calculation status: {'complete' if complete else 'incomplete; missing prices are not estimated'}",
+        ])
+    lines.extend(["", "Individual ETF/holding performance:"])
+    positions = performance.get("positions") if isinstance(performance.get("positions"), list) else []
+    if not positions:
+        lines.append("- No held ETFs/stocks were present in the saved strategy snapshot.")
+    for item in positions:
+        if item.get("performance_status") != "ok":
+            lines.append(f"- {item.get('symbol')}: {item.get('performance_status')}")
+            continue
+        lines.append(
+            f"- {item.get('symbol')}: {item.get('quantity')} shares; USD {_metric(item.get('last_usd'))} latest; "
+            f"USD {_metric(item.get('market_value_usd'))} value; USD {_metric(item.get('unrealized_pnl_usd'))} "
+            f"unrealized ({_metric(item.get('total_return_pct'))}%); latest day "
+            f"{_metric(item.get('latest_day_change_pct'))}%"
+        )
+    sources = performance.get("price_sources") or []
+    lines.extend([
+        "",
+        f"Prices observed through: {performance.get('prices_observed_through') or 'unavailable'}",
+        f"Price source: {', '.join(str(item) for item in sources) if sources else 'unavailable'}",
+        f"Performance snapshot: {performance.get('captured_at') or 'unavailable'}",
+        "Full IBKR account value and protected cash are intentionally excluded.",
+        "",
+        f"Dashboard: {settings.public_base_url}",
+    ])
+    return "\n".join(lines)
+
+
+def send_market_closed_report(day: dict[str, object], performance: dict[str, object]) -> bool:
+    local_date = str(day.get("local_date", "unknown"))
+    return send_email(
+        "market_closed_report",
+        f"market-closed-report:{local_date}",
+        f"IBKR Codex research skipped — {day.get('reason', 'market closed')}",
+        format_market_closed_report(day, performance),
+        settings.public_base_url,
+    )
+
+
 def _short(value: object, limit: int = 1_200) -> str:
     text = str(value or "").strip()
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"

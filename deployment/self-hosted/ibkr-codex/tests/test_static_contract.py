@@ -11,6 +11,9 @@ def test_dashboard_discloses_safety_boundary_and_limits() -> None:
     assert "International target" in value
     assert "Power / grid target" in value
     assert "Execution FX" in value
+    assert "$20,000 strategy-slice performance" in value
+    assert "Research calendar" in value
+    assert "Net liquidation" not in value
 
 
 def test_compose_fixes_gateway_to_paper_port() -> None:

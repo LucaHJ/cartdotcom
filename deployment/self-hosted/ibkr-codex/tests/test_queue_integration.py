@@ -86,7 +86,7 @@ class QueueIntegrationTests(unittest.TestCase):
     def setUp(self):
         db.migrate()
         with db.connection() as conn:
-            conn.execute("TRUNCATE execution_queue,portfolio_cache,research_runs,portfolio_snapshots,decisions,orders,"
+            conn.execute("TRUNCATE execution_queue,portfolio_cache,portfolio_performance,market_price_cache,research_runs,portfolio_snapshots,decisions,orders,"
                          "executions,run_events,notifications,audit_log,app_settings CASCADE")
             conn.execute("UPDATE broker_status SET api_us_stock_order_access=true")
             conn.commit()

@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
+from unittest.mock import patch
 
+from app import research_worker
 from app.worker import scheduled_time
-from app.schedule import decision_expiry, execution_window_sufficient, next_execution_window
+from app.schedule import daily_checkpoint_time, decision_expiry, execution_window_sufficient, next_execution_window, research_day_status
 
 
 def test_schedule_is_1245_new_york_on_regular_market_day() -> None:
@@ -11,6 +13,22 @@ def test_schedule_is_1245_new_york_on_regular_market_day() -> None:
 
 def test_schedule_skips_nyse_holiday() -> None:
     assert scheduled_time(datetime(2026, 9, 7, 17, 0, tzinfo=UTC)) is None
+
+
+def test_calendar_identifies_weekend_and_still_has_daily_checkpoint() -> None:
+    now = datetime(2026, 9, 5, 18, 0, tzinfo=UTC)
+    status = research_day_status(now)
+    assert status["day_of_week"] == "Saturday"
+    assert status["skip_research"] is True
+    assert "Weekend" in str(status["reason"])
+    assert daily_checkpoint_time(now) == datetime(2026, 9, 5, 16, 45, tzinfo=UTC)
+
+
+def test_calendar_skips_federal_holiday_even_when_nyse_is_open() -> None:
+    status = research_day_status(datetime(2026, 10, 12, 17, 0, tzinfo=UTC))
+    assert status["nyse_open"] is True
+    assert status["skip_research"] is True
+    assert "Columbus Day" in str(status["reason"])
 
 
 def test_schedule_uses_actual_midpoint_on_early_close() -> None:
@@ -34,3 +52,18 @@ def test_expiry_uses_actual_early_close_research_midpoint():
 
 def test_closed_market_queue_sleeps_until_next_open_across_holiday():
     assert next_execution_window(datetime(2026, 9, 4, 21, 0, tzinfo=UTC)) == datetime(2026, 9, 8, 13, 30, tzinfo=UTC)
+
+
+def test_weekend_checkpoint_emails_report_without_queuing_codex() -> None:
+    research_worker._last_closed_report_attempt.clear()
+    now = datetime(2026, 9, 5, 17, 0, tzinfo=UTC)
+    with (
+        patch.object(research_worker, "fetch_one", return_value=None),
+        patch.object(research_worker, "latest_strategy_performance", return_value={"available": False}),
+        patch.object(research_worker, "send_market_closed_report", return_value=True) as email,
+        patch.object(research_worker, "queue_run") as queue,
+    ):
+        research_worker.queue_scheduled_research(now)
+
+    email.assert_called_once()
+    queue.assert_not_called()
