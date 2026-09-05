@@ -28,6 +28,7 @@ PRICE_CACHE_MAX_AGE_DAYS = 7
 PERFORMANCE_REFRESH_SECONDS = 60 * 60
 PERFORMANCE_ARCHIVE_DAILY_BYTES = 4096 * 1024
 PERFORMANCE_ARCHIVE_HOURLY_BYTES = PERFORMANCE_ARCHIVE_DAILY_BYTES // 24
+PERFORMANCE_PROJECTED_ANNUAL_LIMIT_BYTES = 5 * 1024 * 1024 * 1024
 
 
 def _decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
@@ -398,3 +399,145 @@ def strategy_performance_history(limit: int = 24) -> dict[str, Any]:
             for row in rows
         ],
     }
+
+
+def _change_pct(current: object, previous: object) -> str | None:
+    if current is None or previous is None:
+        return None
+    current_value = _decimal(current)
+    previous_value = _decimal(previous)
+    if previous_value <= 0:
+        return None
+    return str((current_value - previous_value) / previous_value * 100)
+
+
+def _positions_by_symbol(snapshot: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not snapshot:
+        return {}
+    return {
+        str(item.get("symbol", "")).upper(): item
+        for item in snapshot.get("positions", [])
+        if isinstance(item, dict) and item.get("symbol")
+    }
+
+
+def _rounded(value: Decimal, quantum: str) -> str:
+    return format(value.quantize(Decimal(quantum)), "f")
+
+
+def build_performance_record(
+    row: dict[str, Any],
+    previous_hour: dict[str, Any] | None,
+    previous_24h: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build display metrics without changing the compact immutable archive."""
+    snapshot = dict(row["snapshot"])
+    previous_hour_snapshot = previous_hour["snapshot"] if previous_hour else None
+    previous_24h_snapshot = previous_24h["snapshot"] if previous_24h else None
+    hour_positions = _positions_by_symbol(previous_hour_snapshot)
+    day_positions = _positions_by_symbol(previous_24h_snapshot)
+    base_to_usd = _decimal(snapshot.get("base_to_usd"))
+    usd_to_aud = Decimal("1") / base_to_usd if base_to_usd > 0 else None
+    cost_basis_usd = sum(
+        (_decimal(item.get("cost_basis_usd")) for item in snapshot.get("positions", [])),
+        Decimal("0"),
+    )
+    invested_all_time = None
+    if cost_basis_usd > 0 and base_to_usd > 0:
+        invested_all_time = _change_pct(snapshot.get("invested_value"), cost_basis_usd / base_to_usd)
+
+    positions: list[dict[str, Any]] = []
+    for item in snapshot.get("positions", []):
+        symbol = str(item.get("symbol", "")).upper()
+        last_usd = _decimal(item.get("last_usd"))
+        prior_hour = hour_positions.get(symbol, {})
+        prior_day = day_positions.get(symbol, {})
+        positions.append({
+            "symbol": symbol,
+            "current_price_usd": str(last_usd) if last_usd > 0 else None,
+            "usd_to_aud": _rounded(usd_to_aud, "0.0000000001") if usd_to_aud is not None else None,
+            "current_price_aud": _rounded(last_usd * usd_to_aud, "0.000001") if last_usd > 0 and usd_to_aud is not None else None,
+            "return_1h_pct": _change_pct(last_usd, prior_hour.get("last_usd")) if prior_hour else None,
+            "return_24h_pct": _change_pct(last_usd, prior_day.get("last_usd")) if prior_day else None,
+            "return_all_time_pct": item.get("total_return_pct"),
+            "portfolio_share_pct": item.get("strategy_weight_pct"),
+            "performance_status": item.get("performance_status"),
+        })
+
+    return {
+        "observed_hour": row["observed_hour"].isoformat(),
+        "captured_at": row["captured_at"].isoformat(),
+        "archive_file": _hourly_archive_path(row["observed_hour"]).name,
+        "payload_bytes": int(row["payload_bytes"]),
+        "currency": snapshot.get("currency"),
+        "summary": {
+            "current_cash": snapshot.get("strategy_cash"),
+            "current_invested": snapshot.get("invested_value"),
+            "full_portfolio_value": snapshot.get("strategy_value"),
+            "portfolio_return_1h_pct": _change_pct(
+                snapshot.get("strategy_value"),
+                previous_hour_snapshot.get("strategy_value") if previous_hour_snapshot else None,
+            ),
+            "invested_return_1h_pct": _change_pct(
+                snapshot.get("invested_value"),
+                previous_hour_snapshot.get("invested_value") if previous_hour_snapshot else None,
+            ),
+            "portfolio_return_24h_pct": _change_pct(
+                snapshot.get("strategy_value"),
+                previous_24h_snapshot.get("strategy_value") if previous_24h_snapshot else None,
+            ),
+            "invested_return_24h_pct": _change_pct(
+                snapshot.get("invested_value"),
+                previous_24h_snapshot.get("invested_value") if previous_24h_snapshot else None,
+            ),
+            "portfolio_return_all_time_pct": snapshot.get("total_return_pct"),
+            "invested_return_all_time_pct": invested_all_time,
+        },
+        "positions": positions,
+    }
+
+
+def strategy_performance_index() -> dict[str, Any]:
+    rows = fetch_all(
+        "SELECT observed_hour,captured_at,payload_bytes FROM portfolio_performance_history "
+        "ORDER BY observed_hour DESC"
+    )
+    total_bytes = sum(int(row["payload_bytes"]) for row in rows)
+    projected = round(total_bytes / len(rows) * 24 * 365) if rows else 0
+    return {
+        "frequency": "hourly",
+        "records": len(rows),
+        "stored_uncompressed_bytes": total_bytes,
+        "projected_annual_bytes": projected,
+        "projected_annual_limit_bytes": PERFORMANCE_PROJECTED_ANNUAL_LIMIT_BYTES,
+        "daily_budget_bytes": PERFORMANCE_ARCHIVE_DAILY_BYTES,
+        "items": [
+            {
+                "observed_hour": row["observed_hour"].isoformat(),
+                "captured_at": row["captured_at"].isoformat(),
+                "archive_file": _hourly_archive_path(row["observed_hour"]).name,
+                "payload_bytes": int(row["payload_bytes"]),
+            }
+            for row in rows
+        ],
+    }
+
+
+def strategy_performance_record(observed_hour: datetime) -> dict[str, Any] | None:
+    observed_hour = observed_hour.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    row = fetch_one(
+        "SELECT observed_hour,captured_at,snapshot,payload_bytes FROM portfolio_performance_history "
+        "WHERE observed_hour=%s",
+        (observed_hour,),
+    )
+    if not row:
+        return None
+    previous_hour = fetch_one(
+        "SELECT snapshot FROM portfolio_performance_history WHERE observed_hour=%s",
+        (observed_hour - timedelta(hours=1),),
+    )
+    previous_24h = fetch_one(
+        "SELECT snapshot FROM portfolio_performance_history WHERE observed_hour=%s",
+        (observed_hour - timedelta(hours=24),),
+    )
+    return build_performance_record(row, previous_hour, previous_24h)

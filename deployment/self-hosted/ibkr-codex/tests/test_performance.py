@@ -76,3 +76,39 @@ def test_hourly_archive_is_one_compact_timestamped_file_per_hour(tmp_path) -> No
     assert json.loads(gzip.decompress(files[0].read_bytes())) == record
     assert len(payload) <= PERFORMANCE_ARCHIVE_DAILY_BYTES
     assert PERFORMANCE_ARCHIVE_HOURLY_BYTES == 174762
+
+
+def test_performance_record_calculates_portfolio_invested_and_etf_returns() -> None:
+    hour = datetime(2026, 9, 5, 2, tzinfo=UTC)
+    current = {
+        "observed_hour": hour,
+        "captured_at": hour + timedelta(minutes=2),
+        "payload_bytes": 5000,
+        "snapshot": {
+            "currency": "AUD", "strategy_cash": "8000", "invested_value": "12600",
+            "strategy_value": "20600", "total_return_pct": "3", "base_to_usd": "0.7",
+            "positions": [{
+                "symbol": "SCHB", "last_usd": "126", "cost_basis_usd": "7000",
+                "total_return_pct": "26", "strategy_weight_pct": "61.165",
+                "performance_status": "ok",
+            }],
+        },
+    }
+    previous_hour = {"snapshot": {
+        "strategy_value": "20000", "invested_value": "12000",
+        "positions": [{"symbol": "SCHB", "last_usd": "120"}],
+    }}
+    previous_24h = {"snapshot": {
+        "strategy_value": "19000", "invested_value": "11000",
+        "positions": [{"symbol": "SCHB", "last_usd": "110"}],
+    }}
+
+    result = performance.build_performance_record(current, previous_hour, previous_24h)
+
+    assert Decimal(result["summary"]["portfolio_return_1h_pct"]) == Decimal("3")
+    assert Decimal(result["summary"]["invested_return_1h_pct"]) == Decimal("5")
+    assert result["summary"]["portfolio_return_all_time_pct"] == "3"
+    assert Decimal(result["summary"]["invested_return_all_time_pct"]) == Decimal("26")
+    assert Decimal(result["positions"][0]["current_price_aud"]) == Decimal("180")
+    assert Decimal(result["positions"][0]["return_1h_pct"]) == Decimal("5")
+    assert result["positions"][0]["return_all_time_pct"] == "26"

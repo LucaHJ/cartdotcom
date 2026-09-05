@@ -14,6 +14,11 @@ def test_dashboard_discloses_safety_boundary_and_limits() -> None:
     assert "$20,000 strategy-slice performance · updated hourly" in value
     assert "Hourly performance archive" in value
     assert "Research calendar" in value
+    assert "Current New York time" in value
+    assert "Market open" in value
+    assert "archive-year" in value
+    assert "Current cash AUD" in value
+    assert "USD → AUD rate" in value
     assert "Net liquidation" not in value
 
 
@@ -28,3 +33,6 @@ def test_fastapi_routes_can_be_constructed() -> None:
     from app.main import app
 
     assert any(route.path == "/api/control/kill-switch" for route in app.routes)
+    assert any(route.path == "/api/calendar" for route in app.routes)
+    assert any(route.path == "/api/portfolio/history/index" for route in app.routes)
+    assert any(route.path == "/api/portfolio/history/record" for route in app.routes)

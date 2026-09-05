@@ -36,6 +36,19 @@ def test_schedule_uses_actual_midpoint_on_early_close() -> None:
     assert due == datetime(2026, 11, 27, 16, 15, tzinfo=UTC)
 
 
+def test_calendar_reports_current_new_york_time_and_market_phase() -> None:
+    pre_open = research_day_status(datetime(2026, 9, 4, 12, 0, tzinfo=UTC))
+    market_open = research_day_status(datetime(2026, 9, 4, 15, 0, tzinfo=UTC))
+    post_close = research_day_status(datetime(2026, 9, 5, 2, 22, tzinfo=UTC))
+
+    assert pre_open["market_status"] == "Pre open"
+    assert market_open["market_status"] == "Market open"
+    assert post_close["market_status"] == "Post close"
+    assert str(post_close["current_time_ny"]).startswith("2026-09-04T22:22:00")
+    assert str(post_close["market_open_ny"]).startswith("2026-09-04T09:30:00")
+    assert str(post_close["market_close_ny"]).startswith("2026-09-04T16:00:00")
+
+
 def test_orders_are_not_allowed_before_open_or_near_close():
     assert not execution_window_sufficient(1, datetime(2026, 9, 3, 13, 0, tzinfo=UTC))
     assert execution_window_sufficient(1, datetime(2026, 9, 3, 13, 30, tzinfo=UTC))

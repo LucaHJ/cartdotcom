@@ -17,7 +17,12 @@ from app.artifacts import read_artifact, retention_status
 from app.config import settings
 from app.database import add_event, fetch_all, fetch_one, migrate, set_setting, setting_bool
 from app.notifications import validation_token_valid
-from app.performance import latest_strategy_performance, strategy_performance_history
+from app.performance import (
+    latest_strategy_performance,
+    strategy_performance_history,
+    strategy_performance_index,
+    strategy_performance_record,
+)
 from app.policy import POLICY
 from app.schedule import daily_checkpoint_time, research_day_status
 from app.workflow import queue_run
@@ -35,6 +40,18 @@ STATIC_ROOT = Path(__file__).resolve().parent.parent / "static"
 
 class SwitchRequest(BaseModel):
     engaged: bool
+
+
+def _schedule_payload(now: datetime) -> dict[str, Any]:
+    return {
+        "strategy": "Daily US-calendar checkpoint; Codex runs only on regular, non-holiday NYSE days",
+        "regular_time": settings.trading_time_et,
+        "timezone": "America/New_York",
+        "calendar": "US federal holidays and NYSE",
+        "early_close_adjusted": True,
+        "current": research_day_status(now),
+        "today_checkpoint": daily_checkpoint_time(now),
+    }
 
 
 def _bearer(authorization: str | None) -> str:
@@ -89,7 +106,6 @@ def policy() -> dict[str, Any]:
 @app.get("/api/status", dependencies=[Depends(dashboard_auth)])
 def status() -> dict[str, Any]:
     now = datetime.now(UTC)
-    day = research_day_status(now)
     latest = fetch_one("SELECT * FROM research_runs ORDER BY created_at DESC LIMIT 1")
     broker = fetch_one("SELECT * FROM broker_status WHERE singleton=true")
     queued = fetch_one("SELECT count(*) AS count FROM research_runs WHERE status='queued'")
@@ -108,15 +124,7 @@ def status() -> dict[str, Any]:
         "execution_queue": fetch_all(
             "SELECT q.*,r.decision_summary FROM execution_queue q JOIN research_runs r ON r.id=q.run_id "
             "ORDER BY q.created_at DESC LIMIT 20"),
-        "schedule": {
-            "strategy": "Daily US-calendar checkpoint; Codex runs only on regular, non-holiday NYSE days",
-            "regular_time": settings.trading_time_et,
-            "timezone": "America/New_York",
-            "calendar": "US federal holidays and NYSE",
-            "early_close_adjusted": True,
-            "current": day,
-            "today_checkpoint": daily_checkpoint_time(now),
-        },
+        "schedule": _schedule_payload(now),
         "retention": retention_status(),
         "fx_reference": fetch_one("SELECT * FROM fx_rate_cache WHERE base_currency='AUD' AND quote_currency='USD'"),
         "capital_protection": {
@@ -126,6 +134,11 @@ def status() -> dict[str, Any]:
             "virtual_capital": fetch_one("SELECT value FROM app_settings WHERE key='virtual_investable_capital'"),
         },
     })
+
+
+@app.get("/api/calendar", dependencies=[Depends(dashboard_auth)])
+def calendar() -> Any:
+    return jsonable_encoder(_schedule_payload(datetime.now(UTC)))
 
 
 @app.get("/api/runs", dependencies=[Depends(dashboard_auth)])
@@ -181,6 +194,21 @@ def latest_portfolio() -> Any:
 @app.get("/api/portfolio/history", dependencies=[Depends(dashboard_auth)])
 def portfolio_history(hours: int = Query(default=24, ge=1, le=8760)) -> Any:
     return jsonable_encoder(strategy_performance_history(hours))
+
+
+@app.get("/api/portfolio/history/index", dependencies=[Depends(dashboard_auth)])
+def portfolio_history_index() -> Any:
+    return jsonable_encoder(strategy_performance_index())
+
+
+@app.get("/api/portfolio/history/record", dependencies=[Depends(dashboard_auth)])
+def portfolio_history_record(observed_hour: datetime = Query()) -> Any:
+    if observed_hour.tzinfo is None:
+        raise HTTPException(status_code=422, detail="An offset-aware UTC archive hour is required.")
+    result = strategy_performance_record(observed_hour)
+    if not result:
+        raise HTTPException(status_code=404, detail="Hourly performance record not found.")
+    return jsonable_encoder(result)
 
 
 @app.get("/api/orders", dependencies=[Depends(dashboard_auth)])

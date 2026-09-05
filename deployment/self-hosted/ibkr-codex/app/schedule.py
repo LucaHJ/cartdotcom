@@ -30,6 +30,16 @@ def research_day_status(now: datetime) -> dict[str, object]:
     holidays = _holiday_names(local_date)
     weekend = local.weekday() >= 5
     nyse_open = not schedule.empty
+    opening = schedule.iloc[0]["market_open"].to_pydatetime() if nyse_open else None
+    closing = schedule.iloc[0]["market_close"].to_pydatetime() if nyse_open else None
+    if not nyse_open:
+        market_status = "Market closed"
+    elif now < opening:
+        market_status = "Pre open"
+    elif now < closing:
+        market_status = "Market open"
+    else:
+        market_status = "Post close"
     skip = weekend or bool(holidays) or not nyse_open
     reasons: list[str] = []
     if weekend:
@@ -44,6 +54,10 @@ def research_day_status(now: datetime) -> dict[str, object]:
         "timezone": "America/New_York",
         "public_holidays": holidays,
         "nyse_open": nyse_open,
+        "market_status": market_status,
+        "current_time_ny": local.isoformat(),
+        "market_open_ny": opening.astimezone(ET).isoformat() if opening else None,
+        "market_close_ny": closing.astimezone(ET).isoformat() if closing else None,
         "skip_research": skip,
         "reason": "; ".join(reasons) if reasons else "Regular NYSE trading day",
     }
