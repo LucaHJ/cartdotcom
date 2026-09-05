@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import json
+import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -190,24 +191,10 @@ def broker_health() -> bool:
 def scheduler_loop() -> None:
     log.info("paper execution worker started; research has a separate worker")
     last_health = 0.0
-    performance_row = fetch_one("SELECT max(observed_hour) AS observed_hour FROM portfolio_performance_history")
-    last_performance_hour = performance_row["observed_hour"] if performance_row else None
-    last_performance_attempt = 0.0
     last_retention = 0.0
     last_reports = 0.0
     while True:
         try:
-            current_performance_hour = performance_archive_hour(datetime.now(UTC))
-            if (
-                current_performance_hour != last_performance_hour
-                and time.monotonic() - last_performance_attempt >= 60
-            ):
-                try:
-                    refresh_strategy_performance()
-                    last_performance_hour = current_performance_hour
-                except Exception as exc:
-                    log.warning("Strategy performance refresh deferred: %s", exc)
-                last_performance_attempt = time.monotonic()
             if time.monotonic() - last_health >= 300:
                 if not broker_health():
                     send_gateway_reminder()
@@ -229,6 +216,26 @@ def performance_archive_hour(now: datetime) -> datetime:
     return now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
 
 
+def performance_archive_loop() -> None:
+    """Capture independently at UTC wall-clock boundaries."""
+    row = fetch_one("SELECT max(observed_hour) AS observed_hour FROM portfolio_performance_history")
+    last_hour = row["observed_hour"] if row else None
+    log.info("wall-clock performance archive scheduler started; latest hour=%s", last_hour)
+    while True:
+        now = datetime.now(UTC)
+        current_hour = performance_archive_hour(now)
+        if current_hour != last_hour:
+            try:
+                refresh_strategy_performance()
+                last_hour = current_hour
+            except Exception as exc:
+                log.warning("Strategy performance refresh deferred: %s", exc)
+                time.sleep(60)
+                continue
+        next_hour = current_hour + timedelta(hours=1)
+        time.sleep(max(0.25, min(60.0, (next_hour - datetime.now(UTC)).total_seconds())))
+
+
 def main() -> None:
     migrate()
     with connection() as conn:
@@ -241,6 +248,11 @@ def main() -> None:
             "reason='Execution worker restarted; checking broker state before resuming.' WHERE status='executing'")
         conn.commit()
         try:
+            threading.Thread(
+                target=performance_archive_loop,
+                name="performance-wall-clock",
+                daemon=True,
+            ).start()
             scheduler_loop()
         finally:
             conn.execute("SELECT pg_advisory_unlock(491720260901)")
