@@ -1,4 +1,4 @@
-from app.notifications import format_run_report
+from app.notifications import format_run_report, order_fill_summary
 
 
 def test_run_report_includes_research_and_paper_actions() -> None:
@@ -21,6 +21,31 @@ def test_run_report_includes_research_and_paper_actions() -> None:
     )
 
     assert "Maintain quality exposure" in report
+    assert report.startswith("ORDER FILL STATUS: PENDING")
     assert "SPY BUY" in report
     assert "filled 1 / remaining 0" in report
     assert "Dashboard:" in report
+
+
+def test_fill_status_is_first_and_distinguishes_terminal_outcomes() -> None:
+    decisions = [{"action": "BUY", "validation_status": "unfilled"}]
+    orders = [{"requested_quantity": "4", "filled_quantity": "1"}]
+
+    result = order_fill_summary("completed", decisions, orders)
+
+    assert result["outcome"] == "unfilled"
+    assert str(result["headline"]).startswith("ORDER FILL STATUS: PARTIALLY FILLED")
+
+
+def test_fill_status_recognises_recovered_execution() -> None:
+    decisions = [
+        {"action": "BUY", "validation_status": "executed"},
+        {"action": "BUY", "validation_status": "accepted_no_order"},
+        {"action": "HOLD", "validation_status": "accepted_no_order"},
+    ]
+    orders = [{"requested_quantity": "4", "filled_quantity": "4"}]
+
+    result = order_fill_summary("completed", decisions, orders)
+
+    assert result["outcome"] == "filled"
+    assert result["headline"] == "ORDER FILL STATUS: FILLED — 2/2 decisions satisfied; 4/4 submitted shares filled"

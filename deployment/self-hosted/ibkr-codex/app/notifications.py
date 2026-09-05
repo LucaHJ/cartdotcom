@@ -5,6 +5,7 @@ import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 
 import httpx
@@ -133,6 +134,72 @@ def _short(value: object, limit: int = 1_200) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _decimal(value: object) -> Decimal:
+    try:
+        parsed = Decimal(str(value or "0"))
+        return parsed if parsed.is_finite() else Decimal("0")
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def order_fill_summary(
+    execution_status: str,
+    decisions: list[dict[str, object]],
+    orders: list[dict[str, object]],
+) -> dict[str, object]:
+    """Return an email-safe fill outcome from persisted, reconciled state."""
+    actionable = [item for item in decisions if str(item.get("action", "HOLD")).upper() != "HOLD"]
+    satisfied = [
+        item for item in actionable
+        if str(item.get("validation_status", "")) in {"executed", "accepted_no_order"}
+    ]
+    submitted = sum((_decimal(item.get("requested_quantity")) for item in orders), Decimal("0"))
+    filled = sum((_decimal(item.get("filled_quantity")) for item in orders), Decimal("0"))
+    terminal = execution_status in {"completed", "expired", "superseded", "cancelled"}
+
+    if not actionable:
+        outcome = "no_orders"
+        headline = "ORDER FILL STATUS: NO ORDERS REQUESTED"
+    elif len(satisfied) == len(actionable):
+        outcome = "filled"
+        if orders:
+            headline = (
+                f"ORDER FILL STATUS: FILLED — {len(satisfied)}/{len(actionable)} decisions satisfied; "
+                f"{filled}/{submitted} submitted shares filled"
+            )
+        else:
+            headline = (
+                f"ORDER FILL STATUS: SATISFIED WITHOUT AN ORDER — "
+                f"{len(satisfied)}/{len(actionable)} decisions already met their targets"
+            )
+    elif terminal and filled > 0:
+        outcome = "unfilled"
+        headline = (
+            f"ORDER FILL STATUS: PARTIALLY FILLED — {len(satisfied)}/{len(actionable)} decisions satisfied; "
+            f"{filled}/{submitted} submitted shares filled"
+        )
+    elif terminal:
+        outcome = "unfilled"
+        headline = (
+            f"ORDER FILL STATUS: NOT FILLED — {len(satisfied)}/{len(actionable)} decisions satisfied; "
+            f"{filled}/{submitted} submitted shares filled"
+        )
+    else:
+        outcome = "pending"
+        headline = (
+            f"ORDER FILL STATUS: PENDING — {len(satisfied)}/{len(actionable)} decisions satisfied; "
+            f"{filled}/{submitted} submitted shares filled"
+        )
+    return {
+        "outcome": outcome,
+        "headline": headline,
+        "actionable": len(actionable),
+        "satisfied": len(satisfied),
+        "submitted": submitted,
+        "filled": filled,
+    }
+
+
 def format_run_report(
     run: dict[str, object],
     decisions: list[dict[str, object]],
@@ -142,7 +209,11 @@ def format_run_report(
     """Produce a compact, complete email while the dashboard retains raw artifacts."""
     completed = str(run.get("status")) == "completed"
     outcome = "completed" if completed else f"ended {run.get('status', 'unknown')}"
+    fill = order_fill_summary(str(run.get("execution_status", "not started")), decisions, orders)
     lines = [
+        str(fill["headline"]),
+        f"Queue status: {run.get('execution_status', 'not started')} — {run.get('execution_reason', '')}",
+        "",
         f"IBKR Codex paper-trading research {outcome}.",
         "All activity is confined to the allowlisted IBKR paper account.",
         "",
@@ -202,11 +273,36 @@ def send_run_report(run_id: str, phase: str = "research") -> bool:
     orders = fetch_all("SELECT * FROM orders WHERE run_id=%s ORDER BY created_at", (run_id,))
     executions = fetch_all("SELECT * FROM executions WHERE order_id IN (SELECT id FROM orders WHERE run_id=%s) ORDER BY executed_at", (run_id,))
     completed = run["status"] == "completed"
+    dedupe_key = f"run-report:{run_id}"
+    subject = "IBKR Codex paper research completed" if completed else "IBKR Codex paper-trading run failed"
+    if phase == "execution":
+        fill = order_fill_summary(str(run["execution_status"]), decisions, orders)
+        if fill["outcome"] == "unfilled":
+            dedupe_key = f"execution-unfilled:{run_id}"
+            subject = "IBKR paper orders were not filled"
+        else:
+            prior_failure = fetch_one(
+                "SELECT status FROM notifications WHERE dedupe_key=%s AND status='sent'",
+                (f"execution-unfilled:{run_id}",),
+            )
+            legacy_report = fetch_one(
+                "SELECT status FROM notifications WHERE dedupe_key=%s AND status='sent'",
+                (f"execution-report:{run_id}",),
+            )
+            # Do not resend successful historical reports solely because the
+            # outcome-specific keys were introduced. A recovered failed queue
+            # is different: it must always generate the requested follow-up.
+            if legacy_report and not prior_failure:
+                return True
+            dedupe_key = f"execution-filled:{run_id}"
+            subject = (
+                "IBKR paper orders filled — follow-up"
+                if prior_failure else "IBKR Codex paper execution completed"
+            )
     return send_email(
         "run_report",
-        f"execution-report:{run_id}" if phase == "execution" else f"run-report:{run_id}",
-        "IBKR Codex paper execution update" if phase == "execution" else
-        "IBKR Codex paper research completed" if completed else "IBKR Codex paper-trading run failed",
+        dedupe_key,
+        subject,
         format_run_report(run, decisions, orders, executions),
         settings.public_base_url,
     )

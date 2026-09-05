@@ -1,10 +1,12 @@
 from decimal import Decimal
+from types import SimpleNamespace
 
 from app.broker import PaperBroker
 from ibapi.client import EClient
 from ibapi.contract import Contract
 from ibapi.message import OUT
 from ibapi.order_cancel import OrderCancel
+from ibapi.order import Order
 import pytest
 
 
@@ -112,6 +114,49 @@ def test_account_summary_timeout_always_cancels(monkeypatch):
         broker.portfolio_snapshot()
     assert cancelled == [1001]
     assert broker._account_summary_request_id is None
+
+
+def test_open_order_callback_accepts_omitted_optional_order_state_fields() -> None:
+    broker = PaperBroker("DU123456")
+    contract = Contract()
+    contract.symbol = "SPY"
+    order = Order()
+    order.account = broker.account_id
+    order.whatIf = True
+
+    broker.openOrder(42, contract, order, SimpleNamespace(status="PreSubmitted"))
+
+    assert broker._what_if_states[42] == {
+        "status": "PreSubmitted",
+        "initial_margin_change": "",
+        "maintenance_margin_change": "",
+        "commission": "",
+        "commission_currency": "",
+        "warning": "",
+    }
+
+
+def test_open_order_callback_reads_current_protobuf_commission_names() -> None:
+    broker = PaperBroker("DU123456")
+    contract = Contract()
+    contract.symbol = "SPY"
+    order = Order()
+    order.account = broker.account_id
+    order.whatIf = True
+
+    broker.openOrder(
+        43,
+        contract,
+        order,
+        SimpleNamespace(
+            status="PreSubmitted",
+            commissionAndFees=1.25,
+            commissionAndFeesCurrency="USD",
+        ),
+    )
+
+    assert broker._what_if_states[43]["commission"] == "1.25"
+    assert broker._what_if_states[43]["commission_currency"] == "USD"
 
 
 def test_repeated_snapshots_ignore_late_callbacks_and_cancel_each_request(monkeypatch):

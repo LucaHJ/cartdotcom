@@ -15,7 +15,7 @@
   <section class="grid">
     <div class="panel"><h2>Execution gate</h2><div id="gate" class="status">Loading…</div><p id="gate-detail" class="muted"></p><div class="actions"><button id="kill" class="danger">Engage kill switch</button><button id="enable">Enable paper trading</button><button id="run" class="secondary">Run research now</button></div></div>
     <div class="panel"><h2>IB Gateway</h2><div id="broker" class="status">Loading…</div><p id="broker-detail" class="muted"></p></div>
-    <div class="panel"><h2>Queued paper trades</h2><div id="queue-state" class="status">Loading…</div><p id="queue-detail" class="muted"></p><p class="muted">Research continues independently. Trades wait for fresh broker checks and regular market hours. Signals expire at their designated session close.</p></div>
+    <div class="panel"><h2>Queued paper trades</h2><div id="queue-state" class="status">Loading…</div><p id="queue-detail" class="muted"></p><p class="muted">Research continues independently. Trades wait for fresh broker checks and regular market hours. Signals remain queued across closed sessions and expire five minutes before the next scheduled research session.</p></div>
     <div class="panel"><h2>Current Codex instance</h2><div id="active" class="status">Idle</div><p id="active-detail" class="muted"></p></div>
     <div class="panel full"><h2>Hard risk limits</h2><div id="limits" class="limits"></div><p id="prohibited" class="muted"></p></div>
     <div class="panel wide"><h2>Latest run</h2><div id="run-summary" class="muted">No run recorded.</div><div class="scroll"><table><thead><tr><th>Time</th><th>Event</th><th>Message</th></tr></thead><tbody id="events"></tbody></table></div></div>

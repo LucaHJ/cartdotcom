@@ -20,7 +20,7 @@ Objective:
 - Discover candidates through public sources independently of broker permissions. BUY/SELL targets are durable recommendations; the executor queues them until a connection, fresh portfolio/FX/quotes and regular trading hours are available.
 - If the portfolio is unknown, explicitly say so and prioritize candidate discovery. If saved holdings have changed, the executor will request fresh research.
 - The account has a virtual AUD 20,000 initial strategy budget; allocation weights refer to that strategy and its gains/losses, not the full million-dollar paper account. Cash outside it is protected.
-- Queued recommendations expire at the current trading session close, or the next session close when produced after hours. New research may replace earlier unsubmitted recommendations.
+- Queued recommendations remain eligible across closed sessions, weekends and holidays, and expire five minutes before the next scheduled research session. New research may replace earlier unsubmitted recommendations.
 
 Standing allocation mandates (apply to every research session and all future decisions):
 - Target 25% INTERNATIONAL_EQUITY: meaningful non-US underlying equity exposure through liquid, US-listed, USD-traded ordinary ETFs. Prefer broad developed/emerging-market diversification; verify that the fund actually holds predominantly non-US securities. A US listing alone does not make the underlying exposure domestic.

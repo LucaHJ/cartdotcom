@@ -29,11 +29,19 @@ def execution_window_sufficient(count: int, now: datetime | None = None) -> bool
 
 
 def decision_expiry(now: datetime) -> datetime:
-    """Use this session's close, or the next trading close for after-hours research."""
+    """Expire five minutes before the next scheduled research session.
+
+    This keeps an independently queued signal available across closed sessions,
+    weekends and holidays, while ensuring stale research cannot overlap the next
+    scheduled portfolio review.
+    """
     local = now.astimezone(ET)
     schedule = mcal.get_calendar("NYSE").schedule(
-        start_date=local.date(), end_date=local.date() + timedelta(days=14))
-    for closing in schedule["market_close"]:
-        if closing.to_pydatetime() > now:
-            return closing.to_pydatetime()
-    raise RuntimeError("No upcoming NYSE session was found for signal expiry.")
+        start_date=local.date(), end_date=local.date() + timedelta(days=30))
+    for row in schedule.itertuples():
+        opening = row.market_open.to_pydatetime()
+        closing = row.market_close.to_pydatetime()
+        cutoff = opening + (closing - opening) / 2 - timedelta(minutes=5)
+        if cutoff > now:
+            return cutoff
+    raise RuntimeError("No upcoming scheduled research session was found for signal expiry.")

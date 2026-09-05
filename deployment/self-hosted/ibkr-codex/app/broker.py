@@ -255,29 +255,38 @@ class PaperBroker(EWrapper, EClient):
         self._notify()
 
     def openOrder(self, orderId: int, contract: Contract, order: Order, orderState: Any) -> None:  # noqa: N802
-        if order.account != self.account_id:
+        if getattr(order, "account", "") != self.account_id:
             return
         if bool(getattr(order, "whatIf", False)):
+            commission = getattr(orderState, "commissionAndFees", None)
+            if commission is None:
+                commission = getattr(orderState, "commission", "")
+            commission_currency = getattr(orderState, "commissionAndFeesCurrency", None)
+            if commission_currency is None:
+                commission_currency = getattr(orderState, "commissionCurrency", "")
             self._what_if_states[orderId] = {
-                "status": str(orderState.status or ""),
-                "initial_margin_change": str(orderState.initMarginChange or ""),
-                "maintenance_margin_change": str(orderState.maintMarginChange or ""),
-                "commission": str(orderState.commission),
-                "commission_currency": str(orderState.commissionCurrency or ""),
-                "warning": str(orderState.warningText or ""),
+                "status": str(getattr(orderState, "status", "") or ""),
+                "initial_margin_change": str(getattr(orderState, "initMarginChange", "") or ""),
+                "maintenance_margin_change": str(getattr(orderState, "maintMarginChange", "") or ""),
+                # Current protobuf releases renamed these fields while the
+                # legacy protocol retains the old names. Support both shapes;
+                # an unset optional estimate must not kill the callback thread.
+                "commission": str(commission if commission is not None else ""),
+                "commission_currency": str(commission_currency or ""),
+                "warning": str(getattr(orderState, "warningText", "") or ""),
             }
             self._notify()
             return
         self._open_orders.append({
             "order_id": orderId,
-            "perm_id": order.permId,
-            "symbol": contract.symbol,
-            "side": order.action,
-            "type": order.orderType,
-            "quantity": str(order.totalQuantity),
-            "limit_price": order.lmtPrice,
-            "status": orderState.status,
-            "order_ref": order.orderRef,
+            "perm_id": getattr(order, "permId", 0) or 0,
+            "symbol": getattr(contract, "symbol", ""),
+            "side": getattr(order, "action", ""),
+            "type": getattr(order, "orderType", ""),
+            "quantity": str(getattr(order, "totalQuantity", "") or ""),
+            "limit_price": getattr(order, "lmtPrice", 0) or 0,
+            "status": str(getattr(orderState, "status", "") or ""),
+            "order_ref": getattr(order, "orderRef", ""),
         })
 
     def openOrderEnd(self) -> None:  # noqa: N802

@@ -121,7 +121,7 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
         uncertain = fetch_one("SELECT id FROM orders WHERE run_id=%s AND NOT terminal LIMIT 1", (run_id,))
         if not uncertain:
             if entry["expires_at"] <= datetime.now(UTC):
-                set_queue_status(run_id, "expired", "The signal reached its trading-session expiry. Fresh research is required.", True)
+                set_queue_status(run_id, "expired", "The signal reached its five-minute pre-research cutoff. Fresh research is required.", True)
                 return
             if setting_bool("kill_switch", True) or not setting_bool("trading_enabled", False):
                 set_queue_status(run_id, "pending", "Waiting: the dashboard execution gate is closed.")
@@ -141,7 +141,7 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
             set_queue_status(run_id, "needs_reconciliation", "An earlier submission has no confirmed terminal broker state. It will not be duplicated.")
             return
         if entry["expires_at"] <= datetime.now(UTC):
-            set_queue_status(run_id, "expired", "Signal expired; earlier broker orders have now been reconciled.", True)
+            set_queue_status(run_id, "expired", "Signal reached its five-minute pre-research cutoff; earlier broker orders have now been reconciled.", True)
             return
         if setting_bool("kill_switch", True) or not setting_bool("trading_enabled", False):
             set_queue_status(run_id, "pending", "Waiting: the dashboard execution gate is closed.")
@@ -242,7 +242,6 @@ def retry_reports() -> None:
             log.exception("Research report retry failed")
     for row in fetch_all("SELECT q.run_id FROM execution_queue q WHERE q.status IN ('completed','expired','superseded','cancelled') "
                          "AND EXISTS(SELECT 1 FROM decisions d WHERE d.run_id=q.run_id AND d.action<>'HOLD') "
-                         "AND NOT EXISTS(SELECT 1 FROM notifications n WHERE n.dedupe_key='execution-report:'||q.run_id::text AND n.status='sent') "
                          "ORDER BY q.created_at DESC LIMIT 10"):
         try:
             send_run_report(str(row["run_id"]), phase="execution")

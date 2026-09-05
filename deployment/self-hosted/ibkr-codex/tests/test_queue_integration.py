@@ -7,12 +7,13 @@ import copy
 import json
 import os
 import unittest
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app import database as db, execution, workflow
+from app import database as db, execution, notifications, workflow
 from app.broker import Quote
 from app.fx import ExternalFxRate
 
@@ -290,6 +291,39 @@ class QueueIntegrationTests(unittest.TestCase):
         execution.process_next_execution()
         self.assertEqual(self.queue_status(run_id), "superseded")
         self.assertEqual(len(FakeBroker.submissions), 1)
+
+    def test_unfilled_report_is_followed_by_recovery_report_after_restore(self):
+        run_id = self.research()
+        db.execute(
+            "UPDATE execution_queue SET status='expired',reason='Test expiry',finished_at=now() WHERE run_id=%s",
+            (run_id,),
+        )
+        with patch.object(notifications, "send_email", return_value=True) as email:
+            self.assertTrue(notifications.send_run_report(run_id, phase="execution"))
+        self.assertEqual(email.call_args.args[1], f"execution-unfilled:{run_id}")
+        self.assertEqual(email.call_args.args[2], "IBKR paper orders were not filled")
+        self.assertTrue(email.call_args.args[3].startswith("ORDER FILL STATUS: NOT FILLED"))
+
+        with db.connection() as conn:
+            conn.execute(
+                "INSERT INTO notifications(id,kind,dedupe_key,destination,status,sent_at) "
+                "VALUES(%s,'run_report',%s,'test@example.com','sent',now())",
+                (uuid.uuid4(), f"execution-unfilled:{run_id}"),
+            )
+            conn.execute(
+                "UPDATE execution_queue SET status='pending',reason='Restored for test',attempts=0,"
+                "next_attempt_at=now(),finished_at=NULL WHERE run_id=%s",
+                (run_id,),
+            )
+            conn.commit()
+        execution.process_next_execution()
+        self.assertEqual(self.queue_status(run_id), "completed")
+
+        with patch.object(notifications, "send_email", return_value=True) as email:
+            self.assertTrue(notifications.send_run_report(run_id, phase="execution"))
+        self.assertEqual(email.call_args.args[1], f"execution-filled:{run_id}")
+        self.assertEqual(email.call_args.args[2], "IBKR paper orders filled — follow-up")
+        self.assertTrue(email.call_args.args[3].startswith("ORDER FILL STATUS: FILLED"))
 
 
 if __name__ == "__main__":

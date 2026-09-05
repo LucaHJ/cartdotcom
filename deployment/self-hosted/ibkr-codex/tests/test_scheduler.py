@@ -24,5 +24,9 @@ def test_orders_are_not_allowed_before_open_or_near_close():
     assert not execution_window_sufficient(1, datetime(2026, 9, 3, 19, 50, tzinfo=UTC))
 
 
-def test_after_hours_expiry_skips_weekend_and_holiday():
-    assert decision_expiry(datetime(2026, 9, 4, 21, 0, tzinfo=UTC)) == datetime(2026, 9, 8, 20, 0, tzinfo=UTC)
+def test_after_hours_expiry_is_before_next_research_and_skips_weekend_and_holiday():
+    assert decision_expiry(datetime(2026, 9, 4, 21, 0, tzinfo=UTC)) == datetime(2026, 9, 8, 16, 40, tzinfo=UTC)
+
+
+def test_expiry_uses_actual_early_close_research_midpoint():
+    assert decision_expiry(datetime(2026, 11, 26, 18, 0, tzinfo=UTC)) == datetime(2026, 11, 27, 16, 10, tzinfo=UTC)
