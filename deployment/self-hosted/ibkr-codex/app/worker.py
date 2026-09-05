@@ -15,7 +15,7 @@ from app.capital import initial_protected_principal
 from app.config import settings
 from app.database import add_event, connection, fetch_one, migrate, set_setting
 from app.notifications import send_capability_reminder, send_gateway_reminder
-from app.performance import PERFORMANCE_REFRESH_SECONDS, refresh_strategy_performance
+from app.performance import refresh_strategy_performance
 from app.execution import process_next_execution, retry_reports
 from app.schedule import scheduled_time
 
@@ -190,21 +190,28 @@ def broker_health() -> bool:
 def scheduler_loop() -> None:
     log.info("paper execution worker started; research has a separate worker")
     last_health = 0.0
-    last_performance = 0.0
+    performance_row = fetch_one("SELECT max(observed_hour) AS observed_hour FROM portfolio_performance_history")
+    last_performance_hour = performance_row["observed_hour"] if performance_row else None
+    last_performance_attempt = 0.0
     last_retention = 0.0
     last_reports = 0.0
     while True:
         try:
+            current_performance_hour = performance_archive_hour(datetime.now(UTC))
+            if (
+                current_performance_hour != last_performance_hour
+                and time.monotonic() - last_performance_attempt >= 60
+            ):
+                try:
+                    refresh_strategy_performance()
+                    last_performance_hour = current_performance_hour
+                except Exception as exc:
+                    log.warning("Strategy performance refresh deferred: %s", exc)
+                last_performance_attempt = time.monotonic()
             if time.monotonic() - last_health >= 300:
                 if not broker_health():
                     send_gateway_reminder()
                 last_health = time.monotonic()
-            if time.monotonic() - last_performance >= PERFORMANCE_REFRESH_SECONDS:
-                try:
-                    refresh_strategy_performance()
-                except Exception as exc:
-                    log.warning("Strategy performance refresh deferred: %s", exc)
-                last_performance = time.monotonic()
             process_next_execution()
             if time.monotonic() - last_reports >= 60:
                 retry_reports()
@@ -215,6 +222,11 @@ def scheduler_loop() -> None:
         except Exception:
             log.exception("Execution worker cycle failed; queued decisions and research remain saved")
         time.sleep(15)
+
+
+def performance_archive_hour(now: datetime) -> datetime:
+    """Return the canonical UTC wall-clock hour for one idempotent archive."""
+    return now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
 
 
 def main() -> None:

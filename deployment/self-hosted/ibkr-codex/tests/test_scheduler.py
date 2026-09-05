@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from unittest.mock import patch
 
 from app import research_worker
-from app.worker import scheduled_time
+from app.worker import performance_archive_hour, scheduled_time
 from app.schedule import daily_checkpoint_time, decision_expiry, execution_window_sufficient, next_execution_window, research_day_status
 
 
@@ -47,6 +47,11 @@ def test_calendar_reports_current_new_york_time_and_market_phase() -> None:
     assert str(post_close["current_time_ny"]).startswith("2026-09-04T22:22:00")
     assert str(post_close["market_open_ny"]).startswith("2026-09-04T09:30:00")
     assert str(post_close["market_close_ny"]).startswith("2026-09-04T16:00:00")
+
+
+def test_performance_archive_uses_utc_wall_clock_hour() -> None:
+    captured = datetime(2026, 9, 5, 3, 47, 59, 999999, tzinfo=UTC)
+    assert performance_archive_hour(captured) == datetime(2026, 9, 5, 3, tzinfo=UTC)
 
 
 def test_orders_are_not_allowed_before_open_or_near_close():
