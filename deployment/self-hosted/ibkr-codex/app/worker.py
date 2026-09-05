@@ -15,7 +15,7 @@ from app.capital import initial_protected_principal
 from app.config import settings
 from app.database import add_event, connection, fetch_one, migrate, set_setting
 from app.notifications import send_capability_reminder, send_gateway_reminder
-from app.performance import refresh_strategy_performance
+from app.performance import PERFORMANCE_REFRESH_SECONDS, refresh_strategy_performance
 from app.execution import process_next_execution, retry_reports
 from app.schedule import scheduled_time
 
@@ -199,7 +199,7 @@ def scheduler_loop() -> None:
                 if not broker_health():
                     send_gateway_reminder()
                 last_health = time.monotonic()
-            if time.monotonic() - last_performance >= 900:
+            if time.monotonic() - last_performance >= PERFORMANCE_REFRESH_SECONDS:
                 try:
                     refresh_strategy_performance()
                 except Exception as exc:

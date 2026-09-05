@@ -20,6 +20,15 @@ class StoredArtifact:
 
 
 def _run_dir(run_id: str, now: datetime | None = None) -> Path:
+    resolved_root = settings.artifact_root.resolve().as_posix().lower().rstrip("/")
+    if (
+        settings.pg_database.startswith("ibkr_queue_test_")
+        and resolved_root.endswith("/data/artifacts")
+    ):
+        raise RuntimeError(
+            "Disposable queue tests are forbidden from writing to the production /data/artifacts mount. "
+            "Set ARTIFACT_ROOT to an isolated temporary directory."
+        )
     stamp = now or datetime.now(UTC)
     path = settings.artifact_root / stamp.strftime("%Y/%m") / run_id
     path.mkdir(parents=True, exist_ok=True)

@@ -17,7 +17,7 @@ from app.artifacts import read_artifact, retention_status
 from app.config import settings
 from app.database import add_event, fetch_all, fetch_one, migrate, set_setting, setting_bool
 from app.notifications import validation_token_valid
-from app.performance import latest_strategy_performance
+from app.performance import latest_strategy_performance, strategy_performance_history
 from app.policy import POLICY
 from app.schedule import daily_checkpoint_time, research_day_status
 from app.workflow import queue_run
@@ -176,6 +176,11 @@ def artifact(run_id: uuid.UUID, kind: str) -> Response:
 @app.get("/api/portfolio/latest", dependencies=[Depends(dashboard_auth)])
 def latest_portfolio() -> Any:
     return jsonable_encoder(latest_strategy_performance())
+
+
+@app.get("/api/portfolio/history", dependencies=[Depends(dashboard_auth)])
+def portfolio_history(hours: int = Query(default=24, ge=1, le=8760)) -> Any:
+    return jsonable_encoder(strategy_performance_history(hours))
 
 
 @app.get("/api/orders", dependencies=[Depends(dashboard_auth)])

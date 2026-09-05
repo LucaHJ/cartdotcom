@@ -11,7 +11,8 @@ def test_dashboard_discloses_safety_boundary_and_limits() -> None:
     assert "International target" in value
     assert "Power / grid target" in value
     assert "Execution FX" in value
-    assert "$20,000 strategy-slice performance" in value
+    assert "$20,000 strategy-slice performance · updated hourly" in value
+    assert "Hourly performance archive" in value
     assert "Research calendar" in value
     assert "Net liquidation" not in value
 
