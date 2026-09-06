@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Rare Air · NBA curiosities</title>
+    <link rel="stylesheet" href="/backend/nba/style.css" />
+    <script type="module" src="/backend/nba/app.js"></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="/backend/nba/" aria-label="Rare Air home"
+        ><span class="brand-icon">◉</span> RARE AIR<span class="brand-sub"
+          >NBA ARCHIVE</span
+        ></a
+      >
+      <nav aria-label="Main">
+        <a href="#explorer">Explore</a><a href="#discoveries">Discoveries</a
+        ><a href="#method">The data</a
+        ><a class="back" href="/backend">← Cartdotcom</a>
+      </nav>
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">
+            <span class="live-dot"></span> THE EXTRAORDINARY, IN THE RECORD
+          </p>
+          <h1>A league of<br /><em>their own.</em></h1>
+          <p class="lede">
+            Find the unlikely overlaps that make NBA history.<br />Every
+            appearance counts. Every claim has a paper trail.
+          </p>
+        </div>
+        <div class="archive-mark">
+          <span>THE NBA<br />CURIOSITY INDEX</span><strong>01—76</strong
+          ><span id="coverage-summary">Loading the historical snapshot…</span>
+        </div>
+      </section>
+      <div id="status" role="status" aria-live="polite" class="status">
+        Loading a compact snapshot. Analysis runs locally after loading.
+      </div>
+      <section id="explorer" class="explorer" aria-labelledby="explore-heading">
+        <aside class="controls">
+          <div class="section-heading">
+            <span class="eyebrow">BUILD AN OVERLAP</span
+            ><button id="reset" class="text-button" type="button">Reset</button>
+          </div>
+          <h2 id="explore-heading">Set the conditions.</h2>
+          <form id="query-form" inert>
+            <label
+              >Competition<select id="competition">
+                <option value="1">Playoffs</option>
+                <option value="0">Regular season</option>
+              </select></label
+            >
+            <label
+              >How to qualify<select id="mode">
+                <option value="season">At least one season / run</option>
+                <option value="pooled">All games in age bracket</option>
+              </select></label
+            >
+            <p class="field-note" id="mode-note">
+              A player qualifies if the games within the age bracket meet the
+              threshold in any one season.
+            </p>
+            <div class="two-fields">
+              <label>Season ending: from<select id="first"></select></label
+              ><label>Through<select id="last"></select></label>
+            </div>
+            <label
+              >Measure<select id="measure">
+                <option value="average">Per-game average</option>
+                <option value="total">Stat total</option>
+              </select></label
+            >
+            <div id="conditions"></div>
+            <div class="participation">
+              <span>✓</span>
+              <div>
+                <strong>One appearance is enough.</strong>
+                <p>
+                  No minimum games filter. DNPs do not count as appearances.
+                </p>
+              </div>
+            </div>
+            <button class="primary" type="submit">
+              Find the overlap <span>↗</span>
+            </button>
+            <p id="form-error" class="error" role="alert"></p>
+          </form>
+        </aside>
+        <div class="workspace">
+          <article class="result-card">
+            <div class="result-top">
+              <span id="result-tag" class="pill">THE INTERSECTION</span
+              ><button id="copy-link" class="text-button">
+                Copy this view ↗
+              </button>
+            </div>
+            <h2 id="result-title">Tracing the overlap…</h2>
+            <p id="result-description" class="result-description"></p>
+            <div class="diagram-wrap" id="diagram"></div>
+            <div id="set-legend" class="set-legend"></div>
+            <p class="diagram-note">
+              Numbers count players in each exclusive region. Select a number to
+              inspect it. Circle sizes are illustrative.
+            </p>
+            <div class="result-footer">
+              <span id="universe-count"></span
+              ><span>1+ appearance · exact, unrounded comparisons</span>
+            </div>
+          </article>
+          <section class="evidence-card" aria-labelledby="evidence-heading">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">FOLLOW THE NUMBERS</p>
+                <h2 id="evidence-heading">The evidence</h2>
+              </div>
+              <button id="export-csv" class="outline">Export CSV ↓</button>
+            </div>
+            <div class="table-toolbar">
+              <label
+                >Show<select id="region">
+                  <option value="intersection">All enabled conditions</option>
+                  <option value="union">Any enabled condition</option>
+                </select></label
+              ><label
+                >Find a player<input
+                  id="player-filter"
+                  type="search"
+                  placeholder="Player name"
+                  autocomplete="off"
+              /></label>
+            </div>
+            <p id="table-summary" class="muted"></p>
+            <div class="table-scroll">
+              <table>
+                <thead id="table-head"></thead>
+                <tbody id="table-body"></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <button id="previous" class="text-button">← Previous</button
+              ><span id="page-label"></span
+              ><button id="next" class="text-button">Next →</button>
+            </div>
+            <div id="player-detail"></div>
+          </section>
+        </div>
+      </section>
+      <section id="discoveries" class="discovery-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">LET THE ARCHIVE SURPRISE YOU</p>
+            <h2>Small clubs. Remarkable company.</h2>
+            <p class="muted" id="discovery-summary">
+              Discoveries calculated offline on cartdotcom-server.
+            </p>
+          </div>
+          <label
+            >Browse<select id="discovery-filter">
+              <option value="all">All discoveries</option>
+              <option value="unique">Only one player</option>
+              <option value="playoffs">Playoffs</option>
+              <option value="regular">Regular season</option>
+              <option value="pooled">Pooled averages</option>
+            </select></label
+          >
+        </div>
+        <div id="discovery-grid" class="discovery-grid"></div>
+        <button id="more-discoveries" class="outline">
+          Show more discoveries
+        </button>
+      </section>
+      <section id="method" class="method-section">
+        <div>
+          <p class="eyebrow">THE FINE PRINT IS PART OF THE STORY</p>
+          <h2>Curiosity, with receipts.</h2>
+          <p>
+            These are descriptive facts about a historical snapshot. Uniqueness
+            is a property of the filters and available records, not a prediction
+            or a statistical significance test.
+          </p>
+          <p id="source-line"></p>
+          <p id="snapshot-date" class="muted"></p>
+        </div>
+        <div>
+          <details open>
+            <summary>What exactly is being averaged?</summary>
+            <p>
+              Per-game averages are total statistics divided by appearances. In
+              <strong>at least one season / run</strong> mode, all games within
+              the selected age bracket are combined within each season. In
+              <strong>all games in age bracket</strong> mode, they are combined
+              across all selected seasons, weighted by games played. The two
+              modes can produce different answers.
+            </p>
+            <p>
+              Age is calculated on each game date. A season crossing an
+              age-bracket boundary is split. Different conditions can be
+              satisfied in different seasons; the overlap describes career
+              memberships.
+            </p>
+          </details>
+          <details>
+            <summary>Coverage, missing data &amp; participation</summary>
+            <div id="limitations"></div>
+            <p id="audit"></p>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Season ending</th>
+                    <th>Playoff games</th>
+                    <th>Score agreement</th>
+                    <th>Regular games</th>
+                    <th>Score agreement</th>
+                  </tr>
+                </thead>
+                <tbody id="coverage-table"></tbody>
+              </table>
+            </div>
+          </details>
+          <details>
+            <summary>How discoveries are found</summary>
+            <p id="discovery-method"></p>
+            <p>
+              We enumerate round-number thresholds across points, rebounds,
+              assists, steals, blocks and three-pointers, plus combinations of
+              age brackets and statistics. Findings with the same players and
+              condition family are deduplicated. A one-game achievement is
+              retained and its sample size shown.
+            </p>
+          </details>
+        </div>
+      </section>
+      <footer>
+        <span class="brand"
+          >RARE AIR <span class="brand-sub">A CARTDOTCOM PROJECT</span></span
+        ><span>History rewards a closer look.</span>
+      </footer>
+    </main>
+  </body>
+</html>

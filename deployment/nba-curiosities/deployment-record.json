@@ -1,0 +1,24 @@
+{
+  "url": "https://cartdotcom.com/backend/nba/",
+  "workerVersion": "22769961-bf88-4f5f-ba6a-1fc572189f86",
+  "builtAt": "2026-09-06T06:47:18.638324+00:00",
+  "source": {
+    "name": "Eoin A. Moore \u00b7 NBA box-score archive",
+    "url": "https://www.kaggle.com/datasets/eoinamoore/historical-nba-data-and-player-box-scores",
+    "sha256": "032abac5b38c31372e39a8ec54e3c254e7a85aa6cbcf17f723efa63ced150d2e",
+    "files": [
+      "Players.csv",
+      "PlayerStatistics.csv",
+      "Games.csv"
+    ],
+    "upstream": "NBA.com (via community archive)"
+  },
+  "players": 4726,
+  "appearances": 1417329,
+  "evaluatedCombinations": 1277,
+  "findings": 259,
+  "artifacts": {
+    "snapshot.json": "1fac22d442c0e5cb9c6141ba59d0983656865dcfbda68ea9a4b38db91270b009",
+    "discoveries.json": "2543c1c5a3418f7b7b71b636d45691b97849bffbd9298b46fdf4ba0a64e7c4c5"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+.dev.vars
+raw/
+output/
+public/snapshot.json
+public/discoveries.json
+worker-configuration.d.ts
+backups/
