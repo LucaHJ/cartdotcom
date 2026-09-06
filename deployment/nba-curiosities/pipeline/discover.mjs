@@ -1,125 +1,72 @@
 import fs from "node:fs";
 import path from "node:path";
-import { analyse, defaults, METRICS, ringLabel } from "../public/engine.js";
-
+import { mine, diversify, verifyFinding, FAMILIES } from "./miner.mjs";
 const dir = process.argv[2] || "public";
 const snapshot = JSON.parse(
   fs.readFileSync(path.join(dir, "snapshot.json"), "utf8"),
 );
-const findings = [],
-  seen = new Set();
-let evaluated = 0;
-function consider(query, featured = false) {
-  evaluated++;
-  const result = analyse(snapshot, query);
-  if (!result.intersection.length || result.intersection.length > 5) return;
-  const ids = [...result.intersection].sort((a, b) => a - b);
-  const signature = `${query.type}:${query.mode}:${query.rings.map((r) => `${r.metric}:${r.minAge}:${r.maxAge}`).join("|")}:${ids.join(",")}`;
-  if (seen.has(signature) && !featured) return;
-  seen.add(signature);
-  findings.push({
-    query,
-    players: ids,
-    count: ids.length,
-    featured,
-    labels: query.rings.map((r) => ringLabel(r)),
-    smallestSample: Math.min(
-      ...ids.flatMap((p) =>
-        result.rings.flatMap((r) =>
-          (r.members.get(p) || []).map((g) => g.games),
-        ),
-      ),
-    ),
-  });
-}
-const base = {
-  ...defaults(),
-  first: snapshot.firstSeason,
-  last: snapshot.lastSeason,
-};
-consider(base, true);
-for (const type of [1, 0])
-  for (const mode of ["season", "pooled"]) {
-    for (const [metric, info] of Object.entries(METRICS)) {
-      for (const threshold of [...info.thresholds].reverse()) {
-        for (const ages of [
-          [15],
-          [20],
-          [30],
-          [40],
-          [20, 30],
-          [30, 40],
-          [20, 30, 40],
-          [15, 20, 30],
-        ]) {
-          consider({
-            ...base,
-            type,
-            mode,
-            rings: ages.map((a) => ({
-              enabled: true,
-              metric,
-              threshold,
-              minAge: a,
-              maxAge: a === 15 ? 19 : a + 9,
-            })),
-          });
-        }
-      }
-    }
-    // Cross-stat career memberships: each condition may be met in a different run.
-    for (const age of [20, 30, 40])
-      for (const points of [25, 30, 35])
-        for (const metric of ["reb", "ast", "blk", "three"]) {
-          for (const threshold of METRICS[metric].thresholds) {
-            consider({
-              ...base,
-              type,
-              mode,
-              rings: [
-                {
-                  enabled: true,
-                  metric: "pts",
-                  threshold: points,
-                  minAge: age,
-                  maxAge: age + 9,
-                },
-                {
-                  enabled: true,
-                  metric,
-                  threshold,
-                  minAge: age,
-                  maxAge: age + 9,
-                },
-              ],
-            });
-          }
-        }
-  }
-findings.sort(
-  (a, b) =>
-    Number(b.featured) - Number(a.featured) ||
-    a.count - b.count ||
-    a.query.rings.length - b.query.rings.length ||
-    b.smallestSample - a.smallestSample,
+const archivePath = path.join(dir, "discovery-archive.json");
+const previous = fs.existsSync(archivePath)
+  ? JSON.parse(fs.readFileSync(archivePath, "utf8"))
+  : null;
+const ruleVersion = "2.0.0";
+const compatible =
+  previous?.snapshotGeneratedAt === snapshot.generatedAt &&
+  previous?.ruleVersion === ruleVersion;
+const pass = compatible ? previous.pass + 1 : 0,
+  windows = [];
+for (
+  let first = snapshot.firstSeason;
+  first <= snapshot.lastSeason;
+  first += 10
+)
+  windows.push([first, Math.min(first + 9, snapshot.lastSeason)]);
+const window = windows[pass % windows.length];
+console.log(
+  `Mining full history and seasons ending ${window.join("-")} across ${snapshot.metrics?.length || 6} statistics`,
 );
-const result = {
-  version: 1,
-  snapshotSha256: snapshot.source.sha256,
+const all = mine(snapshot),
+  era = mine(snapshot, { first: window[0], last: window[1], maxTriples: 4000 });
+const now = new Date().toISOString(),
+  merged = new Map();
+
+for (const f of compatible ? previous.findings : []) merged.set(f.id, f);
+for (const f of [...all.findings, ...era.findings])
+  merged.set(f.id, { ...f, firstSeen: merged.get(f.id)?.firstSeen || now });
+const findings = [...merged.values()],
+  published = diversify(findings);
+for (const f of published)
+  if (!verifyFinding(snapshot, f))
+    throw Error(`Evidence verification failed for ${f.id}`);
+const report = {
+  version: 2,
+  ruleVersion,
+  pass,
   generatedAt: snapshot.generatedAt,
-  evaluated,
-  findings,
-  note: "Bounded enumeration of declared round-number thresholds, age brackets and cross-stat memberships. Descriptive discoveries, not significance tests. Different conditions may be satisfied in different seasons.",
+  analysedAt: now,
+  snapshotGeneratedAt: snapshot.generatedAt,
+  snapshotSha256: snapshot.source.sha256,
+  evaluated: all.stats.evaluated + era.stats.evaluated,
+  totalDiscovered: findings.length,
+  newFindings: findings.filter((f) => f.firstSeen === now).length,
+  familyLabels: FAMILIES,
+  stats: { fullHistory: all.stats, era: era.stats },
+  nextEra: windows[(pass + 1) % windows.length],
+  schedule: "Daily at 04:20 UTC - full history plus a rotating decade",
+  note: "Distribution-derived thresholds across every registered statistic; career, age, cumulative and same-season intersections. Same-season triples must add information beyond their pairs. Ranking balances rarity, reduction from parent sets, players, statistics and relationship families. Up to three conditions; the site shows 2,400 diverse findings and the full deduplicated archive stays on the local server. No minimum appearance cutoff or significance claims.",
 };
-const out = path.join(dir, "discoveries.json");
-fs.writeFileSync(out + ".tmp", JSON.stringify(result));
-fs.renameSync(out + ".tmp", out);
+function atomic(file, data) {
+  fs.writeFileSync(file + ".tmp", JSON.stringify(data));
+  fs.renameSync(file + ".tmp", file);
+}
+atomic(path.join(dir, "discoveries.json"), { ...report, findings: published });
+atomic(archivePath, { ...report, findings });
 console.log(
   JSON.stringify({
-    evaluated,
-    findings: findings.length,
-    featured: findings
-      .find((f) => f.featured)
-      ?.players.map((p) => snapshot.players[p][1]),
+    evaluated: report.evaluated,
+    discovered: findings.length,
+    published: published.length,
+    new: report.newFindings,
+    pass,
   }),
 );

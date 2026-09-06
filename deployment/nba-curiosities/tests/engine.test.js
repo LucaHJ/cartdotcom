@@ -33,6 +33,33 @@ const q = (extra = {}) => ({
   ...extra,
 });
 
+test("same-season intersections do not conflate separate career achievements", () => {
+  const d = data([
+    row(0, 2020, 25, 1, 30, 0),
+    row(0, 2021, 26, 1, 0, 15),
+    row(1, 2020, 25, 1, 30, 15),
+  ]);
+  const query = q({
+    rings: [
+      { metric: "pts", threshold: 25, minAge: 15, maxAge: 60, enabled: true },
+      { metric: "reb", threshold: 10, minAge: 15, maxAge: 60, enabled: true },
+    ],
+  });
+  assert.deepEqual(analyse(d, query).intersection, [0, 1]);
+  const same = analyse(d, { ...query, scope: "same-season" });
+  assert.deepEqual(same.intersection, [1]);
+  assert.deepEqual(same.commonSeasons.get(1), [2020]);
+});
+test("unknown birth dates remain eligible for unrestricted-age facts", () => {
+  const d = data([row(0, 2020, null, 1, 30)]);
+  assert.deepEqual(analyse(d, q()).intersection, []);
+  assert.deepEqual(
+    analyse(d, q({ rings: [{ ...q().rings[0], minAge: 15, maxAge: 60 }] }))
+      .intersection,
+    [0],
+  );
+});
+
 test("a single appearance qualifies; no minimum games cutoff", () => {
   assert.deepEqual(analyse(data([row(0, 2020, 25, 1, 25)]), q()).intersection, [
     0,

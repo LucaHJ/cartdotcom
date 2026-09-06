@@ -1,0 +1,114 @@
+[
+  {
+    "id": "pts",
+    "field": "points",
+    "label": "Points",
+    "short": "PPG",
+    "start": 1950,
+    "step": 5
+  },
+  {
+    "id": "reb",
+    "field": "reboundsTotal",
+    "label": "Rebounds",
+    "short": "RPG",
+    "start": 1951,
+    "step": 2
+  },
+  {
+    "id": "ast",
+    "field": "assists",
+    "label": "Assists",
+    "short": "APG",
+    "start": 1950,
+    "step": 2
+  },
+  {
+    "id": "stl",
+    "field": "steals",
+    "label": "Steals",
+    "short": "SPG",
+    "start": 1974,
+    "step": 1
+  },
+  {
+    "id": "blk",
+    "field": "blocks",
+    "label": "Blocks",
+    "short": "BPG",
+    "start": 1974,
+    "step": 1
+  },
+  {
+    "id": "three",
+    "field": "threePointersMade",
+    "label": "Threes made",
+    "short": "3PM/G",
+    "start": 1980,
+    "step": 1
+  },
+  {
+    "id": "fg",
+    "field": "fieldGoalsMade",
+    "label": "Field goals made",
+    "short": "FGM/G",
+    "start": 1950,
+    "step": 2
+  },
+  {
+    "id": "ft",
+    "field": "freeThrowsMade",
+    "label": "Free throws made",
+    "short": "FTM/G",
+    "start": 1950,
+    "step": 2
+  },
+  {
+    "id": "orb",
+    "field": "reboundsOffensive",
+    "label": "Offensive rebounds",
+    "short": "ORB/G",
+    "start": 1974,
+    "step": 1
+  },
+  {
+    "id": "drb",
+    "field": "reboundsDefensive",
+    "label": "Defensive rebounds",
+    "short": "DRB/G",
+    "start": 1974,
+    "step": 2
+  },
+  {
+    "id": "tov",
+    "field": "turnovers",
+    "label": "Turnovers",
+    "short": "TOV/G",
+    "start": 1978,
+    "step": 1
+  },
+  {
+    "id": "pf",
+    "field": "foulsPersonal",
+    "label": "Personal fouls",
+    "short": "PF/G",
+    "start": 1950,
+    "step": 1
+  },
+  {
+    "id": "fga",
+    "field": "fieldGoalsAttempted",
+    "label": "Field goal attempts",
+    "short": "FGA/G",
+    "start": 1950,
+    "step": 5
+  },
+  {
+    "id": "fta",
+    "field": "freeThrowsAttempted",
+    "label": "Free throw attempts",
+    "short": "FTA/G",
+    "start": 1950,
+    "step": 2
+  }
+]

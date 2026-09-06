@@ -15,9 +15,8 @@ from pathlib import Path
 import zipfile
 
 SOURCE = 'https://www.kaggle.com/datasets/eoinamoore/historical-nba-data-and-player-box-scores'
-METRICS = [('pts', 'points', 1950), ('reb', 'reboundsTotal', 1951),
-           ('ast', 'assists', 1950), ('stl', 'steals', 1974),
-           ('blk', 'blocks', 1974), ('three', 'threePointersMade', 1980)]
+CATALOG = json.loads((Path(__file__).resolve().parent.parent / 'metrics.json').read_text(encoding='utf-8'))
+METRICS = [(m['id'], m['field'], m['start']) for m in CATALOG]
 COLUMNS = ['player', 'season', 'type', 'age', 'games'] + [m[0] for m in METRICS]
 
 
@@ -154,7 +153,7 @@ def build(archive_path, output, first=1950, last=2025):
             'Score agreement checks coverage against Games.csv from the same archive; it is not independent verification of every statistic.',
             'The per-run mode evaluates the portion of each season played inside the selected age bracket, not necessarily an entire playoff run.',
         ],
-        'columns': COLUMNS, 'players': players, 'rows': rows, 'coverage': coverage,
+        'columns': COLUMNS, 'metrics': CATALOG, 'players': players, 'rows': rows, 'coverage': coverage,
         'audit': {**audit, 'duplicateRowsSkipped': duplicates, 'appearances': len(seen), 'games': len(games), 'aggregates': len(rows)},
     }
     write_json(output / 'snapshot.json', result)

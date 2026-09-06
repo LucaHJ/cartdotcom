@@ -1,7 +1,7 @@
 {
   "url": "https://cartdotcom.com/backend/nba/",
-  "workerVersion": "22769961-bf88-4f5f-ba6a-1fc572189f86",
-  "builtAt": "2026-09-06T06:47:18.638324+00:00",
+  "workerVersion": "7b4d717b-41e4-4e1e-9ba6-3e5cd0823568",
+  "builtAt": "2026-09-06T07:12:25.959640+00:00",
   "source": {
     "name": "Eoin A. Moore \u00b7 NBA box-score archive",
     "url": "https://www.kaggle.com/datasets/eoinamoore/historical-nba-data-and-player-box-scores",
@@ -15,10 +15,25 @@
   },
   "players": 4726,
   "appearances": 1417329,
-  "evaluatedCombinations": 1277,
-  "findings": 259,
+  "statistics": 14,
+  "evaluatedCombinations": 232322,
+  "archivedFindings": 54983,
+  "publishedFindings": 2400,
+  "analysisPass": 2,
+  "automatedPublication": {
+    "ok": true,
+    "sha256": "fe6e215418ebf0469051f317e8df7cbd9e4a3c4f208367dc53d7e072c459d817",
+    "analysedAt": "2026-09-06T07:35:40.164Z",
+    "findings": 2400
+  },
+  "schedule": {
+    "utc": "04:20 daily",
+    "Australia/Brisbane": "14:20 daily",
+    "server": "cartdotcom-server",
+    "sourceRefresh": "Manual; pinned through 2025"
+  },
   "artifacts": {
-    "snapshot.json": "1fac22d442c0e5cb9c6141ba59d0983656865dcfbda68ea9a4b38db91270b009",
-    "discoveries.json": "2543c1c5a3418f7b7b71b636d45691b97849bffbd9298b46fdf4ba0a64e7c4c5"
+    "snapshot.json": "144e67151184da79f4d0f72c34658e635d53212b8dc52f299bb014792c4561b7",
+    "discoveries.json": "1b7cd465af01a39aef8440348d0585eb9cb114c07895ea394fbb0ac5b8d5b314"
   }
 }

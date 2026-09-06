@@ -16,7 +16,8 @@
         ></a
       >
       <nav aria-label="Main">
-        <a href="#explorer">Explore</a><a href="#discoveries">Discoveries</a
+        <a href="#discoveries">Browse discoveries</a
+        ><a href="#discoveries" id="saved-nav">Saved</a
         ><a href="#method">The data</a
         ><a class="back" href="/backend">← Cartdotcom</a>
       </nav>
@@ -27,22 +28,37 @@
           <p class="eyebrow">
             <span class="live-dot"></span> THE EXTRAORDINARY, IN THE RECORD
           </p>
-          <h1>A league of<br /><em>their own.</em></h1>
+          <h1>History hides<br /><em>remarkable company.</em></h1>
           <p class="lede">
-            Find the unlikely overlaps that make NBA history.<br />Every
-            appearance counts. Every claim has a paper trail.
+            An ever-growing collection of rare NBA achievements, found
+            automatically.<br />Browse the stories. Follow the evidence.
           </p>
         </div>
         <div class="archive-mark">
-          <span>THE NBA<br />CURIOSITY INDEX</span><strong>01—76</strong
+          <span>RELATIONSHIPS<br />DISCOVERED</span
+          ><strong id="discovery-count">—</strong
           ><span id="coverage-summary">Loading the historical snapshot…</span>
         </div>
       </section>
       <div id="status" role="status" aria-live="polite" class="status">
-        Loading a compact snapshot. Analysis runs locally after loading.
+        Loading the latest discoveries from the historical archive…
       </div>
-      <section id="explorer" class="explorer" aria-labelledby="explore-heading">
-        <aside class="controls">
+      <div id="detail-bar" class="detail-bar" hidden>
+        <button id="close-detail" class="text-button">
+          ← Back to discoveries
+        </button>
+        <div>
+          <button id="save-detail" class="outline">Save story ☆</button>
+          <button id="customize" class="text-button">Adjust conditions</button>
+        </div>
+      </div>
+      <section
+        id="explorer"
+        class="explorer"
+        aria-labelledby="result-title"
+        hidden
+      >
+        <aside class="controls" id="manual-controls" hidden>
           <div class="section-heading">
             <span class="eyebrow">BUILD AN OVERLAP</span
             ><button id="reset" class="text-button" type="button">Reset</button>
@@ -59,6 +75,12 @@
               >How to qualify<select id="mode">
                 <option value="season">At least one season / run</option>
                 <option value="pooled">All games in age bracket</option>
+              </select></label
+            >
+            <label
+              >Relationship<select id="relationship-scope">
+                <option value="career">Across a career</option>
+                <option value="same-season">In the same season</option>
               </select></label
             >
             <p class="field-note" id="mode-note">
@@ -153,22 +175,50 @@
       <section id="discoveries" class="discovery-section">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">LET THE ARCHIVE SURPRISE YOU</p>
-            <h2>Small clubs. Remarkable company.</h2>
+            <p class="eyebrow">AUTOMATICALLY FOUND. READY TO EXPLORE.</p>
+            <h2>The rare company they keep.</h2>
             <p class="muted" id="discovery-summary">
-              Discoveries calculated offline on cartdotcom-server.
+              Searching the historical archive…
             </p>
           </div>
+          <button id="surprise" class="outline">Surprise me ↗</button>
+        </div>
+        <div
+          id="discovery-topics"
+          class="topic-chips"
+          aria-label="Relationship themes"
+        ></div>
+        <div class="browse-toolbar">
           <label
-            >Browse<select id="discovery-filter">
-              <option value="all">All discoveries</option>
-              <option value="unique">Only one player</option>
+            >Find a story<input
+              id="story-search"
+              type="search"
+              placeholder="Player or statistic"
+              autocomplete="off"
+          /></label>
+          <label
+            >Competition<select id="discovery-filter">
+              <option value="all">All competitions</option>
               <option value="playoffs">Playoffs</option>
               <option value="regular">Regular season</option>
-              <option value="pooled">Pooled averages</option>
+              <option value="unique">Only one player</option>
+              <option value="saved">Saved stories</option>
+            </select></label
+          >
+          <label
+            >Statistic<select id="metric-filter">
+              <option value="all">All statistics</option>
+            </select></label
+          >
+          <label
+            >Order<select id="story-sort">
+              <option value="balanced">A varied collection</option>
+              <option value="newest">Recently discovered</option>
+              <option value="rarest">Smallest clubs</option>
             </select></label
           >
         </div>
+        <p id="automation-status" class="automation-status"></p>
         <div id="discovery-grid" class="discovery-grid"></div>
         <button id="more-discoveries" class="outline">
           Show more discoveries
@@ -199,9 +249,10 @@
             </p>
             <p>
               Age is calculated on each game date. A season crossing an
-              age-bracket boundary is split. Different conditions can be
-              satisfied in different seasons; the overlap describes career
-              memberships.
+              age-bracket boundary is split. Career overlaps can be satisfied in
+              different seasons. Same-season stories require every condition in
+              at least one shared season; their evidence shows those seasons
+              explicitly.
             </p>
           </details>
           <details>
@@ -227,11 +278,12 @@
             <summary>How discoveries are found</summary>
             <p id="discovery-method"></p>
             <p>
-              We enumerate round-number thresholds across points, rebounds,
-              assists, steals, blocks and three-pointers, plus combinations of
-              age brackets and statistics. Findings with the same players and
-              condition family are deduplicated. A one-game achievement is
-              retained and its sample size shown.
+              The server discovers thresholds from the observed distributions of
+              every supported statistic, tests overlaps, removes redundant
+              combinations, and verifies every published result. It searches all
+              history and a rotating decade each day. The source remains the
+              fixed 1950–2025 snapshot; discovery is automatic, new data
+              acquisition is not. One-game achievements remain eligible.
             </p>
           </details>
         </div>

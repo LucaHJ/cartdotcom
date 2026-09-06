@@ -6,16 +6,22 @@
   "account_id": "59effd14cb12e91e3486304a934e395d",
   "workers_dev": false,
   "preview_urls": false,
+  "kv_namespaces": [
+    { "binding": "NBA_PUBLICATIONS", "id": "c55bc17743ee4f6b95af4fa6b301e9d1" },
+  ],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": true,
     "html_handling": "none",
-    "not_found_handling": "none"
+    "not_found_handling": "none",
   },
   "routes": [
     { "pattern": "cartdotcom.com/backend/nba", "zone_name": "cartdotcom.com" },
-    { "pattern": "cartdotcom.com/backend/nba/*", "zone_name": "cartdotcom.com" }
+    {
+      "pattern": "cartdotcom.com/backend/nba/*",
+      "zone_name": "cartdotcom.com",
+    },
   ],
-  "observability": { "enabled": true, "head_sampling_rate": 0.1 }
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
 }

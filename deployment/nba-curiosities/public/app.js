@@ -4,6 +4,7 @@ import {
   METRICS,
   ringLabel,
   validateQuery,
+  registerMetrics,
 } from "./engine.js";
 
 const $ = (id) => document.getElementById(id);
@@ -18,17 +19,30 @@ const esc = (s) =>
 const fmt = (n) =>
   Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
 const letters = ["A", "B", "C"];
+const ageLabel = (g) =>
+  g.minAge == null
+    ? "Unknown"
+    : g.minAge === g.maxAge
+      ? String(g.minAge)
+      : `${g.minAge}–${g.maxAge}`;
 let snapshot,
   catalogue,
   query = defaults(),
   result,
   page = 0,
-  discoveryLimit = 9;
+  discoveryLimit = 12;
+let topic = "all",
+  selectedFinding = null,
+  saved = new Set();
+try {
+  saved = new Set(JSON.parse(localStorage.getItem("rare-air:saved") || "[]"));
+} catch {}
 
 function renderForm() {
   $("competition").value = query.type;
   $("mode").value = query.mode;
   $("measure").value = query.measure;
+  $("relationship-scope").value = query.scope || "career";
   for (const id of ["first", "last"]) {
     $(id).innerHTML = Array.from(
       { length: snapshot.lastSeason - snapshot.firstSeason + 1 },
@@ -59,15 +73,20 @@ function renderForm() {
 function updateModeNote() {
   const pooled = $("mode").value === "pooled";
   const total = $("measure").value === "total";
+  if (pooled) $("relationship-scope").value = "career";
   $("mode-note").textContent = pooled
     ? total
       ? "Add the statistic across every selected game in the age bracket."
       : "Total statistics ÷ total appearances across all selected games in the age bracket."
-    : "Qualify in at least one season, using only the games played inside the age bracket. Conditions may be met in different seasons.";
+    : $("relationship-scope").value === "same-season"
+      ? "Every condition must qualify in the same season, using only games inside each age bracket."
+      : "Qualify in at least one season, using only the games played inside the age bracket. Conditions may be met in different seasons.";
 }
 
 function readForm() {
   return {
+    scope:
+      $("mode").value === "pooled" ? "career" : $("relationship-scope").value,
     type: Number($("competition").value),
     mode: $("mode").value,
     measure: $("measure").value,
@@ -102,12 +121,17 @@ function setQuery(next, scroll = false) {
   $("player-detail").innerHTML = "";
   renderForm();
   renderResult();
+  $("save-detail").disabled = !selectedFinding;
   history.replaceState(
     null,
     "",
     "#q=" + encodeURIComponent(JSON.stringify(query)),
   );
-  if (scroll) $("explorer").scrollIntoView({ behavior: "smooth" });
+  if (scroll) {
+    $("explorer").hidden = false;
+    $("detail-bar").hidden = false;
+    $("detail-bar").scrollIntoView({ behavior: "smooth" });
+  }
 }
 
 function renderResult() {
@@ -126,7 +150,7 @@ function renderResult() {
         : "NO MATCHES IN THIS DATASET";
   const active = query.rings.filter((r) => r.enabled);
   $("result-description").textContent =
-    `${count === 1 ? "The only player matching" : count ? "These players match" : "No recorded player matches"} ${active.length === 1 ? "this condition" : `all ${active.length} conditions`} in the selected ${query.type === 1 ? "playoff" : "regular-season"} data. ${query.mode === "season" ? "At least one qualifying season per condition." : "All selected games pooled within each age bracket."}`;
+    `${count === 1 ? "The only player matching" : count ? "These players match" : "No recorded player matches"} ${active.length === 1 ? "this condition" : `all ${active.length} conditions`} in the selected ${query.type === 1 ? "playoff" : "regular-season"} data. ${query.scope === "same-season" ? "Every condition qualifies in the same season." : query.mode === "season" ? "Conditions may qualify in different seasons." : "All selected games pooled within each age bracket."}`;
   const colors = ["#d6ef83", "#87b9be", "#dda685"];
   const centers = [
     [195, 158],
@@ -188,6 +212,19 @@ function renderResult() {
           `<option value="${m}">${regionNames(Number(m))} only (${result.regions[m].length})</option>`,
       )
       .join("");
+  if (query.scope === "same-season") {
+    $("diagram").innerHTML =
+      `<div class="funnel">${active.map((r, i) => `<div class="funnel-row"><span>${esc(ringLabel(r, query.measure))}</span><strong>${fmt(result.rings[query.rings.indexOf(r)].members.size)}</strong></div>`).join("")}<div class="funnel-final"><span>All conditions in the same season</span><strong>${fmt(count)} ${count === 1 ? "player" : "players"}</strong></div></div>`;
+    document.querySelector(".diagram-note").textContent =
+      "Individual sets may be achieved in different years. The combined count requires every condition in the same season.";
+    $("region").innerHTML =
+      '<option value="intersection">All conditions in the same season</option><option value="union">Any individual condition</option>';
+    $("result-description").textContent =
+      `${count === 1 ? "The only player" : fmt(count) + " players"} meeting all enabled conditions in at least one shared ${query.type ? "playoff run" : "regular season"}, during seasons ending ${query.first}–${query.last}.`;
+  } else {
+    document.querySelector(".diagram-note").textContent =
+      "Numbers count players in each exclusive region. Select a number to inspect it. Circle sizes are illustrative.";
+  }
   renderTable();
   if (count === 1) renderPlayer(result.intersection[0]);
 }
@@ -224,19 +261,21 @@ function renderTable() {
         (p) =>
           `<tr><td><button class="player-button" data-player="${p}">${esc(snapshot.players[p][1])} ↗</button></td>${active
             .map((r) => {
-              const g = result.rings[r.index].best.get(p);
+              const g = evidenceBest(r.index, p);
               return `<td class="value-cell ${g?.qualifies ? "qualified" : ""}">${g ? fmt(g.value) : "—"}<small>${g ? `${g.games} game${g.games === 1 ? "" : "s"} · ${g.season || "pooled"}` : "No known eligible value"}</small></td>`;
             })
             .join("")}<td>${active
             .filter((r) => result.masks.get(p) & (1 << r.index))
             .map((r) => letters[r.index])
-            .join(" · ")}</td></tr>`,
+            .join(
+              " · ",
+            )}${query.scope === "same-season" && !result.commonSeasons.has(p) ? "<small>No shared qualifying season</small>" : ""}</td></tr>`,
       )
       .join("") ||
     `<tr><td colspan="${active.length + 2}">No matching players for this view. Try another region or adjust the conditions.</td></tr>`;
   const unknown = result.rings.reduce((n, r) => n + r.unknownGroups, 0);
   $("table-summary").textContent =
-    `${fmt(players.length)} player${players.length === 1 ? "" : "s"} · Values shown are the highest eligible season value, or the pooled value. ${unknown ? `${fmt(unknown)} condition-groups have unknown statistics and cannot qualify.` : ""} Display rounded to 2 decimals; qualification uses unrounded totals.`;
+    `${query.scope === "same-season" ? "Matching players show their best value from a season satisfying every condition. " : ""}${fmt(players.length)} player${players.length === 1 ? "" : "s"} · Values shown are the highest eligible season value, or the pooled value. ${unknown ? `${fmt(unknown)} condition-groups have unknown statistics and cannot qualify.` : ""} Display rounded to 2 decimals; qualification uses unrounded totals.`;
   $("page-label").textContent = `${page + 1} / ${maxPage + 1}`;
   $("previous").disabled = page === 0;
   $("next").disabled = page >= maxPage;
@@ -265,45 +304,135 @@ function renderPlayer(p) {
     `<section class="detail"><h3>${esc(player[1])}</h3><p class="muted">Born ${esc(player[2] || "date unavailable")} · <a href="https://www.nba.com/stats/player/${encodeURIComponent(player[0])}" target="_blank" rel="noopener noreferrer">NBA player profile ↗</a></p><div class="detail-grid">${query.rings
       .map((r, i) => {
         if (!r.enabled) return "";
-        const g = result.rings[i].best.get(p);
-        return `<div class="detail-stat">${letters[i]} · ${esc(ringLabel(r, query.measure))}<strong>${g ? fmt(g.value) : "—"}</strong><span>${g ? `${fmt(g.total)} ${esc(METRICS[r.metric].label.toLowerCase())}${query.measure === "average" ? ` ÷ ${g.games} appearances` : ` across ${g.games} appearances`}` : "No known eligible value"}</span><span>${g ? `${g.season || `${Math.min(...g.seasons)}–${Math.max(...g.seasons)}`} · age ${g.minAge}${g.minAge !== g.maxAge ? `–${g.maxAge}` : ""}` : ""}</span></div>`;
+        const g = evidenceBest(i, p);
+        return `<div class="detail-stat">${letters[i]} · ${esc(ringLabel(r, query.measure))}<strong>${g ? fmt(g.value) : "—"}</strong><span>${g ? `${fmt(g.total)} ${esc(METRICS[r.metric].label.toLowerCase())}${query.measure === "average" ? ` ÷ ${g.games} appearances` : ` across ${g.games} appearances`}` : "No known eligible value"}</span><span>${g ? `${g.season || `${Math.min(...g.seasons)}–${Math.max(...g.seasons)}`} · age ${ageLabel(g)}` : ""}</span></div>`;
       })
       .join("")}</div>${query.rings
       .map((r, i) => {
         if (!r.enabled) return "";
-        const evidence = result.rings[i].members.get(p) || [];
-        return `<details><summary>${letters[i]} · All qualifying evidence (${evidence.length} ${query.mode === "season" ? "seasons" : "pooled groups"})</summary>${evidence.length ? `<div class="table-scroll"><table><thead><tr><th>Season(s) ending</th><th>Ages</th><th>Games</th><th>Total</th><th>${query.measure === "average" ? "Per game" : "Value"}</th></tr></thead><tbody>${evidence.map((g) => `<tr><td>${g.season || esc(g.seasons.join(", "))}</td><td>${g.minAge}–${g.maxAge}</td><td>${g.games}</td><td>${fmt(g.total)}</td><td>${fmt(g.value)}</td></tr>`).join("")}</tbody></table></div>` : '<p class="muted">This player does not qualify for this condition.</p>'}</details>`;
+        const evidence = evidenceGroups(i, p);
+        return `<details><summary>${letters[i]} · All qualifying evidence (${evidence.length} ${query.mode === "season" ? "seasons" : "pooled groups"})</summary>${evidence.length ? `<div class="table-scroll"><table><thead><tr><th>Season(s) ending</th><th>Ages</th><th>Games</th><th>Total</th><th>${query.measure === "average" ? "Per game" : "Value"}</th></tr></thead><tbody>${evidence.map((g) => `<tr><td>${g.season || esc(g.seasons.join(", "))}</td><td>${ageLabel(g)}</td><td>${g.games}</td><td>${fmt(g.total)}</td><td>${fmt(g.value)}</td></tr>`).join("")}</tbody></table></div>` : '<p class="muted">This player does not qualify for this condition.</p>'}</details>`;
       })
       .join("")}</section>`;
 }
 
-function renderDiscoveries() {
-  const filter = $("discovery-filter").value;
+function evidenceGroups(i, p) {
+  const groups = result.rings[i].members.get(p) || [];
+  const years = result.commonSeasons.get(p);
+  return query.scope === "same-season" && years
+    ? groups.filter((g) => years.includes(g.season))
+    : groups;
+}
+function evidenceBest(i, p) {
+  const years = result.commonSeasons.get(p);
+  return query.scope === "same-season" && years
+    ? evidenceGroups(i, p).reduce(
+        (best, g) => (!best || g.value > best.value ? g : best),
+        null,
+      )
+    : result.rings[i].best.get(p);
+}
+function save(id) {
+  if (!id) return;
+  if (saved.has(id)) saved.delete(id);
+  else saved.add(id);
+  try {
+    localStorage.setItem("rare-air:saved", JSON.stringify([...saved]));
+  } catch {}
+  renderDiscoveries();
+  $("save-detail").textContent = saved.has(selectedFinding?.id)
+    ? "Saved ★"
+    : "Save story ☆";
+}
+function openFinding(f) {
+  selectedFinding = f;
+  $("manual-controls").hidden = true;
+  $("explorer").classList.remove("customizing");
+  setQuery(structuredClone(f.query), true);
+  $("save-detail").textContent = saved.has(f.id) ? "Saved ★" : "Save story ☆";
+}
+function filteredFindings() {
+  const filter = $("discovery-filter").value,
+    metric = $("metric-filter").value,
+    search = $("story-search").value.trim().toLowerCase();
   const list = catalogue.findings.filter(
     (f) =>
-      filter === "all" ||
-      (filter === "unique" && f.count === 1) ||
-      (filter === "playoffs" && f.query.type === 1) ||
-      (filter === "regular" && f.query.type === 0) ||
-      (filter === "pooled" && f.query.mode === "pooled"),
+      (topic === "all" || f.family === topic) &&
+      (metric === "all" || f.metrics.includes(metric)) &&
+      (filter === "all" ||
+        (filter === "unique" && f.count === 1) ||
+        (filter === "playoffs" && f.query.type === 1) ||
+        (filter === "regular" && f.query.type === 0) ||
+        (filter === "saved" && saved.has(f.id))) &&
+      (!search ||
+        [
+          ...f.players.map((p) => snapshot.players[p][1]),
+          ...f.labels,
+          ...f.metrics.map((m) => METRICS[m].label),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(search)),
   );
+  if ($("story-sort").value === "newest")
+    list.sort((a, b) => b.firstSeen.localeCompare(a.firstSeen));
+  if ($("story-sort").value === "rarest")
+    list.sort((a, b) => a.count - b.count || b.reduction - a.reduction);
+  return list;
+}
+function renderDiscoveries() {
+  if (!catalogue) return;
+  const list = filteredFindings();
   $("discovery-summary").textContent =
-    `${fmt(catalogue.evaluated)} combinations checked offline · ${fmt(catalogue.findings.length)} distinct findings · ${fmt(list.length)} in this view`;
+    `${fmt(list.length)} stories to browse · ${fmt(catalogue.totalDiscovered)} discoveries in the server archive · ${fmt(catalogue.evaluated)} combinations checked this run`;
+  $("discovery-count").textContent = fmt(catalogue.totalDiscovered);
+  $("discovery-topics").innerHTML = [
+    ["all", "Everything"],
+    ...Object.entries(catalogue.familyLabels),
+  ]
+    .map(
+      ([id, label]) =>
+        `<button class="topic-chip ${topic === id ? "active" : ""}" data-topic="${id}" aria-pressed="${topic === id}">${esc(label)}</button>`,
+    )
+    .join("");
+  $("discovery-topics")
+    .querySelectorAll("[data-topic]")
+    .forEach((b) =>
+      b.addEventListener("click", () => {
+        topic = b.dataset.topic;
+        discoveryLimit = 12;
+        renderDiscoveries();
+      }),
+    );
+  const overdue =
+    Date.now() - Date.parse(catalogue.analysedAt) > 48 * 60 * 60 * 1000;
+  $("automation-status").textContent =
+    `${overdue ? "Search update overdue · " : "● "}Last search: ${new Date(catalogue.analysedAt).toLocaleString("en-AU")} · Daily at 2:20 pm Brisbane · Next decade: ${catalogue.nextEra.join("–")} · Fixed source through 2025`;
   $("discovery-grid").innerHTML =
     list
       .slice(0, discoveryLimit)
       .map(
-        (f, i) =>
-          `<article class="discovery"><div class="discovery-top"><span>${f.query.type ? "PLAYOFFS" : "REGULAR SEASON"}</span><strong>${f.count === 1 ? "ONE OF ONE" : `${f.count}-PLAYER CLUB`}</strong></div><h3>${esc(f.players.map((p) => snapshot.players[p][1]).join(" · "))}</h3><p>${f.labels.map(esc).join("<br>")}</p><small>${f.query.mode === "season" ? "At least one season per condition" : "All bracket games pooled"}<br>Smallest qualifying sample: ${f.smallestSample} game${f.smallestSample === 1 ? "" : "s"}</small><button class="text-button" data-finding="${i}">Inspect this overlap ↗</button></article>`,
+        (f, i) => `<article class="discovery">
+    <div class="discovery-top"><span>${esc(catalogue.familyLabels[f.family])}</span><button class="bookmark" aria-label="${saved.has(f.id) ? "Unsave" : "Save"} ${esc(snapshot.players[f.players[0]][1])} story" data-save="${f.id}">${saved.has(f.id) ? "★" : "☆"}</button></div>
+    <div class="story-rare">${f.count === 1 ? "ONE OF ONE" : f.count + "-PLAYER CLUB"} <span>IN THIS DATASET</span></div>
+    <h3>${esc(f.players.map((p) => snapshot.players[p][1]).join(" · "))}</h3>
+    <div class="story-conditions">${f.labels.map((label, j) => `<div><span>${letters[j]}</span>${esc(label)}</div>`).join("")}</div>
+    <p class="story-scope">${f.query.type ? "Playoffs" : "Regular season"} · ${f.query.first}–${f.query.last}<br>${esc(f.scopeLabel)}</p>
+    <small>${f.query.rings.length > 1 ? `${f.parentCounts.join(" / ")} players in the individual sets → ${f.count} together<br>` : ""}Smallest qualifying sample: ${f.smallestSample} game${f.smallestSample === 1 ? "" : "s"}</small>
+    <button class="text-button" data-finding="${i}">Read the evidence ↗</button></article>`,
       )
-      .join("") || '<p class="muted">No discoveries in this category.</p>';
+      .join("") ||
+    '<div class="empty-stories"><h3>No stories in this view.</h3><p>Try another theme, statistic or player. Save stories with the star on each card.</p></div>';
   $("discovery-grid")
     .querySelectorAll("[data-finding]")
     .forEach((b) =>
       b.addEventListener("click", () =>
-        setQuery(structuredClone(list[Number(b.dataset.finding)].query), true),
+        openFinding(list[Number(b.dataset.finding)]),
       ),
     );
+  $("discovery-grid")
+    .querySelectorAll("[data-save]")
+    .forEach((b) => b.addEventListener("click", () => save(b.dataset.save)));
   $("more-discoveries").hidden = discoveryLimit >= list.length;
 }
 
@@ -353,6 +482,9 @@ function exportCsv() {
       "Age from",
       "Age through",
       "Mode",
+      "Relationship scope",
+      "Matches all conditions",
+      "Shared qualifying seasons",
       "Measure",
       "Competition",
       "Season from",
@@ -369,9 +501,9 @@ function exportCsv() {
   for (const p of visiblePlayers())
     query.rings.forEach((r, i) => {
       if (!r.enabled) return;
-      const groups =
-        result.rings[i].members.get(p) ||
-        [result.rings[i].best.get(p)].filter(Boolean);
+      const groups = evidenceGroups(i, p).length
+        ? evidenceGroups(i, p)
+        : [evidenceBest(i, p)].filter(Boolean);
       for (const g of groups)
         rows.push([
           snapshot.players[p][1],
@@ -382,6 +514,9 @@ function exportCsv() {
           r.minAge,
           r.maxAge,
           query.mode,
+          query.scope || "career",
+          result.intersection.includes(p),
+          (result.commonSeasons.get(p) || []).join(";"),
           query.measure,
           query.type ? "Playoffs" : "Regular season",
           query.first,
@@ -415,7 +550,8 @@ function exportCsv() {
 $("query-form").addEventListener("submit", (e) => {
   e.preventDefault();
   try {
-    setQuery(readForm());
+    selectedFinding = null;
+    setQuery(readForm(), true);
   } catch (error) {
     $("form-error").textContent = error.message;
   }
@@ -429,7 +565,10 @@ $("conditions").addEventListener("change", (e) => {
 $("mode").addEventListener("change", updateModeNote);
 $("measure").addEventListener("change", updateModeNote);
 $("reset").addEventListener("click", () => {
-  if (snapshot) setQuery(defaults());
+  if (snapshot) {
+    selectedFinding = null;
+    setQuery(defaults());
+  }
 });
 $("region").addEventListener("change", () => {
   page = 0;
@@ -448,7 +587,7 @@ $("next").addEventListener("click", () => {
   renderTable();
 });
 $("discovery-filter").addEventListener("change", () => {
-  discoveryLimit = 9;
+  discoveryLimit = 12;
   renderDiscoveries();
 });
 $("more-discoveries").addEventListener("click", () => {
@@ -485,12 +624,18 @@ async function getJson(file) {
 }
 
 try {
-  [snapshot, catalogue] = await Promise.all([
-    getJson("snapshot.json"),
-    getJson("discoveries.json"),
-  ]);
+  const bundle = await getJson("bundle.json");
+  snapshot = bundle.snapshot;
+  catalogue = bundle.catalogue;
+  registerMetrics(snapshot);
+  $("metric-filter").innerHTML =
+    '<option value="all">All statistics</option>' +
+    Object.entries(METRICS)
+      .map(([id, m]) => `<option value="${id}">${esc(m.label)}</option>`)
+      .join("");
   if (
     snapshot.version !== 1 ||
+    catalogue.version !== 2 ||
     catalogue.snapshotSha256 !== snapshot.source.sha256 ||
     catalogue.generatedAt !== snapshot.generatedAt
   )
@@ -507,7 +652,9 @@ try {
         "Saved filters were invalid; showing the default view.";
     }
   }
-  setQuery(query);
+  const hasQuery = location.hash.startsWith("#q=");
+  setQuery(query, hasQuery);
+  if (!hasQuery) history.replaceState(null, "", location.pathname);
   renderDiscoveries();
   renderMethod();
   $("query-form").removeAttribute("inert");
@@ -517,3 +664,41 @@ try {
   $("status").textContent = error.message;
   $("status").classList.add("error");
 }
+
+$("story-search").addEventListener("input", () => {
+  discoveryLimit = 12;
+  renderDiscoveries();
+});
+for (const id of ["metric-filter", "story-sort"])
+  $(id).addEventListener("change", () => {
+    discoveryLimit = 12;
+    renderDiscoveries();
+  });
+$("saved-nav").addEventListener("click", () => {
+  $("discovery-filter").value = "saved";
+  $("metric-filter").value = "all";
+  $("story-search").value = "";
+  discoveryLimit = 12;
+  topic = "all";
+  renderDiscoveries();
+});
+$("surprise").addEventListener("click", () => {
+  const list = filteredFindings();
+  if (list.length) openFinding(list[Math.floor(Math.random() * list.length)]);
+});
+$("close-detail").addEventListener("click", () => {
+  $("explorer").hidden = true;
+  $("detail-bar").hidden = true;
+  history.replaceState(null, "", "#discoveries");
+  $("discoveries").scrollIntoView({ behavior: "smooth" });
+});
+$("customize").addEventListener("click", () => {
+  $("manual-controls").hidden = !$("manual-controls").hidden;
+  $("explorer").classList.toggle("customizing", !$("manual-controls").hidden);
+});
+$("save-detail").addEventListener("click", () => save(selectedFinding?.id));
+$("relationship-scope").addEventListener("change", () => {
+  if ($("relationship-scope").value === "same-season")
+    $("mode").value = "season";
+  updateModeNote();
+});

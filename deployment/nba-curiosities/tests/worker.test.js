@@ -6,6 +6,53 @@ const request = (path = "/", headers = {}) =>
 const env = {
   ASSETS: { fetch: async (r) => new Response(new URL(r.url).pathname) },
 };
+test("published bundles remain behind the existing backend login", async () => {
+  let reads = 0;
+  const published = {
+    ...env,
+    NBA_PUBLICATIONS: {
+      get: async () => {
+        reads++;
+        return '{"generation":2}';
+      },
+    },
+  };
+  const denied = await handleRequest(
+    request("/bundle.json"),
+    published,
+    async () => Response.json({ authenticated: false }),
+  );
+  assert.equal(denied.status, 401);
+  assert.equal(reads, 0);
+  const allowed = await handleRequest(
+    request("/bundle.json"),
+    published,
+    async () => Response.json({ authenticated: true }),
+  );
+  assert.deepEqual(await allowed.json(), { generation: 2 });
+  assert.equal(allowed.headers.get("cache-control"), "private, no-store");
+});
+test("a storage outage serves the complete bundled fallback", async () => {
+  const fallback = {
+    NBA_PUBLICATIONS: {
+      get: async () => {
+        throw Error("offline");
+      },
+    },
+    ASSETS: {
+      fetch: async (r) => Response.json({ file: new URL(r.url).pathname }),
+    },
+  };
+  const response = await handleRequest(
+    request("/bundle.json"),
+    fallback,
+    async () => Response.json({ authenticated: true }),
+  );
+  assert.deepEqual(await response.json(), {
+    snapshot: { file: "/snapshot.json" },
+    catalogue: { file: "/discoveries.json" },
+  });
+});
 test("private JSON is denied to a logged-out visitor", async () => {
   const r = await handleRequest(request("/snapshot.json"), env, async () =>
     Response.json({ authenticated: false }),

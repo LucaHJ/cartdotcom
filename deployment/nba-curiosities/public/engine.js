@@ -60,7 +60,21 @@ export function defaults() {
   };
 }
 
+// A newly supported source statistic becomes available to both mining and UI
+// from snapshot metadata. No new template or frontend option is necessary.
+export function registerMetrics(snapshot) {
+  for (const metric of snapshot.metrics || []) {
+    const column = snapshot.columns.indexOf(metric.id);
+    if (column >= 5) METRICS[metric.id] = { ...metric, column };
+  }
+}
+
 export function validateQuery(query, snapshot) {
+  registerMetrics(snapshot);
+  if (query.scope && !["career", "same-season"].includes(query.scope))
+    throw new Error("Invalid relationship scope.");
+  if (query.scope === "same-season" && query.mode !== "season")
+    throw new Error("Same-season relationships require season mode.");
   if (
     ![0, 1].includes(query.type) ||
     !["season", "pooled"].includes(query.mode) ||
@@ -103,22 +117,24 @@ export function validateQuery(query, snapshot) {
 
 export function ringLabel(r, measure = "average") {
   const metric = METRICS[r.metric];
-  return `${r.threshold}+ ${measure === "average" ? metric.short : metric.label.toLowerCase()} · ages ${r.minAge}–${r.maxAge}`;
+  return `${r.threshold}+ ${measure === "average" ? metric.short : metric.label.toLowerCase()}${r.minAge === 15 && r.maxAge === 60 ? "" : ` · ages ${r.minAge}–${r.maxAge}`}`;
 }
 
 export function evaluateRing(snapshot, query, ring) {
   const groups = new Map();
-  const column = METRICS[ring.metric].column;
+  const column = snapshot.columns
+    ? snapshot.columns.indexOf(ring.metric)
+    : METRICS[ring.metric].column;
   let unknownAge = 0;
   for (const row of snapshot.rows) {
     const [p, year, type, age, games] = row;
     if (type !== query.type || year < query.first || year > query.last)
       continue;
-    if (age === null) {
+    if (age === null && !(ring.minAge === 15 && ring.maxAge === 60)) {
       unknownAge += games;
       continue;
     }
-    if (age < ring.minAge || age > ring.maxAge) continue;
+    if (age !== null && (age < ring.minAge || age > ring.maxAge)) continue;
     const key = query.mode === "season" ? `${p}:${year}` : String(p);
     let g = groups.get(key);
     if (!g) {
@@ -135,10 +151,12 @@ export function evaluateRing(snapshot, query, ring) {
     }
     g.games += games;
     g.total =
-      g.total === null || row[column] === null ? null : g.total + row[column];
+      g.total === null || row[column] == null ? null : g.total + row[column];
     if (!g.seasons.includes(year)) g.seasons.push(year);
-    g.minAge = Math.min(g.minAge, age);
-    g.maxAge = Math.max(g.maxAge, age);
+    if (age !== null) {
+      g.minAge = g.minAge === null ? age : Math.min(g.minAge, age);
+      g.maxAge = g.maxAge === null ? age : Math.max(g.maxAge, age);
+    }
   }
   const members = new Map(),
     best = new Map();
@@ -192,12 +210,34 @@ export function analyse(snapshot, query) {
       snapshot.players[a][1].localeCompare(snapshot.players[b][1]),
     ),
   );
+  let intersection = regions[maskAll];
+  const commonSeasons = new Map();
+  if (query.scope === "same-season") {
+    intersection = intersection.filter((p) => {
+      let years;
+      for (let i = 0; i < rings.length; i++) {
+        if (!query.rings[i].enabled) continue;
+        const eligible = new Set(
+          (rings[i].members.get(p) || []).map((g) => g.season),
+        );
+        years = years
+          ? new Set([...years].filter((y) => eligible.has(y)))
+          : eligible;
+      }
+      if (years?.size) {
+        commonSeasons.set(p, [...years].sort());
+        return true;
+      }
+      return false;
+    });
+  }
   return {
     rings,
     maskAll,
     masks,
     regions,
-    intersection: regions[maskAll],
+    intersection,
+    commonSeasons,
     union: [...masks.keys()],
   };
 }

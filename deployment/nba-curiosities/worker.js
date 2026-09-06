@@ -1,3 +1,4 @@
+import { publish } from "./publication.js";
 const PREFIX = "/backend/nba";
 const FILES = new Set([
   "/index.html",
@@ -12,6 +13,7 @@ export async function handleRequest(request, env, sessionFetch = fetch) {
   const url = new URL(request.url);
   if (url.pathname !== PREFIX && !url.pathname.startsWith(PREFIX + "/"))
     return new Response("Not found", { status: 404 });
+  if (url.pathname === PREFIX + "/_publish") return publish(request, env);
   if (!["GET", "HEAD"].includes(request.method))
     return new Response("Method not allowed", {
       status: 405,
@@ -65,6 +67,34 @@ export async function handleRequest(request, env, sessionFetch = fetch) {
   }
   let path = url.pathname.slice(PREFIX.length);
   if (!path || path === "/") path = "/index.html";
+  if (path === "/bundle.json") {
+    let bundle;
+    try {
+      bundle = await env.NBA_PUBLICATIONS?.get("latest");
+    } catch {
+      /* Serve the bundled verified generation if storage is unavailable. */
+    }
+    if (!bundle) {
+      const [s, c] = await Promise.all(
+        ["snapshot.json", "discoveries.json"].map((file) =>
+          env.ASSETS.fetch(new Request(new URL("/" + file, request.url))),
+        ),
+      );
+      if (!s.ok || !c.ok)
+        return new Response("Snapshot not ready", { status: 503 });
+      bundle = JSON.stringify({
+        snapshot: await s.json(),
+        catalogue: await c.json(),
+      });
+    }
+    return new Response(request.method === "HEAD" ? null : bundle, {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  }
   if (!FILES.has(path)) return new Response("Not found", { status: 404 });
   const assetUrl = new URL(path, request.url);
   const response = await env.ASSETS.fetch(

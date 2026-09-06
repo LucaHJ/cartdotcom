@@ -7,3 +7,5 @@ public/snapshot.json
 public/discoveries.json
 worker-configuration.d.ts
 backups/
+secrets/
+public/discovery-archive.json
