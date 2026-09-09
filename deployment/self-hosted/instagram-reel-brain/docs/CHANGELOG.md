@@ -1,5 +1,15 @@
 # Instagram Reel Self-Hosted Changelog
 
+## 2026-09-09
+
+- Removed the Phase 7 D1 row-read amplification that produced approximately
+  4.50 billion reads in 24 hours. Live mirror queries now advance solely from
+  indexed committed cursors, child deltas avoid repeated parent correlations,
+  and read-only thumbnail/status POSTs no longer wake the full mirror. The
+  measured core idle drain fell from roughly 3.28 million rows to 463 rows.
+  Worker `792b5e0c-cc35-41dd-9c11-042a7a1baf9d`, commit `f8ca955`; see
+  `D1_ROW_READ_COST_INCIDENT_2026-09-09.md`.
+
 ## 2026-09-04
 
 - Fixed Phase 7 origin SQLite handle leakage, responsive watchdog recovery and

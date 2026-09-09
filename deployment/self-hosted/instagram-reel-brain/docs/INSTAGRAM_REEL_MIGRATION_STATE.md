@@ -2,6 +2,15 @@
 
 Status: **Phase 7 primary-data path active by explicit user override.**
 
+2026-09-09 cost correction: the Phase 7 recovery mirror was repeatedly
+scanning historic D1 rows and read-only thumbnail POSTs were emitting needless
+full-drain wakes. Production reached 4.50 billion D1 row reads in 24 hours.
+Commit `f8ca955`, Worker `792b5e0c-cc35-41dd-9c11-042a7a1baf9d`, and migration
+`0028_phase7_mirror_cost_indexes.sql` move live deltas to indexed committed
+cursors and suppress read-only wakes. Equivalent core idle reads fell from
+about 3.28 million to 463 per drain. Authority, backlog and data placement are
+unchanged. See `D1_ROW_READ_COST_INCIDENT_2026-09-09.md`.
+
 2026-09-04 operational recovery: SQLite descriptor exhaustion in the private
 origin stalled eleven new jobs despite green cloud checks. Commit `ffb7e08`
 closes handles deterministically, supervises responsiveness, exposes handover
