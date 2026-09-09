@@ -23,6 +23,7 @@ export type Phase4TableSpec = {
   cursorExpression: string;
   columns: string[];
   keyExpression?: string;
+  liveCursorExpression?: string;
   extraWhere?: string;
 };
 
@@ -75,6 +76,11 @@ export const PHASE4_MIRROR_TABLES: Record<Phase4MirrorTable, Phase4TableSpec> = 
     table: "resources",
     keyColumn: "id",
     cursorExpression: "COALESCE((SELECT updated_at FROM jobs WHERE jobs.id=resources.job_id), created_at)",
+    // Phase 4 used the parent job timestamp as a proxy for resource updates.
+    // Phase 7 resources are immutable rows; corrections insert replacement rows.
+    // Using created_at prevents every job-stage update from replaying all of its
+    // resources and lets the live cursor use a real index.
+    liveCursorExpression: "created_at",
     columns: [
       "id", "job_id", "name", "slug", "kind", "canonical_url", "summary", "why_useful",
       "guide_markdown_key", "evidence_json", "created_at", "guide_html_key", "library_path",
@@ -296,25 +302,33 @@ function phase4LiveLinkedJobScope(table: Phase4MirrorTable, scope: Phase4MirrorS
 export function phase4DeltaQuery(table: Phase4MirrorTable, watermark: string, cursor: Phase4Cursor, limit: number, scope?: Phase4MirrorScope): { sql: string; binds: Array<string | number> } {
   const spec = PHASE4_MIRROR_TABLES[table];
   const keyExpression = `CAST(${spec.keyExpression || spec.keyColumn} AS TEXT)`;
-  const cursorExpression = spec.cursorExpression;
+  const live = scope?.kind === "live";
+  const cursorExpression = live ? spec.liveCursorExpression || spec.cursorExpression : spec.cursorExpression;
   // retrieval_terms is large and indexed_at is always D1 CURRENT_TIMESTAMP text.
   // Comparing the raw column to datetime(?) preserves timestamp normalisation while
   // allowing SQLite/D1 to use the dedicated cursor index. datetime(indexed_at)
   // forced a full table scan and eventually exhausted the Worker request budget.
-  const normalizedCursorExpression = table === "retrieval_terms"
+  const indexedLiveCursor = live && /^[A-Za-z_][A-Za-z0-9_]*$/.test(cursorExpression);
+  const normalizedCursorExpression = table === "retrieval_terms" || indexedLiveCursor
     ? cursorExpression
     : phase4NormalizedTimestampExpression(cursorExpression);
   const mirrorTimestampExpression = phase4MirrorTimestampExpression(cursorExpression);
+  // decodePhase4Cursor() already clamps the cursor to the authorised watermark.
+  // Repeating `column >= watermark` made SQLite choose the old August lower
+  // bound instead of the current cursor and scan the same rows on every wake.
   const where = [
-    `${normalizedCursorExpression} >= datetime(?)`,
     `(${normalizedCursorExpression} > datetime(?) OR (${normalizedCursorExpression} = datetime(?) AND ${keyExpression} > ?))`,
   ];
-  const binds: Array<string | number> = [watermark, cursor.created_at, cursor.created_at, cursor.key];
-  const liveScope = phase4LiveLinkedJobScope(table, scope, watermark);
-  if (liveScope) {
-    where.push(liveScope.sql);
-    binds.push(...liveScope.binds);
-  } else if (spec.extraWhere) {
+  const binds: Array<string | number> = [cursor.created_at, cursor.created_at, cursor.key];
+  // Phase 7 live mirroring is an incremental change feed. The cursor is the
+  // boundary; rechecking every child row's historical parent job on every
+  // cycle is both redundant and catastrophically expensive. Historical replay
+  // retains its exact immutable job slice below.
+  const liveJobScope = table === "jobs" ? phase4LiveCorrectiveJobScope(scope, watermark) : null;
+  if (liveJobScope) {
+    where.push(liveJobScope.sql);
+    binds.push(...liveJobScope.binds);
+  } else if (!live && spec.extraWhere) {
     where.push(spec.extraWhere);
     binds.push(watermark);
   }
@@ -343,9 +357,9 @@ export function phase4NextCursor(table: Phase4MirrorTable, rows: Array<Record<st
 }
 
 export function phase4ObjectAccessQuery(key: string, watermark: string, scope?: Phase4MirrorScope): { sql: string; binds: string[] } {
-  const liveJobScope = phase4LiveCorrectiveJobScope(scope, watermark);
-  const jobWhere = [liveJobScope?.sql || "datetime(created_at) >= datetime(?)"];
-  const jobBinds = liveJobScope?.binds || [watermark];
+  const live = scope?.kind === "live";
+  const jobWhere = ["datetime(created_at) >= datetime(?)"];
+  const jobBinds = [watermark];
   if (scope?.completedJobsOnly) jobWhere.push("status = 'complete'");
   if (scope?.maxExclusiveWatermark) {
     jobWhere.push("datetime(created_at) < datetime(?)");
@@ -353,6 +367,8 @@ export function phase4ObjectAccessQuery(key: string, watermark: string, scope?: 
   }
   const jobScopeSql = jobWhere.join(" AND ");
   const jobScopeBinds = () => [...jobBinds];
+  const artifactJobScope = live ? "" : ` AND job_id IN (SELECT id FROM jobs WHERE ${jobScopeSql})`;
+  const resourceJobScope = live ? "" : ` AND job_id IN (SELECT id FROM jobs WHERE ${jobScopeSql})`;
   const jobObjectColumns = [
     "original_video_key",
     "audio_key",
@@ -366,7 +382,7 @@ export function phase4ObjectAccessQuery(key: string, watermark: string, scope?: 
       SELECT ? AS object_key
       WHERE EXISTS (
         SELECT 1 FROM artifacts
-        WHERE object_key=? AND datetime(created_at) >= datetime(?) AND job_id IN (SELECT id FROM jobs WHERE ${jobScopeSql})
+        WHERE object_key=? AND datetime(created_at) >= datetime(?)${artifactJobScope}
       )
       OR EXISTS (
         SELECT 1 FROM jobs
@@ -374,15 +390,15 @@ export function phase4ObjectAccessQuery(key: string, watermark: string, scope?: 
       )
       OR EXISTS (
         SELECT 1 FROM resources
-        WHERE guide_html_key=? AND datetime(created_at) >= datetime(?) AND job_id IN (SELECT id FROM jobs WHERE ${jobScopeSql})
+        WHERE guide_html_key=? AND datetime(created_at) >= datetime(?)${resourceJobScope}
       )
       LIMIT 1
     `,
     binds: [
       key,
-      key, watermark, ...jobScopeBinds(),
+      key, watermark, ...(live ? [] : jobScopeBinds()),
       key, ...jobScopeBinds(),
-      key, watermark, ...jobScopeBinds(),
+      key, watermark, ...(live ? [] : jobScopeBinds()),
     ],
   };
 }

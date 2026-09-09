@@ -21,6 +21,7 @@ import {
 } from "../src/phase4-mirror.ts";
 
 const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+const costIndexes = readFileSync(new URL("../migrations/0028_phase7_mirror_cost_indexes.sql", import.meta.url), "utf8");
 
 test("Phase 4 mirror token is scoped separately from admin routes", () => {
   assert.match(source, /PHASE4_MIRROR_TOKEN\?: string/);
@@ -79,7 +80,7 @@ test("Phase 4 mirror table allowlist excludes secret and mutation surfaces", () 
   assert.doesNotMatch(source, /PHASE4_MIRROR_TOKEN[\s\S]{0,200}(REEL_QUEUE|put\(|delete\(|UPDATE|INSERT|DELETE FROM|handleNormalizedIntake)/);
 });
 
-test("Phase 4 delta queries enforce watermark, cursor, pagination, and post-watermark job scope", () => {
+test("Phase 4 delta queries use the clamped cursor, pagination, and post-watermark job scope", () => {
   const watermark = parsePhase4Watermark("2026-08-21T06:05:00+10:00");
   assert.equal(watermark, "2026-08-20T20:05:00.000Z");
   assert.equal(parsePhase4Limit("9999"), 200);
@@ -87,11 +88,10 @@ test("Phase 4 delta queries enforce watermark, cursor, pagination, and post-wate
 
   const cursor = decodePhase4Cursor(encodePhase4Cursor({ created_at: "2026-08-20T20:06:00.000Z", key: "abc" }), watermark);
   const query = phase4DeltaQuery("artifacts", watermark, cursor, 25);
-  assert.match(query.sql, /strftime\('%Y-%m-%dT%H:%M:%fZ', datetime\(created_at\)\) AS mirror_updated_at, CAST\(id AS TEXT\) AS mirror_key FROM artifacts WHERE datetime\(created_at\) >= datetime\(\?\)/);
+  assert.match(query.sql, /strftime\('%Y-%m-%dT%H:%M:%fZ', datetime\(created_at\)\) AS mirror_updated_at, CAST\(id AS TEXT\) AS mirror_key FROM artifacts WHERE \(datetime\(created_at\) > datetime\(\?\)/);
   assert.match(query.sql, /job_id IN \(SELECT id FROM jobs WHERE datetime\(created_at\) >= datetime\(\?\)\)/);
   assert.match(query.sql, /ORDER BY datetime\(created_at\) ASC, CAST\(id AS TEXT\) ASC LIMIT \?/);
   assert.deepEqual(query.binds, [
-    "2026-08-20T20:05:00.000Z",
     "2026-08-20T20:06:00.000Z",
     "2026-08-20T20:06:00.000Z",
     "abc",
@@ -110,17 +110,17 @@ test("Phase 4 delta queries enforce watermark, cursor, pagination, and post-wate
   const terms = phase4DeltaQuery("retrieval_terms", watermark, decodePhase4Cursor(null, watermark), 10);
   assert.match(terms.sql, /CAST\(job_id \|\| ':' \|\| term AS TEXT\) AS mirror_key/);
   assert.match(terms.sql, /FROM retrieval_terms INDEXED BY retrieval_terms_mirror_cursor_idx/);
-  assert.match(terms.sql, /WHERE indexed_at >= datetime\(\?\)/);
+  assert.match(terms.sql, /WHERE \(indexed_at > datetime\(\?\)/);
   assert.match(terms.sql, /ORDER BY indexed_at ASC/);
   assert.doesNotMatch(terms.sql, /WHERE datetime\(indexed_at\)/);
   assert.match(terms.sql, /job_id IN \(SELECT id FROM jobs WHERE datetime\(created_at\) >= datetime\(\?\)\)/);
 
   const oldPending = phase4DeltaQuery("pending_dm_parts", watermark, decodePhase4Cursor(null, watermark), 10);
-  assert.match(oldPending.sql, /datetime\(COALESCE\(consumed_at, created_at\)\) >= datetime\(\?\)/);
+  assert.match(oldPending.sql, /datetime\(COALESCE\(consumed_at, created_at\)\) > datetime\(\?\)/);
   assert.match(oldPending.sql, /datetime\(created_at\) >= datetime\(\?\)/);
 
   const oldCommand = phase4DeltaQuery("dm_commands", watermark, decodePhase4Cursor(null, watermark), 10);
-  assert.match(oldCommand.sql, /datetime\(COALESCE\(completed_at, created_at\)\) >= datetime\(\?\)/);
+  assert.match(oldCommand.sql, /datetime\(COALESCE\(completed_at, created_at\)\) > datetime\(\?\)/);
   assert.match(oldCommand.sql, /datetime\(created_at\) >= datetime\(\?\)/);
 });
 
@@ -194,7 +194,7 @@ test("Phase 4 SQLite queries return same-day D1 space timestamps after ISO water
   assert.deepEqual(rows.map((row) => row.mirror_updated_at), ["2026-08-21T02:37:16.000Z", "2026-08-21T02:42:04.000Z"]);
 });
 
-test("Phase 4 live scope admits only explicitly audited post-watermark corrections of historical jobs", () => {
+test("Phase 7 live scope limits jobs while child deltas advance directly from the current cursor", () => {
   const db = createPhase4Sqlite();
   db.exec(`
     INSERT INTO jobs(id, status, created_at, updated_at, shortcode, html_key) VALUES
@@ -217,12 +217,45 @@ test("Phase 4 live scope admits only explicitly audited post-watermark correctio
 
   const artifactsQuery = phase4DeltaQuery("artifacts", watermark, decodePhase4Cursor(null, watermark), 10, liveScope);
   const artifacts = db.prepare(artifactsQuery.sql).all(...artifactsQuery.binds);
-  assert.deepEqual(artifacts.map((row) => row.id), ["corrected-artifact"]);
+  assert.deepEqual(artifacts.map((row) => row.id), ["ordinary-artifact", "corrected-artifact"]);
+  assert.doesNotMatch(artifactsQuery.sql, /job_id IN \(SELECT id FROM jobs/);
+  assert.doesNotMatch(artifactsQuery.sql, /created_at >=/);
+  assert.match(artifactsQuery.sql, /WHERE \(created_at > datetime\(\?\)/);
 
   const allowedObject = phase4ObjectAccessQuery("library/old-corrected.html", watermark, liveScope);
   assert.equal(db.prepare(allowedObject.sql).all(...allowedObject.binds).length, 1);
   const blockedObject = phase4ObjectAccessQuery("library/old-ordinary.html", watermark, liveScope);
-  assert.equal(db.prepare(blockedObject.sql).all(...blockedObject.binds).length, 0);
+  assert.equal(db.prepare(blockedObject.sql).all(...blockedObject.binds).length, 1);
+});
+
+test("Phase 7 live cursors avoid historical lower-bound scans on the large tables", () => {
+  const watermark = "2026-08-25T13:30:07.000Z";
+  const cursor = decodePhase4Cursor(encodePhase4Cursor({ created_at: "2026-09-09T02:17:46.000Z", key: "last" }), watermark);
+  const liveScope = { kind: "live", minWatermark: watermark };
+  for (const table of ["artifacts", "resources", "retrieval_documents", "retrieval_terms"]) {
+    const query = phase4DeltaQuery(table, watermark, cursor, 100, liveScope);
+    assert.doesNotMatch(query.sql, />= datetime\(\?\)/, table);
+    assert.doesNotMatch(query.sql, /corrective-resynthesis/, table);
+    assert.doesNotMatch(query.sql, /job_id IN \(SELECT id FROM jobs/, table);
+    assert.deepEqual(query.binds, [cursor.created_at, cursor.created_at, cursor.key, 100], table);
+  }
+  assert.match(phase4DeltaQuery("resources", watermark, cursor, 100, liveScope).sql, /FROM resources WHERE \(created_at > datetime\(\?\)/);
+  assert.match(phase4DeltaQuery("retrieval_documents", watermark, cursor, 100, liveScope).sql, /FROM retrieval_documents WHERE \(indexed_at > datetime\(\?\)/);
+});
+
+test("Phase 7 cursor and object lookups have dedicated D1 indexes", () => {
+  for (const name of [
+    "jobs_mirror_cursor_idx",
+    "job_events_mirror_cursor_idx",
+    "artifacts_mirror_cursor_idx",
+    "resources_mirror_cursor_idx",
+    "retrieval_documents_indexed_idx",
+    "retrieval_terms_mirror_cursor_idx",
+    "resources_guide_object_idx",
+  ]) {
+    const sourceText = name.startsWith("retrieval_") ? source + costIndexes + readFileSync(new URL("../migrations/0025_ranked_retrieval_index.sql", import.meta.url), "utf8") + readFileSync(new URL("../migrations/0026_retrieval_terms_mirror_cursor.sql", import.meta.url), "utf8") : costIndexes;
+    assert.match(sourceText, new RegExp(name));
+  }
 });
 
 test("Phase 4 SQLite pagination remains complete and idempotent with normalized timestamps", () => {

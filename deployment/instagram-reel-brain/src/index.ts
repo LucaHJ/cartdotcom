@@ -22,6 +22,7 @@ import {
   isPhase4MirrorTable,
   type Phase4MirrorScope,
 } from "./phase4-mirror";
+import { phase7WakeNeeded } from "./phase7-wake";
 import {
   PHASE5_CANCEL_ARM_CONFIRMATION,
   PHASE5_MIN_EXPLICIT_JOB_CREATED_AT,
@@ -6989,7 +6990,7 @@ async function handleFetch(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const response = await handleFetch(request, env);
-    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && response.status < 500) {
+    if (phase7WakeNeeded(request.method, new URL(request.url).pathname, response.status)) {
       ctx.waitUntil(pushPhase7Wake(request, env).catch((error) => console.error("Phase 7 wake failed", error)));
     }
     return response;
