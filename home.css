@@ -128,28 +128,6 @@ button {
     line-height: 0.86;
 }
 
-.links-jump {
-    position: fixed;
-    left: 24px;
-    bottom: 24px;
-    z-index: 10;
-    border: 2px solid var(--line);
-    border-radius: 999px;
-    background: var(--paper);
-    padding: 12px 18px;
-    color: var(--ink);
-    cursor: pointer;
-    font-size: 16px;
-    font-weight: 900;
-    line-height: 1;
-    transition: background 0.18s ease, color 0.18s ease;
-}
-
-.links-jump:hover {
-    background: var(--ink);
-    color: var(--paper);
-}
-
 .container {
     display: flex;
     flex-direction: column;
@@ -314,6 +292,17 @@ p.para {
 :root[data-theme="dark"] .link-icon.is-hovered .link-logo,
 :root[data-theme="dark"] .link-icon:focus-visible .link-logo {
     filter: invert(0);
+}
+
+.link-logo-youtube,
+:root[data-theme="dark"] .link-logo-youtube,
+.link-icon:hover .link-logo-youtube,
+.link-icon.is-hovered .link-logo-youtube,
+.link-icon:focus-visible .link-logo-youtube,
+:root[data-theme="dark"] .link-icon:hover .link-logo-youtube,
+:root[data-theme="dark"] .link-icon.is-hovered .link-logo-youtube,
+:root[data-theme="dark"] .link-icon:focus-visible .link-logo-youtube {
+    filter: none;
 }
 
 .link-icon-text span {
@@ -519,11 +508,6 @@ p.para {
 
     .home-page .pageheadertext {
         font-size: clamp(58px, 18vw, 96px);
-    }
-
-    .links-jump {
-        left: 14px;
-        bottom: 14px;
     }
 
     .theme-toggle {
