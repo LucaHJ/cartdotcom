@@ -5,6 +5,7 @@
     --panel: #fff3e0;
     --panel-soft: rgba(17, 13, 0, 0.025);
     --panel-raised: rgba(17, 13, 0, 0.045);
+    --select-bg: #fff8ec;
     --ink: #110d00;
     --ink-strong: #110d00;
     --muted: #735f2a;
@@ -25,6 +26,7 @@
     --panel: #110d00;
     --panel-soft: rgba(255, 243, 224, 0.025);
     --panel-raised: rgba(255, 243, 224, 0.06);
+    --select-bg: #211c10;
     --ink: #fff3e0;
     --ink-strong: #fff3e0;
     --muted: #d6c596;
@@ -200,6 +202,13 @@ input {
     border-radius: 6px;
     background: var(--panel-raised);
     padding: 8px 10px;
+}
+
+select,
+select option,
+select optgroup {
+    background-color: var(--select-bg);
+    color: var(--ink);
 }
 
 .metric-grid {
