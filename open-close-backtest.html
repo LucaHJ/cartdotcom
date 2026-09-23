@@ -11,7 +11,7 @@
             document.documentElement.dataset.theme = "light";
         }
     </script>
-    <link rel="stylesheet" href="open-close-backtest.css?v=20260923-chart-controls">
+    <link rel="stylesheet" href="open-close-backtest.css?v=20260923-home-icon">
 </head>
 <body>
     <header class="topbar">
@@ -21,7 +21,12 @@
         </div>
         <p class="backtest-intro">Tests whether buying at the open and selling at the close can outperform buy-and-hold. It replays five years of daily prices, compounding a $100,000 balance after the selected round-trip cost. Positions close each day; dividends are excluded.</p>
         <nav class="topnav" aria-label="Main navigation">
-            <a href="home.html">Home</a>
+            <a class="nav-icon" href="home.html" aria-label="Home" title="Home">
+                <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path>
+                    <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                </svg>
+            </a>
             <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
                 <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M20 15.4A8.5 8.5 0 0 1 8.6 4a7 7 0 1 0 11.4 11.4z"></path>
