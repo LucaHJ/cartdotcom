@@ -277,38 +277,21 @@
       gap: 8px;
       flex-wrap: wrap;
     }
-    .help-indicator {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 17px;
-      height: 17px;
-      margin-left: 5px;
-      border: 1px solid var(--muted);
-      border-radius: 50%;
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 800;
-      line-height: 1;
-      text-transform: none;
-      cursor: help;
-      vertical-align: text-bottom;
-    }
-    .help-indicator:hover, .help-indicator:focus-visible {
-      border-color: var(--accent);
-      color: var(--accent);
-      outline: none;
-    }
     [data-help] {
       text-decoration: underline dotted color-mix(in srgb, currentColor 55%, transparent);
       text-underline-offset: 3px;
+      cursor: help;
+    }
+    [data-help]:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 3px;
     }
     button[data-help] { cursor: help; }
     .help-tooltip {
       position: fixed;
       z-index: 80;
       display: none;
-      width: min(360px, calc(100vw - 24px));
+      width: min(440px, calc(100vw - 24px));
       padding: 10px 12px;
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -317,11 +300,8 @@
       box-shadow: var(--shadow);
       font-size: 13px;
       line-height: 1.45;
-      white-space: normal;
+      white-space: pre-line;
       pointer-events: none;
-    }
-    .formula-indicator {
-      margin-left: 3px;
     }
     .table-wrap {
       flex: 1 1 auto;
@@ -1060,7 +1040,7 @@
   <div class="app">
     <aside>
       <fieldset>
-        <legend>Data Snapshot <span class="help-indicator" tabindex="0" data-help="Choose which archived IMDb snapshot supplies the ratings, votes, titles, and episodes used throughout the site." aria-label="About data snapshots">i</span></legend>
+        <legend><span tabindex="0" data-help="Choose which archived IMDb snapshot supplies the ratings, votes, titles, and episodes used throughout the site.">Data Snapshot</span></legend>
         <select id="dataSnapshot" aria-label="Data snapshot">
           <option value="embedded">Embedded fallback</option>
         </select>
@@ -1068,7 +1048,7 @@
       </fieldset>
 
       <fieldset>
-        <legend>Configuration <span class="help-indicator" tabindex="0" data-help="Presets change all ranking controls together. Switching presets preserves your current settings as Custom, and Export config downloads those settings as JSON." aria-label="About configuration presets">i</span></legend>
+        <legend><span tabindex="0" data-help="Presets change all ranking controls together. Switching presets preserves your current settings as Custom, and Export config downloads those settings as JSON.">Configuration</span></legend>
         <select id="configPreset" aria-label="Configuration preset">
           <option value="imdb">IMDb</option>
           <option value="optimised">Optimised</option>
@@ -1078,7 +1058,7 @@
       </fieldset>
 
       <fieldset>
-        <legend>Rating Source <span class="help-indicator" tabindex="0" data-help="Select the rating R used in the weighted ranking formula." aria-label="About rating source">i</span></legend>
+        <legend><span tabindex="0" data-help="Select the rating R used in the weighted ranking formula.">Rating Source</span></legend>
         <div class="segmented" data-segment="ratingSource">
           <button type="button" data-value="show" class="active" data-help="Use IMDb's rating for the series as R. Mean C is then the average IMDb series rating across the eligible pool.">Show rating</button>
           <button type="button" data-value="episode" data-help="Use the unweighted average of a show's selected episode ratings as R. Each episode counts equally, and Mean C becomes the average of those per-show episode averages.">Episode avg</button>
@@ -1086,7 +1066,7 @@
       </fieldset>
 
       <fieldset>
-        <legend>Vote Source <span class="help-indicator" tabindex="0" data-help="Select the vote count v used to calculate certainty: series votes, summed episode votes, or both added together." aria-label="About vote source">i</span></legend>
+        <legend><span tabindex="0" data-help="Select the vote count v used to calculate certainty: series votes, summed episode votes, or both added together.">Vote Source</span></legend>
         <select id="voteSource">
           <option value="show">Show votes</option>
           <option value="episode">Sum episode votes</option>
@@ -1095,7 +1075,7 @@
       </fieldset>
 
       <fieldset>
-        <legend>Series Status <span class="help-indicator" tabindex="0" data-help="IMDb marks a series complete when it has an end year. Ongoing means no end year is present in the dataset." aria-label="About series status">i</span></legend>
+        <legend><span tabindex="0" data-help="IMDb marks a series complete when it has an end year. Ongoing means no end year is present in the dataset.">Series Status</span></legend>
         <div class="segmented" data-segment="completion">
           <button type="button" data-value="all" class="active" data-help="Include complete and ongoing series.">All</button>
           <button type="button" data-value="complete" data-help="Include only series with an IMDb end year.">Complete</button>
@@ -1105,7 +1085,7 @@
       </fieldset>
 
       <fieldset>
-        <legend>Episode Extras <span class="help-indicator" tabindex="0" data-help="Extra detection is automatic and may be inaccurate. Missing, zero, or negative season or episode numbers and titles containing OVA: are treated as possible extras." aria-label="About episode extras">i</span></legend>
+        <legend><span tabindex="0" data-help="Extra detection is automatic and may be inaccurate. Missing, zero, or negative season or episode numbers and titles containing OVA: are treated as possible extras.">Episode Extras</span></legend>
         <div class="segmented" data-segment="extras">
           <button type="button" data-value="regular" class="active" data-help="Exclude episodes automatically classified as extras from episode statistics and rankings.">No extras</button>
           <button type="button" data-value="all" data-help="Include possible extras in episode counts, ratings, votes, runtime, and episode-based rankings.">Include extras</button>
@@ -1113,7 +1093,7 @@
       </fieldset>
 
       <fieldset id="minEpisodesFieldset">
-        <legend>Minimum Episodes <span id="minEpisodesHelp" class="help-indicator" tabindex="0" data-help="Shows below this episode count move to the Mini Series tab." aria-label="About minimum episodes">i</span></legend>
+        <legend><span id="minEpisodesHelp" tabindex="0" data-help="Shows below this episode count move to the Mini Series tab.">Minimum Episodes</span></legend>
         <div class="range-head">
           <label for="minEpisodes">Required episode count</label>
           <span id="minEpisodesValue" class="range-value">0</span>
@@ -1125,7 +1105,7 @@
       </fieldset>
 
       <fieldset id="minRuntimeFieldset">
-        <legend>Minimum Runtime <span id="minRuntimeHoursHelp" class="help-indicator" tabindex="0" data-help="Shows below this summed episode runtime move to the Mini Series tab." aria-label="About minimum runtime">i</span></legend>
+        <legend><span id="minRuntimeHoursHelp" tabindex="0" data-help="Shows below this summed episode runtime move to the Mini Series tab.">Minimum Runtime</span></legend>
         <div class="range-head">
           <label for="minRuntimeHours">Required episode runtime</label>
           <span id="minRuntimeHoursValue" class="range-value">0h</span>
@@ -1137,7 +1117,7 @@
       </fieldset>
 
       <fieldset>
-        <legend>Episode Shape <span class="help-indicator" tabindex="0" data-help="Filter series by the shape of their episode ratings, running averages, centered span averages, or overall trend." aria-label="About episode shape filters">i</span></legend>
+        <legend><span tabindex="0" data-help="Filter series by the shape of their episode ratings, running averages, centered span averages, or overall trend.">Episode Shape</span></legend>
         <label class="checkrow" data-help="Show only titles with unusually flat episode ratings or an unusually straight running-average path. This is a heuristic."><input id="suspiciousOnly" type="checkbox"> Suspicious only</label>
         <div class="segmented" data-segment="trendDirection">
           <button type="button" data-value="all" class="active" data-help="Include series with positive, negative, or flat episode-rating trend lines.">All trends</button>
@@ -1173,7 +1153,7 @@
       </fieldset>
 
       <fieldset>
-        <legend>Certainty <span id="certaintyHelp" class="help-indicator" tabindex="0" data-help="Certainty determines how strongly a show's rating outweighs Mean C in the adjusted score." aria-label="About certainty">i</span></legend>
+        <legend><span id="certaintyHelp" tabindex="0" data-help="Certainty determines how strongly a show's rating outweighs Mean C in the adjusted score.">Certainty</span></legend>
         <label class="checkrow" data-help="Use certainty = votes / (votes + 25,000). It approaches 100% but never reaches it."><input id="uncapped" type="checkbox" checked> Uncapped IMDb-style certainty</label>
         <div class="range-head">
           <label for="cap">Certainty limit</label>
@@ -1276,7 +1256,7 @@
           <div class="analysis-toolbar">
             <div class="chart-mode" data-distribution-source>
               <button type="button" data-value="episodes" class="active">Episodes</button>
-              <button type="button" data-value="series" data-help="Use each series' current adjusted score. Hover the information icon beside an adjusted score in the Series or Rating Population table to see its Mean C formula and values.">Series</button>
+              <button type="button" data-value="series" data-help="Use each series' current adjusted score. Hover an underlined adjusted score in the Series or Rating Population table to see its Mean C formula and values.">Series</button>
             </div>
             <div class="chart-mode" data-distribution-grain>
               <button type="button" data-value="1" class="active">Grain 1</button>
@@ -2498,12 +2478,21 @@
       const certaintyText = uncapped
         ? `certainty = v / (v + m), with m = ${fmt.format(M)}`
         : `certainty follows the capped curve and reaches 100% at ${fmt.format(votesNeededForCertainty(cap))} votes`;
-      return `Adjusted score = certainty x R + (1 - certainty) x Mean C = ${(certainty * 100).toFixed(1)}% x ${row.rating.toFixed(2)} + ${((1 - certainty) * 100).toFixed(1)}% x ${meanC.toFixed(2)} = ${row.score.toFixed(2)}. R is the ${ratingName} (${row.rating.toFixed(2)}). v is ${votesName} (${fmt.format(row.votes || 0)}). ${certaintyText}. Mean C is the average ${ratingName} across ${fmt.format(sourceCount)} eligible shows (${meanC.toFixed(2)}).`;
+      return [
+        'Adjusted score:',
+        'certainty x R + (1 - certainty) x Mean C = score',
+        `${(certainty * 100).toFixed(1)}% x ${row.rating.toFixed(2)} + ${((1 - certainty) * 100).toFixed(1)}% x ${meanC.toFixed(2)} = ${row.score.toFixed(2)}`,
+        '',
+        `R is the ${ratingName} (${row.rating.toFixed(2)}).`,
+        `v is ${votesName} (${fmt.format(row.votes || 0)}).`,
+        `Mean C is the average ${ratingName} across ${fmt.format(sourceCount)} eligible shows (${meanC.toFixed(2)}).`,
+        certaintyText + '.'
+      ].join('\n');
     }
 
-    function formulaIndicator(row, context, options = {}) {
+    function formulaHelpAttributes(row, context, options = {}) {
       const text = scoreFormulaText(row, context, options);
-      return `<span class="help-indicator formula-indicator" tabindex="0" data-help="${escapeHtml(text)}" aria-label="Show adjusted score formula">i</span>`;
+      return `tabindex="0" data-help="${escapeHtml(text)}"`;
     }
 
     function oneDecimal(value) {
@@ -3097,35 +3086,35 @@
     }
 
     function rankComparison(row, base) {
-      const currentFormula = formulaIndicator(row, currentFormulaContext, {
+      const currentFormula = formulaHelpAttributes(row, currentFormulaContext, {
         ratingSource: state.ratingSource,
         voteSource: state.voteSource,
         uncapped: state.uncapped,
         cap: state.cap
       });
-      const imdbFormula = formulaIndicator(base, baseline, {
+      const imdbFormula = formulaHelpAttributes(base, baseline, {
         ratingSource: 'show',
         voteSource: 'show',
         uncapped: true,
         cap: 99.5
       });
       return `<span class="rank-compare">
-        <span class="rank-side ours">${oneDecimal(row.score)} <span class="score-precise">(${score(row.score)})</span>${currentFormula} <span class="rank-number">#${row.rank}</span> ${rankDelta(row.rank, base.rank)}</span>
+        <span class="rank-side ours"><span ${currentFormula}>${oneDecimal(row.score)} <span class="score-precise">(${score(row.score)})</span></span> <span class="rank-number">#${row.rank}</span> ${rankDelta(row.rank, base.rank)}</span>
         <span class="rank-divider">|</span>
-        <span class="rank-side imdb">${oneDecimal(base.score)} <span class="score-precise">(${score(base.score)})</span>${imdbFormula} <span class="rank-number">#${base.rank}</span></span>
+        <span class="rank-side imdb"><span ${imdbFormula}>${oneDecimal(base.score)} <span class="score-precise">(${score(base.score)})</span></span> <span class="rank-number">#${base.rank}</span></span>
       </span>`;
     }
 
     function rankComparisonOrUnranked(row, base) {
       if (base) return rankComparison(row, base);
-      const currentFormula = formulaIndicator(row, currentFormulaContext, {
+      const currentFormula = formulaHelpAttributes(row, currentFormulaContext, {
         ratingSource: state.ratingSource,
         voteSource: state.voteSource,
         uncapped: state.uncapped,
         cap: state.cap
       });
       return `<span class="rank-compare">
-        <span class="rank-side ours">${oneDecimal(row.score)} <span class="score-precise">(${score(row.score)})</span>${currentFormula} <span class="rank-number">#${row.rank}</span></span>
+        <span class="rank-side ours"><span ${currentFormula}>${oneDecimal(row.score)} <span class="score-precise">(${score(row.score)})</span></span> <span class="rank-number">#${row.rank}</span></span>
         <span class="rank-divider">|</span>
         <span class="rank-side imdb">Not ranked</span>
       </span>`;
@@ -3499,7 +3488,7 @@
     function renderPopulationEntry(entry) {
       if (entry.type?.startsWith('span')) return renderSpanPopulationEntry(entry);
       const displayRating = entry.type === 'series'
-        ? `<span class="rating-primary">${rating(entry.bucketRating ?? entry.rating)}</span><span class="rating-secondary">(${score(entry.rating)})</span>${entry.formulaRow ? formulaIndicator(entry.formulaRow, currentFormulaContext, { ratingSource: state.ratingSource, voteSource: state.voteSource, uncapped: state.uncapped, cap: state.cap }) : ''}`
+        ? `<span ${entry.formulaRow ? formulaHelpAttributes(entry.formulaRow, currentFormulaContext, { ratingSource: state.ratingSource, voteSource: state.voteSource, uncapped: state.uncapped, cap: state.cap }) : ''}><span class="rating-primary">${rating(entry.bucketRating ?? entry.rating)}</span><span class="rating-secondary">(${score(entry.rating)})</span></span>`
         : rating(entry.rating);
       return `<tr data-id="${escapeHtml(entry.showId || entry.id)}">
         <td class="title-cell">${escapeHtml(entry.title)}</td>
@@ -3829,6 +3818,8 @@
       const text = target?.dataset?.help;
       const tooltip = els.helpTooltip;
       if (!text || !tooltip) return;
+      const parent = target.closest('dialog[open]') || document.body;
+      if (tooltip.parentElement !== parent) parent.appendChild(tooltip);
       tooltip.textContent = text;
       tooltip.style.display = 'block';
       const anchor = target.getBoundingClientRect();
@@ -4335,12 +4326,12 @@
       const base = baselineById.get(showId);
       els.modalTitle.textContent = show.title;
       els.modalSubtitle.textContent = `${years(show)} - ${show.genres.join(', ') || 'Genres unavailable'}`;
-      const currentFormula = current ? formulaIndicator(current, currentResult, { ratingSource: state.ratingSource, voteSource: state.voteSource, uncapped: state.uncapped, cap: state.cap }) : '';
-      const baseFormula = base ? formulaIndicator(base, baseline, { ratingSource: 'show', voteSource: 'show', uncapped: true, cap: 99.5 }) : '';
-      const activeScore = current ? `${scoreWithRounded(current.score)}${currentFormula}` : 'Excluded in this mode';
-      const baseRankLabel = base ? `${base.rank} (${score(base.score)} / ${oneDecimal(base.score)})${baseFormula}` : 'Not ranked';
-      const currentRankLabel = current ? `${current.rank} (${score(current.score)} / ${oneDecimal(current.score)})${currentFormula}` : 'Excluded';
-      const baseScoreLabel = base ? `${scoreWithRounded(base.score)}${baseFormula}` : 'Not ranked';
+      const currentFormula = current ? formulaHelpAttributes(current, currentResult, { ratingSource: state.ratingSource, voteSource: state.voteSource, uncapped: state.uncapped, cap: state.cap }) : '';
+      const baseFormula = base ? formulaHelpAttributes(base, baseline, { ratingSource: 'show', voteSource: 'show', uncapped: true, cap: 99.5 }) : '';
+      const activeScore = current ? `<span ${currentFormula}>${scoreWithRounded(current.score)}</span>` : 'Excluded in this mode';
+      const baseRankLabel = base ? `${base.rank} <span ${baseFormula}>(${score(base.score)} / ${oneDecimal(base.score)})</span>` : 'Not ranked';
+      const currentRankLabel = current ? `${current.rank} <span ${currentFormula}>(${score(current.score)} / ${oneDecimal(current.score)})</span>` : 'Excluded';
+      const baseScoreLabel = base ? `<span ${baseFormula}>${scoreWithRounded(base.score)}</span>` : 'Not ranked';
       const extrasWarning = show.possibleExtraCount
         ? `<div class="warning">${show.possibleExtraCount} possible extra episode(s) were detected by numbering or title patterns. This classification may be inaccurate.</div>`
         : '';
