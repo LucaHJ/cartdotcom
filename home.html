@@ -10,6 +10,62 @@
     <link rel="stylesheet" href="home.css?v=flat-theme-20260630e">
 </head>
 <body class="home-page">
+    <!--
+    REUSABLE HOME BUTTON - SOURCE-ONLY REFERENCE
+
+    Use this circular house-icon link on other portfolio pages. Copy the link
+    into the page navigation and the CSS into that page's stylesheet.
+    It matches the 48px light/dark toggle, but has no fixed positioning.
+    Colours use the portfolio's paper/ink variables or the backtest's bg/ink
+    variables, so the button follows the page's existing light/dark theme.
+    Keep the accessible label, hover title and root-relative Home destination.
+    This entire reference is a comment and must not render on the home page.
+
+    HTML:
+    <a class="nav-icon" href="/home.html" aria-label="Home" title="Home">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path>
+            <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        </svg>
+    </a>
+
+    CSS:
+    .nav-icon {
+        display: inline-grid;
+        place-items: center;
+        box-sizing: border-box;
+        width: 48px;
+        height: 48px;
+        flex: 0 0 48px;
+        padding: 0;
+        border: 2px solid var(--ink, #110d00);
+        border-radius: 50%;
+        background: var(--paper, var(--bg, #fff3e0));
+        color: var(--ink, #110d00);
+        text-decoration: none;
+        cursor: pointer;
+    }
+    .nav-icon:hover {
+        background: var(--ink, #110d00);
+        color: var(--paper, var(--bg, #fff3e0));
+    }
+    .nav-icon:focus-visible {
+        outline: 2px solid var(--ink, #110d00);
+        outline-offset: 3px;
+    }
+    .nav-icon svg {
+        width: 24px;
+        height: 24px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+    Icon: Lucide house, https://lucide.dev/icons/house
+    END REUSABLE HOME BUTTON
+    -->
     <button class="theme-toggle" type="button" aria-label="Switch to dark mode">
         <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M20 15.4A8.5 8.5 0 0 1 8.6 4a7 7 0 1 0 11.4 11.4z"></path>
