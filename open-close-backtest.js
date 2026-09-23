@@ -3,7 +3,7 @@ const STARTING_EQUITY = 100000;
 const TRADING_DAYS = 252;
 
 const els = {
-    strategySelect: document.getElementById("strategySelect"),
+    themeToggle: document.getElementById("themeToggle"),
     symbolSelect: document.getElementById("symbolSelect"),
     costInput: document.getElementById("costInput"),
     finalEquity: document.getElementById("finalEquity"),
@@ -15,6 +15,8 @@ const els = {
     bestSymbol: document.getElementById("bestSymbol"),
     bestReturn: document.getElementById("bestReturn"),
     chartTitle: document.getElementById("chartTitle"),
+    resultsTitle: document.getElementById("resultsTitle"),
+    resultsEyebrow: document.getElementById("resultsEyebrow"),
     chart: document.getElementById("equityChart"),
     legend: document.querySelector(".chart-legend"),
     strategyExplanation: document.getElementById("strategyExplanation"),
@@ -64,11 +66,10 @@ function num(value, digits = 2) {
     return Number.isFinite(value) ? value.toFixed(digits) : "-";
 }
 
-function dailyReturn(row, symbol, direction, costBps) {
+function dailyReturn(row, symbol, costBps) {
     const item = row.symbols[symbol];
     const raw = item.close / item.open - 1;
-    const directional = direction === "long" ? raw : -raw;
-    return directional - costBps / 10000;
+    return raw - costBps / 10000;
 }
 
 function comparisonCurves(symbol) {
@@ -126,11 +127,10 @@ function metricsFromReturns(returns) {
 }
 
 function computeResults() {
-    const direction = els.strategySelect.value;
     const costBps = Number(els.costInput.value || 0);
     const symbols = appState.metadata.symbols.map((item) => item.symbol);
     const symbolResults = symbols.map((symbol) => {
-        const returns = appState.data.map((row) => dailyReturn(row, symbol, direction, costBps));
+        const returns = appState.data.map((row) => dailyReturn(row, symbol, costBps));
         const metrics = metricsFromReturns(returns);
         return { symbol, meta: appState.metadata.symbols.find((item) => item.symbol === symbol), returns, ...metrics, ...comparisonCurves(symbol) };
     });
@@ -144,7 +144,6 @@ function computeResults() {
     };
     const allResults = [portfolio, ...symbolResults];
     return {
-        direction,
         costBps,
         symbols,
         portfolio,
@@ -239,11 +238,8 @@ function drawChart(result) {
 
 function renderLegend(result) {
     const portfolio = result.symbol === "portfolio";
-    const action = appState.results.direction === "long"
-        ? "buys at the open and sells at the close"
-        : "shorts at the open and buys back at the close";
     els.legend.dataset.loss = String(result.totalReturn < 0);
-    els.strategyExplanation.textContent = `Account equity starting at $100,000. Every day the strategy ${action}, subtracts ${appState.results.costBps} bps in round-trip costs, and compounds the result. ${portfolio ? "Capital is split equally across all symbols each day. " : ""}Positions close each day; dividends and stock-borrow fees are excluded. Uses the equity scale on the left.`;
+    els.strategyExplanation.textContent = `Account equity starting at $100,000. Every day the strategy buys at the open and sells at the close, subtracts ${appState.results.costBps} bps in round-trip costs, and compounds the result. ${portfolio ? "Capital is split equally across all symbols each day. " : ""}Positions close each day; dividends are excluded. Uses the equity scale on the left.`;
     els.holdExplanation.textContent = `Value of $100,000 invested at the first day's close and held through the last close. ${portfolio ? "The initial investment is split equally across all symbols, with no rebalancing. " : ""}Includes overnight price changes, but excludes dividends and trading costs. Uses the equity scale on the left.`;
     els.priceLegendLabel.textContent = result.priceLabel;
     els.priceExplanation.textContent = portfolio
@@ -261,7 +257,7 @@ function renderMetrics(result) {
     els.tradeCount.textContent = `${result.trades.toLocaleString()} daily trades`;
     els.bestSymbol.textContent = best.symbol;
     els.bestReturn.textContent = `${best.meta.name} · ${pct(best.totalReturn)}`;
-    els.chartTitle.textContent = `${result.meta.name} · ${els.strategySelect.options[els.strategySelect.selectedIndex].text}`;
+    els.chartTitle.textContent = `${result.meta.name} · Buy open / sell close`;
 }
 
 function renderUniverse() {
@@ -295,7 +291,6 @@ function renderSymbolTable() {
 }
 
 function renderLedger(result) {
-    const direction = appState.results.direction;
     const rows = appState.data.map((row, index) => {
         const symbol = result.symbol === "portfolio" ? "Portfolio" : result.symbol;
         const rowReturn = result.returns[index];
@@ -306,7 +301,7 @@ function renderLedger(result) {
                 <td>${symbol}</td>
                 <td class="num">${item ? price(item.open) : "-"}</td>
                 <td class="num">${item ? price(item.close) : "-"}</td>
-                <td>${direction === "long" ? "Long intraday" : "Short intraday"}</td>
+                <td>Long intraday</td>
                 <td class="num ${rowReturn >= 0 ? "positive" : "negative"}">${pct(rowReturn)}</td>
             </tr>
         `;
@@ -316,8 +311,15 @@ function renderLedger(result) {
 
 function setView(view) {
     appState.activeView = view;
+    const headings = {
+        overview: ["universe", "Symbols tested"],
+        symbols: ["comparison", "Symbol results"],
+        ledger: ["daily executions", "Trade ledger"]
+    };
+    [els.resultsEyebrow.textContent, els.resultsTitle.textContent] = headings[view];
     document.querySelectorAll(".tab-button").forEach((button) => {
         button.classList.toggle("active", button.dataset.view === view);
+        button.setAttribute("aria-pressed", String(button.dataset.view === view));
     });
     document.querySelectorAll(".view-panel").forEach((panel) => {
         panel.classList.toggle("active", panel.id === `${view}View`);
@@ -336,15 +338,15 @@ function render() {
 }
 
 function wireEvents() {
-    els.strategySelect.addEventListener("change", render);
     els.symbolSelect.addEventListener("change", render);
     els.costInput.addEventListener("input", render);
     document.querySelectorAll(".tab-button").forEach((button) => {
         button.addEventListener("click", () => setView(button.dataset.view));
     });
-    document.querySelectorAll(".legend-item").forEach((item) => {
+    const tooltipItems = document.querySelectorAll(".legend-item, .cost-help");
+    tooltipItems.forEach((item) => {
         const show = () => {
-            document.querySelectorAll(".legend-item").forEach((other) => {
+            tooltipItems.forEach((other) => {
                 other.classList.toggle("tooltip-dismissed", other !== item);
             });
         };
@@ -353,16 +355,43 @@ function wireEvents() {
         item.querySelector("button").addEventListener("click", show);
     });
     document.addEventListener("pointerdown", (event) => {
-        if (!event.target.closest(".chart-legend")) {
-            document.querySelectorAll(".legend-item").forEach((item) => item.classList.add("tooltip-dismissed"));
+        if (!event.target.closest(".chart-legend, .cost-help")) {
+            tooltipItems.forEach((item) => item.classList.add("tooltip-dismissed"));
         }
     });
     document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
-            document.querySelectorAll(".legend-item").forEach((item) => item.classList.add("tooltip-dismissed"));
+            tooltipItems.forEach((item) => item.classList.add("tooltip-dismissed"));
         }
     });
     window.addEventListener("resize", () => drawChart(selectedResult()));
+}
+
+function wireThemeToggle() {
+    const sync = () => {
+        const dark = document.documentElement.dataset.theme === "dark";
+        const label = dark ? "Switch to light mode" : "Switch to dark mode";
+        els.themeToggle.setAttribute("aria-label", label);
+        els.themeToggle.title = label;
+        if (appState.results) drawChart(selectedResult());
+    };
+    els.themeToggle.addEventListener("click", () => {
+        const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = theme;
+        try {
+            localStorage.setItem("cartdotcom-theme", theme);
+        } catch {
+            // Theme switching still works when browser storage is unavailable.
+        }
+        sync();
+    });
+    window.addEventListener("storage", (event) => {
+        if (event.key === "cartdotcom-theme") {
+            document.documentElement.dataset.theme = event.newValue === "dark" ? "dark" : "light";
+            sync();
+        }
+    });
+    sync();
 }
 
 async function boot() {
@@ -381,6 +410,7 @@ async function boot() {
     render();
 }
 
+wireThemeToggle();
 boot().catch((error) => {
     console.error(error);
     document.body.insertAdjacentHTML("afterbegin", `<div class="load-error">Backtest failed to load: ${error.message}</div>`);
