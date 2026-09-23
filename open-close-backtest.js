@@ -16,6 +16,11 @@ const els = {
     bestReturn: document.getElementById("bestReturn"),
     chartTitle: document.getElementById("chartTitle"),
     chart: document.getElementById("equityChart"),
+    legend: document.querySelector(".chart-legend"),
+    strategyExplanation: document.getElementById("strategyExplanation"),
+    holdExplanation: document.getElementById("holdExplanation"),
+    priceExplanation: document.getElementById("priceExplanation"),
+    priceLegendLabel: document.getElementById("priceLegendLabel"),
     universeSummary: document.getElementById("universeSummary"),
     symbolChips: document.getElementById("symbolChips"),
     symbolBody: document.getElementById("symbolBody"),
@@ -164,9 +169,11 @@ function drawChart(result) {
 
     const width = rect.width;
     const height = rect.height;
-    const pad = { top: 44, right: 72, bottom: 34, left: 56 };
+    const styles = getComputedStyle(document.documentElement);
+    const color = (name) => styles.getPropertyValue(name).trim();
+    const pad = { top: 24, right: 18, bottom: 50, left: 18 };
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "#181b20";
+    ctx.fillStyle = color("--bg");
     ctx.fillRect(0, 0, width, height);
 
     const values = result.equityCurve;
@@ -186,9 +193,10 @@ function drawChart(result) {
     const yFor = (value) => pad.top + ((max - value) / range) * plotH;
     const yForPrice = (value) => pad.top + ((priceMax - value) / priceRange) * plotH;
 
-    const drawSeries = (series, color, yScale, lineWidth = 2) => {
+    const drawSeries = (series, color, yScale, lineWidth = 2, dashed = false) => {
         ctx.strokeStyle = color;
         ctx.lineWidth = lineWidth;
+        ctx.setLineDash(dashed ? [6, 4] : []);
         ctx.beginPath();
         series.forEach((value, index) => {
             const x = xFor(index);
@@ -197,9 +205,10 @@ function drawChart(result) {
             else ctx.lineTo(x, y);
         });
         ctx.stroke();
+        ctx.setLineDash([]);
     };
 
-    ctx.strokeStyle = "#383f4b";
+    ctx.strokeStyle = color("--line");
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let i = 0; i <= 4; i += 1) {
@@ -209,29 +218,37 @@ function drawChart(result) {
     }
     ctx.stroke();
 
-    drawSeries(values, result.totalReturn >= 0 ? "#a4f0c8" : "#ffb4b1", yFor, 2.3);
-    drawSeries(buyHold, "#79c6ff", yFor, 2);
-    drawSeries(prices, "#f2c56b", yForPrice, 1.8);
+    drawSeries(values, color(result.totalReturn >= 0 ? "--good" : "--bad"), yFor, 2.3);
+    drawSeries(buyHold, color("--hold"), yFor, 2);
+    drawSeries(prices, color("--warn"), yForPrice, 1.8, true);
 
-    ctx.fillStyle = "#9aa3b2";
+    ctx.fillStyle = color("--muted");
     ctx.font = "12px Segoe UI";
-    ctx.fillText(money(max), width - pad.right + 8, pad.top + 5);
-    ctx.fillText(money(min), width - pad.right + 8, height - pad.bottom);
-    ctx.fillStyle = "#f2c56b";
-    ctx.fillText(priceMax.toFixed(result.symbol === "portfolio" ? 1 : 2), width - pad.right + 8, pad.top + 20);
-    ctx.fillText(priceMin.toFixed(result.symbol === "portfolio" ? 1 : 2), width - pad.right + 8, height - pad.bottom - 15);
-    ctx.fillStyle = "#a4f0c8";
-    ctx.fillRect(pad.left, 17, 20, 3);
-    ctx.fillText("intraday strategy", pad.left + 28, 21);
-    ctx.fillStyle = "#79c6ff";
-    ctx.fillRect(pad.left + 146, 17, 20, 3);
-    ctx.fillText("buy and hold", pad.left + 174, 21);
-    ctx.fillStyle = "#f2c56b";
-    ctx.fillRect(pad.left + 270, 17, 20, 3);
-    ctx.fillText(result.priceLabel, pad.left + 298, 21);
-    ctx.fillStyle = "#9aa3b2";
+    ctx.fillText(money(max), pad.left, pad.top - 8);
+    ctx.fillText(money(min), pad.left, height - pad.bottom + 16);
+    ctx.fillStyle = color("--warn");
+    ctx.textAlign = "right";
+    const priceTick = (value) => result.symbol === "portfolio" ? value.toFixed(1) : price(value);
+    ctx.fillText(priceTick(priceMax), width - pad.right, pad.top - 8);
+    ctx.fillText(priceTick(priceMin), width - pad.right, height - pad.bottom + 16);
+    ctx.textAlign = "left";
+    ctx.fillStyle = color("--muted");
     ctx.fillText(appState.data[0].date, pad.left, height - 12);
     ctx.fillText(appState.data[appState.data.length - 1].date, width - pad.right - 74, height - 12);
+}
+
+function renderLegend(result) {
+    const portfolio = result.symbol === "portfolio";
+    const action = appState.results.direction === "long"
+        ? "buys at the open and sells at the close"
+        : "shorts at the open and buys back at the close";
+    els.legend.dataset.loss = String(result.totalReturn < 0);
+    els.strategyExplanation.textContent = `Account equity starting at $100,000. Every day the strategy ${action}, subtracts ${appState.results.costBps} bps in round-trip costs, and compounds the result. ${portfolio ? "Capital is split equally across all symbols each day. " : ""}Positions close each day; dividends and stock-borrow fees are excluded. Uses the equity scale on the left.`;
+    els.holdExplanation.textContent = `Value of $100,000 invested at the first day's close and held through the last close. ${portfolio ? "The initial investment is split equally across all symbols, with no rebalancing. " : ""}Includes overnight price changes, but excludes dividends and trading costs. Uses the equity scale on the left.`;
+    els.priceLegendLabel.textContent = result.priceLabel;
+    els.priceExplanation.textContent = portfolio
+        ? "Average closing-price performance of all symbols, each rebased to 100 on the first day. Uses its own index scale on the right, not account dollars. It follows the same underlying prices as buy-and-hold, so the lines can overlap."
+        : `${result.meta.name}'s daily closing share price in USD. Uses its own price scale on the right, not account equity. It follows the same underlying prices as buy-and-hold, so the lines can overlap.`;
 }
 
 function renderMetrics(result) {
@@ -314,6 +331,7 @@ function render() {
     renderUniverse();
     renderSymbolTable();
     renderLedger(result);
+    renderLegend(result);
     drawChart(result);
 }
 
@@ -323,6 +341,26 @@ function wireEvents() {
     els.costInput.addEventListener("input", render);
     document.querySelectorAll(".tab-button").forEach((button) => {
         button.addEventListener("click", () => setView(button.dataset.view));
+    });
+    document.querySelectorAll(".legend-item").forEach((item) => {
+        const show = () => {
+            document.querySelectorAll(".legend-item").forEach((other) => {
+                other.classList.toggle("tooltip-dismissed", other !== item);
+            });
+        };
+        item.addEventListener("pointerenter", show);
+        item.addEventListener("focusin", show);
+        item.querySelector("button").addEventListener("click", show);
+    });
+    document.addEventListener("pointerdown", (event) => {
+        if (!event.target.closest(".chart-legend")) {
+            document.querySelectorAll(".legend-item").forEach((item) => item.classList.add("tooltip-dismissed"));
+        }
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            document.querySelectorAll(".legend-item").forEach((item) => item.classList.add("tooltip-dismissed"));
+        }
     });
     window.addEventListener("resize", () => drawChart(selectedResult()));
 }
