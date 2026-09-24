@@ -17,8 +17,8 @@ Runner results are compressed and persisted before HTTP delivery. Retrying the s
 - Startup: kill switch engaged and trading disabled.
 - Assets: long-only USD-listed stocks and ordinary ETFs; crypto remains prohibited.
 - Sizing uses the virtual 20,000 account-base-currency budget, not the full broker balance. The 980,000 principal plus protected interest remains unavailable.
-- New position: at most 5% of net liquidation value.
-- Total position: at most 15%.
+- No per-security incremental BUY or total holding cap (individual stocks and ETFs).
+- Target weights must be finite percentages from 0 to 100; the overall strategy budget, cash reserve and run turnover limits still constrain executable orders.
 - Per-run turnover: at most 20%.
 - Cash reserve: at least 5%.
 - At most 10 BUY/SELL decisions per run (HOLD decisions do not consume the limit); no shares below $5; live or explicitly authorized delayed stock quotes and a spread at or below 1% required.
@@ -28,6 +28,10 @@ Runner results are compressed and persisted before HTTP delivery. Retrying the s
 ## Standing allocation targets and independent FX data
 
 Every future research prompt targets 25% international equities, 15% power/grid infrastructure, 55% other diversified US equities, and at least 5% cash. International holdings use liquid US-listed, USD-traded unleveraged ETFs with predominantly non-US underlying exposure; foreign listings and FX trades remain prohibited. Each decision records a mutually exclusive allocation bucket. The agent must assess current/proposed sleeve weights, gaps and overlap, investigate power demand from data centres/mining, and explain any shortfall. These are strategic research targets, not forced trades or exceptions to existing risk limits; changes may be staged and HOLD remains valid.
+
+There are no individual stock or ETF position-size caps. The public policy reports both former cap fields as `null`, and the dashboard displays "No individual cap". Removing caps increases concentration risk; the researcher must justify large positions against diversified alternatives. The 20% aggregate run turnover limit, 5% cash reserve, protected capital and all paper-account checks remain in force.
+
+Every research session also reviews AI/semiconductors, software, healthcare, industrials and other credible opportunities, verifies the dates and causes of claimed price dips, and looks through ETF holdings for overlapping company/theme exposure. AI is not automatically a separate diversification bucket. Research may recommend future sleeve changes in the assessment but cannot silently change configured targets. Performance comparisons must state data freshness and distinguish currency effects, cash drag and execution delays from security selection.
 
 IBKR is the preferred AUD/USD pricing source. When its FX feed is unavailable, the executor fetches official daily ECB reference data directly from the ECB Data API and calculates the AUD/USD cross from matching EUR-based observations. It rejects invalid, future-dated or over-four-calendar-day-old data and applies a 2% conservative haircut to available USD capital. This is daily reference data, not an intraday quote. A validated local cache refreshes every six hours; network failures may use it only within the same maximum observation age. The source, reference date, rate, retrieval time, response hash and haircut are recorded with execution snapshots. Stock bid/ask prices still require the existing IBKR live/authorized-delayed quote checks; the fallback does not bypass account connectivity, cash protection or order reconciliation.
 

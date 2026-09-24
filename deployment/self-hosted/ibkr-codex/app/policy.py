@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any
 
 
 @dataclass(frozen=True)
 class RiskPolicy:
-    max_new_position_pct: Decimal = Decimal("5")
-    max_total_position_pct: Decimal = Decimal("15")
+    # Retain public API keys: null explicitly means no per-security cap.
+    max_new_position_pct: None = None
+    max_total_position_pct: None = None
     equity_target_allocation_pct: Decimal = Decimal("95")
     international_equity_target_pct: Decimal = Decimal("25")
     power_and_grid_target_pct: Decimal = Decimal("15")
@@ -85,12 +86,14 @@ def validate_decision_shape(decision: dict[str, Any]) -> None:
         raise PolicyViolation("Crypto and all non-US-equity asset types are prohibited.")
     if allocation_bucket not in {"DOMESTIC_DIVERSIFIED", "INTERNATIONAL_EQUITY", "POWER_AND_GRID"}:
         raise PolicyViolation("Invalid strategic allocation bucket.")
-    target = Decimal(str(decision.get("target_weight_pct", 0)))
-    confidence = Decimal(str(decision.get("confidence", 0)))
-    position_cap = POLICY.max_total_position_pct
-    if target < 0 or target > position_cap:
-        raise PolicyViolation(f"Target weight exceeds the {position_cap}% {asset_type} position cap.")
-    if confidence < 0 or confidence > 1:
+    try:
+        target = Decimal(str(decision.get("target_weight_pct", 0)))
+        confidence = Decimal(str(decision.get("confidence", 0)))
+    except (InvalidOperation, ValueError):
+        raise PolicyViolation("Target weight and confidence must be valid numbers.") from None
+    if not target.is_finite() or target < 0 or target > 100:
+        raise PolicyViolation("Target weight must be between zero and 100 percent.")
+    if not confidence.is_finite() or confidence < 0 or confidence > 1:
         raise PolicyViolation("Confidence must be between zero and one.")
     citations = decision.get("citations")
     if not isinstance(citations, list) or any(not isinstance(url, str) or not url.startswith("https://") for url in citations):
@@ -127,19 +130,14 @@ def proposed_order(
 
     target_pct = Decimal(str(decision["target_weight_pct"]))
     desired_value = net_liquidation * target_pct / 100
-    position_cap = POLICY.max_total_position_pct
     allocation_cap = Decimal("100") - POLICY.min_cash_reserve_pct
-    max_total = net_liquidation * position_cap / 100
-    desired_value = min(desired_value, max_total)
 
     if action == "BUY":
         desired_increase = max(Decimal("0"), desired_value - current_market_value)
-        max_new_pct = POLICY.max_new_position_pct
-        max_new = net_liquidation * max_new_pct / 100
         allocation_remaining = max(Decimal("0"), net_liquidation * allocation_cap / 100 - asset_class_value)
         reserve = net_liquidation * POLICY.min_cash_reserve_pct / 100
         affordable = max(Decimal("0"), cash - reserve)
-        notional = min(desired_increase, max_new, allocation_remaining, affordable)
+        notional = min(desired_increase, allocation_remaining, affordable)
         price = ask * (Decimal("1") + POLICY.initial_slippage_pct / 100)
         risk_price = ask * (Decimal("1") + POLICY.max_slippage_pct / 100)
         quantity = quantity_for_asset_type(notional / risk_price, asset_type)

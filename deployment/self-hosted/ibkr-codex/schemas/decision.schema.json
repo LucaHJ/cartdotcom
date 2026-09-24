@@ -44,7 +44,7 @@
           "asset_type": { "type": "string", "enum": ["US_EQUITY"] },
           "allocation_bucket": { "type": "string", "enum": ["DOMESTIC_DIVERSIFIED", "INTERNATIONAL_EQUITY", "POWER_AND_GRID"] },
           "action": { "type": "string", "enum": ["BUY", "SELL", "HOLD"] },
-          "target_weight_pct": { "type": "number", "minimum": 0, "maximum": 15 },
+          "target_weight_pct": { "type": "number", "minimum": 0, "maximum": 100 },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
           "thesis": { "type": "string", "minLength": 1, "maxLength": 6000 },
           "risks": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 1000 } },
