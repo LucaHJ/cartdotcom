@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 from app import performance
 from app.performance import PERFORMANCE_ARCHIVE_DAILY_BYTES, PERFORMANCE_ARCHIVE_HOURLY_BYTES, calculate_strategy_performance
+import httpx
+import pytest
 
 
 def _snapshot() -> dict[str, object]:
@@ -21,6 +23,21 @@ def _snapshot() -> dict[str, object]:
             "quantity": "100", "average_cost": "100",
         }],
     }
+
+
+@pytest.mark.parametrize("future", [False, True])
+def test_quote_uses_actual_market_timestamp_not_daily_open(monkeypatch, future):
+    now = datetime(2026, 9, 24, 16, 0, tzinfo=UTC)
+    opening = now.replace(hour=13, minute=30)
+    observed = now + timedelta(minutes=1) if future else now - timedelta(minutes=1)
+    chart = {"chart": {"result": [{"meta": {"currency": "USD", "regularMarketPrice": 111,
+        "regularMarketTime": int(observed.timestamp())}, "timestamp": [int((opening-timedelta(days=1)).timestamp()), int(opening.timestamp())],
+        "indicators": {"quote": [{"close": [109, 110]}]}}]}}
+    response = httpx.Response(200, json=chart, request=httpx.Request("GET", "https://example.test"))
+    monkeypatch.setattr(performance.httpx, "get", lambda *a, **kw: response)
+    result = performance._fetch_public_daily_price("SPY", now)
+    assert result["price"] == (Decimal(110) if future else Decimal(111))
+    assert result["observed_at"] == (opening if future else observed)
 
 
 def test_performance_uses_only_twenty_thousand_strategy_slice() -> None:

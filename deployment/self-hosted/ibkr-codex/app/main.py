@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import gzip
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -88,16 +89,20 @@ def policy() -> dict[str, Any]:
         "account_pattern": "DU…",
         "ib_gateway_port": 4002,
         "limits": POLICY.public(),
+        "research": {"protocol": "event-driven-v2", "industries": 36, "stages": 9,
+                     "timeout_seconds": settings.codex_timeout_seconds,
+                     "allocation_authority": "Agent-selected cash, position, new-position, industry and turnover limits; null means no allocation cap. Protected strategy capital and operational safeguards cannot be changed."},
         "prohibited": [
             "live accounts", "short sales", "margin borrowing", "options", "futures",
             "crypto", "forex", "fractional stock shares", "after-hours stock orders", "market orders",
         ],
         "asset_classes": {
-            "US_EQUITY": "Liquid US-listed USD stocks and ordinary unleveraged ETFs, including international underlying exposure; 95% total strategic target.",
-            "CASH_RESERVE": "At least 5% is retained as cash.",
+            "US_EQUITY": "Liquid US-listed USD stocks and ordinary unleveraged ETFs, including international underlying exposure; no fixed equity target.",
+            "CASH_RESERVE": "Agent-selected per run; no mandatory strategy cash percentage. Protected account cash remains inaccessible.",
         },
         "execution": "DAY limit orders; monitor each attempt, reprice at most 3 times, then cancel and reconcile. "
-                     "International/power allocations are standing research targets, not forced trades. "
+                     "Industry allocations are selected and validated per run; sells execute before buys. "
+                     "Buy sizing retains a USD5 plus USD0.01/share fee cushion even with zero target cash. "
                      f"FX: prefer IBKR; fallback to official daily ECB reference rates, at most {settings.fx_fallback_max_age_days} calendar days old, "
                      f"with a {settings.fx_fallback_haircut_pct}% conservative sizing haircut. Stock bid/ask quotes still come from IBKR.",
     }
@@ -170,6 +175,23 @@ def run_detail(run_id: uuid.UUID) -> Any:
         "snapshots": snapshots,
         "portfolio_performance": latest_strategy_performance(),
     })
+
+
+@app.get("/api/runs/{run_id}/research-stages", dependencies=[Depends(dashboard_auth)])
+def research_stages(run_id: uuid.UUID, attempt: int | None = Query(default=None, ge=0, le=30)) -> Any:
+    # UUID-derived path only. No broker calls; works during a disconnected run.
+    path = settings.artifact_root / "runner-results" / f"{run_id}.json.gz"
+    if not path.exists():
+        return {"status": "unavailable", "attempts": []}
+    payload = json.loads(gzip.decompress(path.read_bytes()))
+    attempts = payload.get("attempts", [])
+    if attempt is not None:
+        if attempt >= len(attempts):
+            raise HTTPException(404, "Stage attempt is unavailable.")
+        return {k: v for k, v in attempts[attempt].items() if k != "events"}
+    return {"protocol": payload.get("protocol"), "status": payload.get("status"),
+            "current_stage": payload.get("current_stage"), "usage_incomplete": payload.get("usage_incomplete", False),
+            "attempts": [{k: v for k, v in a.items() if k not in {"prompt", "result", "events"}} for a in attempts]}
 
 
 @app.get("/api/runs/{run_id}/artifact/{kind}", dependencies=[Depends(dashboard_auth)])

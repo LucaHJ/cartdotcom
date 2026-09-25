@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Any
@@ -9,14 +10,11 @@ from typing import Any
 @dataclass(frozen=True)
 class RiskPolicy:
     # Retain public API keys: null explicitly means no per-security cap.
-    max_new_position_pct: None = None
-    max_total_position_pct: None = None
-    equity_target_allocation_pct: Decimal = Decimal("95")
-    international_equity_target_pct: Decimal = Decimal("25")
-    power_and_grid_target_pct: Decimal = Decimal("15")
-    domestic_diversified_target_pct: Decimal = Decimal("55")
-    max_turnover_pct: Decimal = Decimal("20")
-    min_cash_reserve_pct: Decimal = Decimal("5")
+    max_new_position_pct: Decimal | None = None
+    max_total_position_pct: Decimal | None = None
+    equity_target_allocation_pct: Decimal | None = None
+    max_turnover_pct: Decimal | None = None
+    min_cash_reserve_pct: Decimal = Decimal("0")
     max_orders_per_run: int = 10
     min_share_price: Decimal = Decimal("5")
     max_spread_pct: Decimal = Decimal("1")
@@ -24,6 +22,8 @@ class RiskPolicy:
     max_slippage_pct: Decimal = Decimal("0.75")
     max_attempts: int = 3
     attempt_seconds: int = 300
+    buy_fee_buffer_usd: Decimal = Decimal("5")
+    buy_fee_buffer_per_share_usd: Decimal = Decimal("0.01")
     allowed_security_types: tuple[str, ...] = ("STK",)
     allowed_currencies: tuple[str, ...] = ("USD",)
     fractional_shares: bool = False
@@ -31,13 +31,8 @@ class RiskPolicy:
     margin: bool = False
 
     def allocation_targets(self) -> dict[str, Decimal]:
-        """Strategic paper allocations, deliberately leaving a cash buffer."""
-        return {
-            "DOMESTIC_DIVERSIFIED": self.domestic_diversified_target_pct,
-            "INTERNATIONAL_EQUITY": self.international_equity_target_pct,
-            "POWER_AND_GRID": self.power_and_grid_target_pct,
-            "CASH_RESERVE": self.min_cash_reserve_pct,
-        }
+        """No mandatory equity/industry targets; each run chooses a full plan."""
+        return {}
 
     def public(self) -> dict[str, Any]:
         result = asdict(self)
@@ -84,7 +79,7 @@ def validate_decision_shape(decision: dict[str, Any]) -> None:
         raise PolicyViolation("Action must be BUY, SELL, or HOLD.")
     if asset_type != "US_EQUITY":
         raise PolicyViolation("Crypto and all non-US-equity asset types are prohibited.")
-    if allocation_bucket not in {"DOMESTIC_DIVERSIFIED", "INTERNATIONAL_EQUITY", "POWER_AND_GRID"}:
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,63}", allocation_bucket):
         raise PolicyViolation("Invalid strategic allocation bucket.")
     try:
         target = Decimal(str(decision.get("target_weight_pct", 0)))
@@ -113,7 +108,10 @@ def proposed_order(
     bid: Decimal,
     ask: Decimal,
     turnover_used: Decimal,
+    allocation_policy: RiskPolicy | None = None,
+    industry_available: Decimal | None = None,
 ) -> dict[str, Any] | None:
+    policy = allocation_policy or POLICY
     validate_decision_shape(decision)
     action = str(decision["action"]).upper()
     asset_type = str(decision["asset_type"]).upper()
@@ -130,17 +128,23 @@ def proposed_order(
 
     target_pct = Decimal(str(decision["target_weight_pct"]))
     desired_value = net_liquidation * target_pct / 100
-    allocation_cap = Decimal("100") - POLICY.min_cash_reserve_pct
+    allocation_cap = Decimal("100") - policy.min_cash_reserve_pct
+    if policy.max_total_position_pct is not None:
+        desired_value = min(desired_value, net_liquidation * policy.max_total_position_pct / 100)
 
     if action == "BUY":
         desired_increase = max(Decimal("0"), desired_value - current_market_value)
         allocation_remaining = max(Decimal("0"), net_liquidation * allocation_cap / 100 - asset_class_value)
-        reserve = net_liquidation * POLICY.min_cash_reserve_pct / 100
-        affordable = max(Decimal("0"), cash - reserve)
+        reserve = net_liquidation * policy.min_cash_reserve_pct / 100
+        affordable = max(Decimal("0"), cash - reserve - POLICY.buy_fee_buffer_usd)
         notional = min(desired_increase, allocation_remaining, affordable)
+        if policy.max_new_position_pct is not None and current_quantity == 0:
+            notional = min(notional, net_liquidation * policy.max_new_position_pct / 100)
+        if industry_available is not None:
+            notional = min(notional, industry_available)
         price = ask * (Decimal("1") + POLICY.initial_slippage_pct / 100)
         risk_price = ask * (Decimal("1") + POLICY.max_slippage_pct / 100)
-        quantity = quantity_for_asset_type(notional / risk_price, asset_type)
+        quantity = quantity_for_asset_type(notional / (risk_price + POLICY.buy_fee_buffer_per_share_usd), asset_type)
         side = "BUY"
     else:
         desired_decrease = max(Decimal("0"), current_market_value - desired_value)
@@ -154,13 +158,13 @@ def proposed_order(
     if quantity <= 0:
         return None
     notional = quantity * risk_price
-    turnover_cap = net_liquidation * POLICY.max_turnover_pct / 100
-    if turnover_used + notional > turnover_cap:
+    turnover_cap = net_liquidation * policy.max_turnover_pct / 100 if policy.max_turnover_pct is not None else None
+    if turnover_cap is not None and turnover_used + notional > turnover_cap:
         remaining = max(Decimal("0"), turnover_cap - turnover_used)
         quantity = quantity_for_asset_type(remaining / risk_price, asset_type)
         notional = quantity * risk_price
     if quantity <= 0:
-        raise PolicyViolation("The 20% per-run turnover cap leaves no order capacity.")
+        raise PolicyViolation("The run-selected turnover cap leaves no order capacity.")
     if side == "SELL" and quantity > current_quantity:
         raise PolicyViolation("Sell quantity exceeds current long holdings.")
     return {

@@ -172,7 +172,9 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
                      "(SELECT created_at FROM research_runs WHERE id=%s) LIMIT 1", (run_id,)):
             set_queue_status(run_id, "superseded", "Newer research is available; prior submissions reconciled.", True)
             return
-        context = fetch_one("SELECT research_context FROM research_runs WHERE id=%s", (run_id,))["research_context"] or {}
+        research = fetch_one("SELECT research_context,allocation_plan FROM research_runs WHERE id=%s", (run_id,))
+        context = research["research_context"] or {}
+        allocation_plan = research.get("allocation_plan")
         attempted = fetch_one("SELECT id FROM orders WHERE run_id=%s LIMIT 1", (run_id,))
         if not attempted and (not context.get("research_data_status", {}).get("portfolio_known") or
                               context.get("account_id") != snapshot["account_id"] or
@@ -182,7 +184,8 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
         capability = fetch_one("SELECT * FROM broker_status WHERE singleton=true") or {}
         if not capability.get("api_us_stock_order_access"):
             raise RuntimeError("Waiting for the stock paper-order capability check to pass.")
-        decisions = fetch_all("SELECT * FROM decisions WHERE run_id=%s ORDER BY created_at", (run_id,))
+        decisions = fetch_all("SELECT * FROM decisions WHERE run_id=%s ORDER BY "
+                              "CASE action WHEN 'SELL' THEN 0 WHEN 'HOLD' THEN 1 ELSE 2 END,created_at", (run_id,))
         fallback_logged = bool(fetch_one("SELECT id FROM run_events WHERE run_id=%s AND event_type='execution.fx_fallback' LIMIT 1", (run_id,)))
         for decision in decisions:
             if decision["validation_status"] in FINAL_DECISIONS:
@@ -213,7 +216,7 @@ def process_queue_entry(entry: dict[str, Any]) -> None:
             usage = fetch_one("SELECT COALESCE(sum(filled_quantity*COALESCE(average_fill_price,limit_price)),0) AS amount FROM orders WHERE run_id=%s", (run_id,))
             try:
                 _execute_decision(broker, run_id, decision, snapshot, Decimal(str(usage["amount"])),
-                                  Decimal(str(capital["cash_usd"])), Decimal(str(capital["net_liquidation_usd"])))
+                                  Decimal(str(capital["cash_usd"])), Decimal(str(capital["net_liquidation_usd"])), allocation_plan)
             except PolicyViolation as exc:
                 with connection() as conn:
                     conn.execute("UPDATE decisions SET validation_status='rejected',validation_message=%s WHERE id=%s", (str(exc), decision["id"]))

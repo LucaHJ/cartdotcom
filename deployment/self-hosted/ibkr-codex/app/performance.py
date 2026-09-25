@@ -82,6 +82,15 @@ def _fetch_public_daily_price(symbol: str, now: datetime | None = None) -> dict[
             points.sort(key=lambda item: item[0])
             observed, price = points[-1]
             previous = points[-2][1] if len(points) > 1 else None
+            meta = result.get("meta", {})
+            latest_price = _decimal(meta.get("regularMarketPrice"))
+            latest_time = meta.get("regularMarketTime")
+            if latest_time and latest_price > 0:
+                latest_observed = datetime.fromtimestamp(int(latest_time), UTC)
+                if observed <= latest_observed <= now:
+                    # Daily bars are stamped at the open, not their latest update.
+                    # Pair the regular-session quote with its actual observation time.
+                    observed, price = latest_observed, latest_price
             return {
                 "symbol": symbol,
                 "price": price,

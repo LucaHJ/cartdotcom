@@ -11,6 +11,7 @@ from urllib.parse import quote
 import httpx
 
 from app.config import settings
+from app.artifacts import read_artifact
 from app.database import connection, fetch_all, fetch_one
 
 
@@ -323,6 +324,22 @@ def format_run_report(
             lines.append(f"  Thesis: {_short(item['thesis'])}")
         if item.get("validation_message"):
             lines.append(f"  Validation: {_short(item['validation_message'], 500)}")
+    research = run.get("research_output") or {}
+    dossier = research.get("research_dossier", {})
+    if dossier:
+        screened = [row for stage in dossier.get("stages", []) for row in stage.get("result", {}).get("industries", [])]
+        lines.extend(["", f"Event-driven research: {len(screened)} industry screens; 9 required stages.",
+                      "Industry screen verdicts:"])
+        lines.extend(f"- {r['industry']}: {r['verdict']} — {_short(r.get('thesis'), 350)}" for r in screened)
+    conclusion = research.get("research_conclusion", {})
+    for key, title in (("event_to_price_analysis", "Events, industry connections and prices"),
+                       ("why_this_portfolio", "Why this portfolio"), ("rejected_opportunities", "Opportunities not selected"),
+                       ("audit_responses", "Skeptical review responses")):
+        if conclusion.get(key):
+            lines.extend(["", title + ":", _short(conclusion[key], 5000)])
+    plan = run.get("allocation_plan")
+    if plan:
+        lines.extend(["", "Run-selected allocation plan (null = no allocation cap):", json.dumps(plan, default=str)])
     lines.extend(["", "Paper-order actions:"])
     if not orders:
         lines.append("- No paper orders were submitted.")
@@ -347,6 +364,11 @@ def send_run_report(run_id: str, phase: str = "research") -> bool:
     run = fetch_one("SELECT * FROM research_runs WHERE id=%s", (run_id,))
     if not run:
         return False
+    if run.get("output_path"):
+        try:
+            run["research_output"] = json.loads(read_artifact(run["output_path"]))
+        except (OSError, ValueError):
+            run["research_output"] = {}
     queue = fetch_one("SELECT status,reason FROM execution_queue WHERE run_id=%s", (run_id,))
     run["execution_status"] = queue["status"] if queue else "not started"
     run["execution_reason"] = queue["reason"] if queue else "No queued orders."

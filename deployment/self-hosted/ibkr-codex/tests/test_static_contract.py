@@ -8,8 +8,10 @@ def test_dashboard_discloses_safety_boundary_and_limits() -> None:
     assert "Engage kill switch" in value
     assert "Delayed US quotes permitted" in value
     assert "backend/ibkr_codex" in value
-    assert "International target" in value
-    assert "Power / grid target" in value
+    assert "Agent-selected" in value
+    assert "Run-selected allocation plan" in value
+    assert "36 industries" in value
+    assert "research-stages" in value
     assert "Execution FX" in value
     assert "$20,000 strategy-slice performance · updated hourly" in value
     assert "Hourly performance archive" in value

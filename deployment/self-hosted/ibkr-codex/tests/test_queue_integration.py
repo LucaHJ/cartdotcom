@@ -17,6 +17,7 @@ from unittest.mock import patch
 from app import database as db, execution, notifications, workflow
 from app.broker import Quote
 from app.fx import ExternalFxRate
+from research_samples import full_output, plan
 
 
 class FakeBroker:
@@ -106,13 +107,13 @@ class QueueIntegrationTests(unittest.TestCase):
         with db.connection() as conn:
             conn.execute("INSERT INTO portfolio_cache(singleton,snapshot) VALUES(true,%s::jsonb)", (json.dumps(snapshot),))
             conn.commit()
-        self.output = dict(run_summary="Offline research test", decisions=[dict(symbol="SPY", asset_type="US_EQUITY",
-                           allocation_bucket="DOMESTIC_DIVERSIFIED", action="BUY", target_weight_pct=5,
-                           confidence=0.7, thesis="Test", risks=[],
-                           citations=["https://www.sec.gov/"])])
+        self.output = full_output()
         self.payload = dict(ok=True, result=self.output, events=[], usage=dict(input_tokens=100, output_tokens=20),
                             runtime_seconds=1, completed_at=datetime.now(UTC).isoformat())
-        response = SimpleNamespace(status_code=200, is_error=False, json=lambda: self.payload)
+        def response_payload():
+            self.output["allocation_plan"] = plan(self.output["decisions"])
+            return self.payload
+        response = SimpleNamespace(status_code=200, is_error=False, json=response_payload)
         patches = [patch.object(workflow.httpx, "post", return_value=response),
                    patch.object(workflow, "_news_context", return_value={"available": False}),
                    patch.object(workflow, "send_run_report"),
@@ -155,6 +156,18 @@ class QueueIntegrationTests(unittest.TestCase):
         execution.process_next_execution()
         self.assertEqual(len(FakeBroker.submissions), 1)
 
+    def test_adaptive_plan_is_persisted_and_incomplete_research_never_queues(self):
+        run_id = self.research()
+        saved = db.fetch_one("SELECT allocation_plan FROM research_runs WHERE id=%s", (run_id,))["allocation_plan"]
+        self.assertEqual(saved["cash_target_pct"], 95)
+        self.assertIsNone(saved["turnover_cap_pct"])
+        self.output["research_dossier"]["stages"].pop()
+        failed = workflow.queue_run(datetime.now(UTC), "test")
+        workflow.execute_run(failed)
+        self.assertEqual(db.fetch_one("SELECT status FROM research_runs WHERE id=%s", (failed,))["status"], "failed")
+        self.assertIsNone(db.fetch_one("SELECT * FROM execution_queue WHERE run_id=%s", (failed,)))
+        self.assertEqual(self.queue_status(run_id), "pending")
+
     def test_aud_fx_permission_failure_executes_with_audited_fallback(self):
         run_id = self.research()
         db.set_setting("virtual_cash_reserve_currency", "AUD", "test")
@@ -186,7 +199,7 @@ class QueueIntegrationTests(unittest.TestCase):
         workflow.execute_run(second)
         row = db.fetch_one("SELECT status,error FROM research_runs WHERE id=%s", (second,))
         self.assertEqual(row["status"], "failed")
-        self.assertIn("more than 10", row["error"])
+        self.assertIn("Too many actionable", row["error"])
 
     def test_lost_ack_reconciles_fill_without_duplicate(self):
         run_id = self.research()

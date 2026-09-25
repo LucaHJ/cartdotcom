@@ -44,7 +44,7 @@ class Settings:
     codex_runner_url: str = os.getenv("CODEX_RUNNER_URL", "http://127.0.0.1:3010/research")
     codex_model: str = os.getenv("CODEX_MODEL", "gpt-5.6-sol")
     codex_reasoning_effort: str = os.getenv("CODEX_REASONING_EFFORT", "xhigh")
-    codex_timeout_seconds: int = int(os.getenv("CODEX_TIMEOUT_SECONDS", "7200"))
+    codex_timeout_seconds: int = int(os.getenv("CODEX_TIMEOUT_SECONDS", "10800"))
     news_signal_origin: str = os.getenv("NEWS_SIGNAL_ORIGIN", "").rstrip("/")
     news_signal_token: str = _secret("NEWS_SIGNAL_TOKEN")
     email_to: str = os.getenv("EMAIL_TO", "lucajeannin@icloud.com")

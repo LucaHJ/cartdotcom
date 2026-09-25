@@ -34,7 +34,7 @@
     "decisions": {
       "type": "array",
       "minItems": 0,
-      "maxItems": 20,
+      "maxItems": 80,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -42,7 +42,7 @@
         "properties": {
           "symbol": { "type": "string", "pattern": "^[A-Z0-9.-]{1,12}$" },
           "asset_type": { "type": "string", "enum": ["US_EQUITY"] },
-          "allocation_bucket": { "type": "string", "enum": ["DOMESTIC_DIVERSIFIED", "INTERNATIONAL_EQUITY", "POWER_AND_GRID"] },
+          "allocation_bucket": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$" },
           "action": { "type": "string", "enum": ["BUY", "SELL", "HOLD"] },
           "target_weight_pct": { "type": "number", "minimum": 0, "maximum": 100 },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },

@@ -78,7 +78,7 @@ services:
       CODEX_RUNNER_URL: http://codex-runner:3010/research
       CODEX_MODEL: gpt-5.6-sol
       CODEX_REASONING_EFFORT: xhigh
-      CODEX_TIMEOUT_SECONDS: "7200"
+      CODEX_TIMEOUT_SECONDS: "10800"
       NEWS_SIGNAL_ORIGIN: http://news-api:3000
       NEWS_SIGNAL_TOKEN_FILE: /run/secrets/dashboard_token
       EMAIL_TO: lucajeannin@icloud.com
@@ -159,7 +159,7 @@ services:
       CODEX_HOME: /codex-auth
       CODEX_MODEL: gpt-5.6-sol
       CODEX_REASONING_EFFORT: xhigh
-      CODEX_TIMEOUT_SECONDS: "7200"
+      CODEX_TIMEOUT_SECONDS: "10800"
       RUNNER_PORT: "3010"
       ARTIFACT_ROOT: /data/artifacts
       INTERNAL_EVENT_URL: http://api:3000/internal/run-event

@@ -218,6 +218,7 @@ def _execute_decision(
     turnover_used: Decimal,
     cash_available: Decimal,
     policy_net_liquidation: Decimal,
+    allocation_plan: dict[str, Any] | None = None,
 ) -> tuple[Decimal, Decimal]:
     if setting_bool("kill_switch", True) or not setting_bool("trading_enabled", False):
         raise RuntimeError("The execution gate closed; decision remains queued.")
@@ -234,6 +235,7 @@ def _execute_decision(
     if contract.currency != "USD" or contract.secType != "STK":
         raise PolicyViolation("The resolved contract does not match the approved USD asset type.")
     first_quote = broker.quote(contract)
+    from app.allocation import execution_policy, industry_room
     proposal = proposed_order(
         decision=decision,
         net_liquidation=policy_net_liquidation,
@@ -244,6 +246,8 @@ def _execute_decision(
         bid=first_quote.bid,
         ask=first_quote.ask,
         turnover_used=turnover_used,
+        allocation_policy=execution_policy(allocation_plan, symbol),
+        industry_available=industry_room(allocation_plan, symbol, snapshot, policy_net_liquidation),
     )
     prior = fetch_all("SELECT * FROM orders WHERE decision_id=%s ORDER BY attempt", (decision["id"],))
     if any(not item["terminal"] for item in prior):
@@ -359,7 +363,25 @@ def research_context() -> dict[str, Any]:
     }
     snapshot["calendar"] = research_day_status(datetime.now(UTC))
     snapshot["strategy_performance"] = latest_strategy_performance()
+    # Compact saved history is broker-independent and contains only the strategy.
+    history = fetch_all(
+        "SELECT DISTINCT ON (date_trunc('day',observed_hour)) observed_hour,snapshot "
+        "FROM portfolio_performance_history WHERE observed_hour >= now()-interval '90 days' "
+        "ORDER BY date_trunc('day',observed_hour) DESC,observed_hour DESC LIMIT 90")
+    snapshot["performance_history"] = [compact_research_history(r) for r in reversed(history)]
+    snapshot["confirmed_trades"] = fetch_all(
+        "SELECT e.symbol,e.side,e.shares,e.price,e.commission,e.executed_at FROM executions e "
+        "JOIN orders o ON o.id=e.order_id ORDER BY e.executed_at DESC LIMIT 200")
+    snapshot["history_limitations"] = "Up to 90 daily strategy marks and 200 confirmed strategy trades; not a total-return benchmark series. Obtain matched benchmark observations independently; never invent absent prices, dividends or FX."
     return snapshot
+
+
+def compact_research_history(row):
+    value = row["snapshot"]
+    keys = ("strategy_value", "strategy_cash", "invested_value", "total_return_pct", "base_to_usd", "complete")
+    position_keys = ("symbol", "quantity", "last_usd", "average_cost_usd", "market_value_usd", "price_observed_at", "price_stale")
+    return {"observed_hour": row["observed_hour"], **{k: value.get(k) for k in keys},
+            "positions": [{k: p.get(k) for k in position_keys} for p in value.get("positions", [])]}
 
 
 def execute_run(run_id: str) -> None:
@@ -390,7 +412,7 @@ def execute_run(run_id: str) -> None:
                 "prompt_path=%s,prompt_sha256=%s,artifact_bytes=%s WHERE id=%s",
                 (json.dumps(snapshot, default=str), prompt_artifact.path, prompt_artifact.sha256, prompt_artifact.bytes, run_id))
             conn.commit()
-        add_event(run_id, "research.started", "Codex deep-dive research started with a two-hour ceiling.")
+        add_event(run_id, "research.started", "Nine-stage, 36-industry research started with a three-hour ceiling.")
         response = httpx.post(settings.codex_runner_url, json={"run_id": run_id, "prompt": prompt},
                               timeout=settings.codex_timeout_seconds + 120)
         if response.status_code == 429:
@@ -419,6 +441,13 @@ def execute_run(run_id: str) -> None:
             conn.commit()
         if payload.get("ok") is False or output is None:
             raise RuntimeError(payload.get("error", "Research returned no result."))
+        from app.research_protocol import VERSION, validate_research_output
+        if f"Research protocol: {VERSION}" in prompt or "allocation_plan" in output:
+            validate_research_output(output, snapshot.get("positions", []), snapshot.get("strategy_performance"))
+            with connection() as conn:
+                conn.execute("UPDATE research_runs SET allocation_plan=%s::jsonb WHERE id=%s",
+                             (json.dumps(output["allocation_plan"]), run_id))
+                conn.commit()
         decisions = _insert_decisions(run_id, output)
         actionable = sum(item["action"] != "HOLD" for item in decisions)
         with connection() as conn:

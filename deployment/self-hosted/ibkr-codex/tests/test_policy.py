@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from app.policy import POLICY, PolicyViolation, proposed_order, validate_decision_shape
+from app.allocation import LEGACY_POLICY
 
 
 def decision(action: str, target: str) -> dict:
@@ -65,21 +66,20 @@ def test_penny_stock_and_wide_spread_are_rejected() -> None:
 def test_policy_defaults_match_the_published_limits() -> None:
     assert POLICY.public()["max_new_position_pct"] is None
     assert POLICY.public()["max_total_position_pct"] is None
-    assert POLICY.max_turnover_pct == Decimal("20")
-    assert POLICY.min_cash_reserve_pct == Decimal("5")
+    assert POLICY.max_turnover_pct is None
+    assert POLICY.min_cash_reserve_pct == Decimal("0")
     assert POLICY.max_orders_per_run == 10
     assert POLICY.max_attempts == 3
 
 
 def test_standing_allocation_targets_are_complete() -> None:
     targets = POLICY.allocation_targets()
-    assert targets == {"DOMESTIC_DIVERSIFIED": Decimal("55"), "INTERNATIONAL_EQUITY": Decimal("25"),
-                       "POWER_AND_GRID": Decimal("15"), "CASH_RESERVE": Decimal("5")}
-    assert sum(targets.values()) == Decimal("100")
+    assert targets == {}
 
 
 def test_buy_reserves_cash_at_the_maximum_permitted_reprice() -> None:
     result = proposed_order(
+        allocation_policy=LEGACY_POLICY,
         decision=decision("BUY", "5"), net_liquidation=Decimal("100000"), cash=Decimal("6000"),
         current_quantity=Decimal("0"), current_market_value=Decimal("0"), bid=Decimal("99.90"),
         ask=Decimal("100"), asset_class_value=Decimal("0"), turnover_used=Decimal("0"),
@@ -94,6 +94,7 @@ def test_large_stock_or_etf_target_obeys_only_remaining_run_turnover(symbol) -> 
     recommendation = decision("BUY", "60")
     recommendation["symbol"] = symbol
     result = proposed_order(
+        allocation_policy=LEGACY_POLICY,
         decision=recommendation, net_liquidation=Decimal("100000"), cash=Decimal("80000"),
         current_quantity=Decimal("200"), current_market_value=Decimal("20000"), bid=Decimal("99.90"),
         ask=Decimal("100"), asset_class_value=Decimal("20000"), turnover_used=Decimal("1000"),
@@ -115,6 +116,7 @@ def test_sell_can_retain_more_than_former_position_cap() -> None:
 
 def test_unrestricted_target_still_preserves_overall_equity_allocation() -> None:
     result = proposed_order(
+        allocation_policy=LEGACY_POLICY,
         decision=decision("BUY", "100"), net_liquidation=Decimal("100000"), cash=Decimal("50000"),
         current_quantity=Decimal("0"), current_market_value=Decimal("0"), bid=Decimal("100"),
         ask=Decimal("100"), asset_class_value=Decimal("94000"), turnover_used=Decimal("0"),
@@ -136,6 +138,7 @@ def test_high_target_weights_are_valid_for_all_actions(action) -> None:
 
 def test_large_buy_cannot_spend_reserved_cash() -> None:
     result = proposed_order(
+        allocation_policy=LEGACY_POLICY,
         decision=decision("BUY", "95"), net_liquidation=Decimal("100000"), cash=Decimal("6000"),
         current_quantity=Decimal("0"), current_market_value=Decimal("0"), bid=Decimal("100"),
         ask=Decimal("100"), asset_class_value=Decimal("94000"), turnover_used=Decimal("0"),
