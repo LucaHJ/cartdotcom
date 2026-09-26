@@ -1,4 +1,27 @@
 .project-page { letter-spacing: 0; }
+.project-page { scroll-behavior: smooth; }
+.project-section { scroll-margin-top: 36px; }
+.draft-note { font-size: 14px; margin: 24px 0 0; }
+.capture-placeholder {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 240px;
+    aspect-ratio: 16 / 8;
+    border-block: 1px dashed var(--ink);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 16px;
+    padding: 24px 0;
+}
+.capture-placeholder span { font-size: 14px; }
+.capture-placeholder strong { font-size: 28px; line-height: 1.25; max-width: 600px; }
+.public-entry { padding: 28px 0; border-top: 1px solid var(--ink); }
+.public-entry h2 { font-size: 21px; margin: 0 0 14px; }
+.public-entry p { font-size: 18px; line-height: 1.65; max-width: 760px; }
+.public-entry a { display: inline-block; text-decoration: underline; text-underline-offset: 5px; font-size: 19px; font-weight: 800; line-height: 1.5; }
+.article-contents { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 0 0 30px; }
+.article-contents a { font-size: 14px; text-decoration: underline; text-underline-offset: 4px; }
 .project-content {
     width: min(calc(100% - 432px), 1040px);
     margin: 100px auto 64px max(400px, calc((100% - 1040px) / 2));

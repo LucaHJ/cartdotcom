@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Social Media Research to Database pipeline | Luca Jeannin</title>
+    <title>Public View: Social Media Research to Database pipeline | Luca Jeannin</title>
     <meta name="description" content="Turning shared social posts into an organised research library while retaining the evidence and source links behind each finding.">
     <script>
         try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
@@ -11,8 +11,10 @@
     <link rel="stylesheet" href="home.css?v=sidebar-20260923">
     <link rel="stylesheet" href="project-pages.css?v=case-studies-20260926">
     <script src="project-pages.js" defer></script>
+    <link rel="stylesheet" href="public-projects.css?v=20260926">
+    <script src="public-projects.js?v=20260926" defer></script>
 </head>
-<body class="project-page">
+<body class="project-page public-page" data-dataset="research">
     <a class="skip-link" href="#project-content">Skip to project</a>
     <svg class="logo-filters" width="0" height="0" aria-hidden="true" focusable="false">
         <defs>
@@ -97,30 +99,22 @@
     </details>
     <main id="project-content" class="project-content">
         <header class="project-heading">
-            <p class="project-category">Research pipeline / Searchable library</p>
+            <p class="project-category">Live production / Read only</p>
             <h1>Social Media Research to Database pipeline</h1>
-            <p class="project-lead">Turning shared social posts into an organised research library while retaining the evidence and source links behind each finding.</p>
-            <p class="project-stack">Python / JavaScript / PostgreSQL / Media processing / Cloudflare</p>
-
+            <a class="case-study-link" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Project breakdown &#8599;</a>
         </header>
-        <section class="public-entry"><h2>Live Production View</h2><p>Search production resource records and read their derived summaries alongside original source links. The public library excludes private messages, sender identities, account settings and processing controls.</p><a href="public-research.html" target="_blank" rel="noopener noreferrer">Open the public research library <span aria-hidden="true">&#8599;</span></a></section>
-        <ol class="project-flow" aria-label="Processing sequence"><li>Receive and deduplicate a shared post</li><li>Capture available text, audio and visual evidence</li><li>Research and assemble linked resource records</li><li>Publish and index the library for retrieval</li></ol>
-        <nav class="article-contents" aria-label="On this page"><a href="#section-0">Beyond Saving a Link</a><a href="#section-1">Intake and Evidence</a><a href="#section-2">Checkpointed Processing</a><a href="#section-3">From Research to Library</a><a href="#section-4">Changing the Storage Architecture</a><a href="#section-5">Failures Behind Green Services</a><a href="#section-6">Lessons and Public Boundaries</a></nav>
-        <section class="project-section" id="section-0"><h2>Beyond Saving a Link</h2><div><p>A saved Reel or carousel can contain a useful resource without making it easy to find again. This pipeline extracts the available evidence, researches the referenced material and stores linked findings in a library. The source post remains part of the record so the result can be checked rather than becoming an unattributed summary.</p>
-<p>The private reader combines a searchable file tree, retained media and persistent reading state. Search can work across creators, posts and extracted resources. The public copy exposes a narrower resource catalogue drawn from the same production database, without exposing the private intake or operator session.</p></div></section>
-        <section class="project-section" id="section-1"><h2>Intake and Evidence</h2><div><p>Incoming shares are normalised and deduplicated before expensive work begins. Reels and carousels require different media handling, and the evidence available for one post is not assumed to exist for another. Descriptions, transcript or audio information, selected frames and captured comments can contribute when present.</p>
-<p>The pipeline keeps source evidence distinct from the derived research. A resource name, canonical link, summary and explanation of usefulness are separate from the original post and its media. This makes it possible to follow a finding back to its origin and avoids treating every generated sentence as a direct statement by the creator.</p></div></section>
-        <section class="project-section" id="section-2"><h2>Checkpointed Processing</h2><div><p>Long-running media and research jobs are divided into stages with persisted checkpoints. Dispatchers claim work with explicit lease identity, and the control path verifies returned checkpoints before allowing publication. Compute output is not trusted merely because a worker produced it.</p>
-<p>This matters during crashes and restarts. A process may disappear after doing useful work but before reporting completion. Recoverable stage state and idempotent publication reduce duplicate work and prevent retries from creating duplicate library entries. Claims that were acquired but never started also need a recovery path.</p></div></section>
-        <section class="project-section" id="section-3"><h2>From Research to Library</h2><div><p>The processing stages assemble resource records and linked Markdown or HTML artifacts. Retrieval documents bring searchable evidence together while retaining the job and source association. Resource identity and canonical links help connect repeated references to the same underlying tool or idea.</p>
-<p>When retrieval is ambiguous, the system can return candidates rather than guessing which source the user meant. That is an important distinction for a personal research archive: a confident answer linked to the wrong post is less useful than a short set of inspectable possibilities.</p>
-<p>The public library supports searching and opening the current published resource summaries. It links to external resources and original posts where valid public URLs exist; it does not redistribute private direct-message payloads or the entire retained media archive.</p></div></section>
-        <section class="project-section" id="section-4"><h2>Changing the Storage Architecture</h2><div><p>The system evolved from edge-oriented storage and mirrors toward a self-hosted PostgreSQL and disk-backed primary pipeline. Edge intake and fallback components still serve distinct roles. Moving the primary workload did not automatically remove the cost or behaviour of older mirror paths.</p>
-<p>A stale watermark and thumbnail-related triggers continued generating excessive edge reads after the migration. The correction was to make progress explicit through an indexed committed cursor and prevent read-only activity from waking unnecessary work. The lesson was to audit the paths that remained, not only the new primary path.</p></div></section>
-        <section class="project-section" id="section-5"><h2>Failures Behind Green Services</h2><div><p>Leaked SQLite handles eventually exhausted the open-file limit and stalled jobs even though the service processes were still running. Closing handles addressed the resource leak; observing queue progress and handover addressed the misleading health signal. A live process is not proof that a pipeline is completing work.</p>
-<p>Media handling had a different bottleneck. Sequential frame processing could run into FFmpeg timeouts, so frame sampling used targeted seeks instead of requiring every intervening frame to be traversed. This is a workload-specific optimisation: capture the evidence needed for the stage rather than processing the full source indiscriminately.</p></div></section>
-        <section class="project-section" id="section-6"><h2>Lessons and Public Boundaries</h2><div><p>Reliability depends on identity, ownership and progress being visible in durable state. A stage needs to know which claim owns it, what evidence is complete and whether publication has already occurred. Those distinctions make recovery deliberate instead of speculative.</p>
-<p>The public copy is live production data, refreshed through a dedicated read-only projection. It publishes resource findings and source references while leaving sender identifiers, private instructions, messages, runtime secrets and controls behind authentication. Research summaries remain derived material and should be checked against their linked sources.</p></div></section>
+        <div class="snapshot-line"><p id="snapshot-status" role="status">Loading production records...</p><button id="refresh" class="refresh-button" type="button" aria-label="Refresh data" title="Refresh data"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16M8 16H3v5"/></svg></button></div>
+        <div id="view-tabs" class="view-tabs" role="tablist" aria-label="Records"></div>
+        <div class="data-filters">
+            <label>Search<input id="record-search" type="search" autocomplete="off" placeholder="Search records"></label>
+            <label id="kind-filter-label">Filter<select id="kind-filter"><option value="">All</option></select></label>
+            <label id="horizon-label" hidden>Horizon<select id="horizon"><option>24h</option><option>1h</option><option>6h</option><option>12h</option><option>1d</option><option>48h</option><option>1w</option><option>2w</option><option>1m</option><option>3m</option><option>6m</option><option>1y</option><option>2y</option><option>3y</option><option>4y</option></select></label>
+            <label>Sort<select id="record-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="alphabetical">A to Z</option></select></label>
+        </div>
+        <p id="record-count" class="record-count" aria-live="polite"></p>
+        <section id="records" role="tabpanel" tabindex="0" aria-label="Production records" aria-busy="true"></section>
+        <noscript><p>JavaScript is required to load current production records.</p></noscript>
+        <p class="data-footnote">Derived research summaries with source references. Private messages, sender identities, personal instructions and processing controls are excluded.</p>
     </main>
 </body>
 </html>

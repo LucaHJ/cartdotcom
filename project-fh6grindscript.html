@@ -3,13 +3,13 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>FH6GrindScript | Luca Jeannin</title>
-    <meta name="description" content="A visual macro editor that reacts to screen content, turning a small pixel-triggered input script into inspectable, reusable automation.">
+    <title>Screen State-Based Automation Execution | Luca Jeannin</title>
+    <meta name="description" content="A visual automation editor that evaluates what is actually on screen before running an inspectable sequence of inputs.">
     <script>
         try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
     </script>
     <link rel="stylesheet" href="home.css?v=sidebar-20260923">
-    <link rel="stylesheet" href="project-pages.css?v=sidebar-20260923">
+    <link rel="stylesheet" href="project-pages.css?v=case-studies-20260926">
     <script src="project-pages.js" defer></script>
 </head>
 <body class="project-page">
@@ -82,12 +82,12 @@
             </div>
             <div class="sidebar-projects">
                 <a class="sidebar-home" href="home.html#main-content"><svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg><span>Home</span></a>
-                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer">GForceSimSim</a>
-                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">IBKR</a>
-                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">MangaSaver</a>
-                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer" aria-current="page">FH6GrindScript</a>
-                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">NewsSignalDashboard</a>
-                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Design Instagram Research System</a>
+                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer">G-Force Simulating Centrifuge</a>
+                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">Automated Investment Research and Execution</a>
+                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">Media Library Reader</a>
+                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer" aria-current="page">Screen State-Based Automation Execution</a>
+                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">Media Influence on Market Prices</a>
+                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Social Media Research to Database pipeline</a>
                 <a class="sidebar-project" href="open-close-backtest.html" target="_blank" rel="noopener noreferrer">Open Close Backtest</a>
                 <a class="sidebar-project" href="imdb-top250.html" target="_blank" rel="noopener noreferrer">IMDb Top 250 Re-ranker</a>
                 <a class="sidebar-project" href="https://some-game-designer.itch.io/clocking-off-beta" target="_blank" rel="noopener noreferrer">Clocking Off Beta</a>
@@ -97,40 +97,34 @@
     </details>
     <main id="project-content" class="project-content">
         <header class="project-heading">
-            <p class="project-category">Visual programming / Desktop automation</p>
-            <h1>FH6GrindScript</h1>
-            <p class="project-lead">A visual macro editor that reacts to screen content, turning a small pixel-triggered input script into inspectable, reusable automation.</p>
-            <p class="project-stack">Python / Blockly / JavaScript / pywebview</p>
+            <p class="project-category">Visual automation / Desktop draft</p>
+            <h1>Screen State-Based Automation Execution</h1>
+            <p class="project-lead">A visual automation editor that evaluates what is actually on screen before running an inspectable sequence of inputs.</p>
+            <p class="project-stack">Python / Blockly / pywebview / Screen capture / Native input</p>
+            <p class="draft-note">Draft case study / Screenshots and recordings pending.</p>
         </header>
-
-        <ol class="project-flow" aria-label="Processing sequence">
-            <li>Capture a visual condition</li>
-            <li>Compose Blockly actions</li>
-            <li>Run a matching bind</li>
-            <li>Inspect active steps</li>
-        </ol>
-        <section class="project-section">
-            <h2>What It Does</h2>
-            <div><p>FH6GrindScript watches for saved pixel sets or screen states and runs sequences of keyboard actions. Its Scratch-style editor supports presses, timed waits, held inputs, loops, conditional branches and background checks. A global start/stop hotkey controls execution.</p></div>
-        </section>
-        <section class="project-section">
-            <h2>How It Works</h2>
-            <div><p>Blockly provides the editing canvas inside a desktop WebView, while Python handles screen capture, native input and the runtime. A shared JSON project stores captures, bindings and nested steps. Boolean condition blocks can be reused for activation, branching and waiting, with migration from the earlier pixel-only trigger fields.</p>
-                <p>Each enabled bind has a watcher. Only one bind owns the main execution slot at a time, and its trigger is checked again before actions begin. Runtime block IDs feed status updates back to the editor so the currently executing steps can be highlighted.</p></div>
-        </section>
-        <section class="project-section">
-            <h2>What Needed Solving</h2>
-            <div><p>The first highlighting implementation coloured nested blocks that had not run because its CSS selector reached every descendant. Separately, loop children bypassed the wrapper that tracked active steps. Fixing both paths allowed an outer loop and its executing child to appear together. Short key presses now flash briefly, while waits remain highlighted for their actual duration.</p></div>
-        </section>
-        <section class="project-section">
-            <h2>Lessons From Development</h2>
-            <div><p>A visual programming interface needs a faithful connection between saved blocks, runtime state and feedback. Reusing one condition representation reduced inconsistencies across features. Screen matching also made the limits of visual automation clear: resolution, window placement and animated pixels can change whether a trigger matches.</p></div>
-        </section>
-        <section class="project-section">
-            <h2>Current Scope</h2>
-            <div><p>A Windows screen-content macro editor. Detection uses pixel and screen comparisons; OCR and direct application telemetry are possible extensions, not implemented capabilities claimed here.</p></div>
-        </section>
-
+                <figure class="project-figure capture-figure" id="capture-editor"><div class="capture-placeholder" role="img" aria-label="Building an automation: media pending"><span>Screenshot pending</span><strong>Building an automation</strong></div><figcaption>A Blockly sequence containing a visual condition, input action and wait.</figcaption></figure>
+        <ol class="project-flow" aria-label="Processing sequence"><li>Capture screen or sampled pixels</li><li>Evaluate a saved trigger condition</li><li>Acquire the main execution slot and recheck</li><li>Run actions with live block feedback</li></ol>
+        <nav class="article-contents" aria-label="On this page"><a href="#section-0">From Timed Macro to State Machine</a><a href="#section-1">Describing a Visual State</a><a href="#section-2">A Common Condition Language</a><a href="#section-3">Actions and Execution Ownership</a><a href="#section-4">Showing What Is Running</a><a href="#section-5">What Needed Solving</a><a href="#section-6">Lessons and Limitations</a></nav>
+        <section class="project-section" id="section-0"><h2>From Timed Macro to State Machine</h2><div><p>A fixed sequence of key presses assumes the application is ready at the same time on every run. This project replaces that assumption with conditions derived from screen content. A sequence can wait for a match, branch when a state is present or keep an input held until a condition becomes true.</p>
+<p>The visual editor uses Blockly to represent bindings, triggers and actions. A Python runtime performs native screen capture, hotkey handling and input execution, while pywebview connects that runtime to the editor. A browser fallback supports the editor surface, but the native desktop bridge remains responsible for operating the computer.</p></div></section>
+        <section class="project-section" id="section-1"><h2>Describing a Visual State</h2><div><p>Pixel sets record monitor-relative coordinates and expected RGB colours with a tolerance. A full-screen reference can instead provide a template comparison. Both approaches turn visual evidence into a match score, allowing the threshold to be adjusted to the stability of the target interface.</p>
+<p>A match fraction is literal: four matching samples out of five give 0.8. It is not a probability that the program understands the scene. Choosing stable pixels and appropriate tolerance matters more than presenting that number as intelligence. Animation, display scaling, window position and changing colours can all affect a match.</p>
+<p>The capture preview updates at a modest rate, while the comparison target follows the condition being evaluated at runtime. This keeps inspection connected to the active wait or trigger rather than leaving a stale reference on screen.</p></div></section>
+        <section class="project-section" id="section-2"><h2>A Common Condition Language</h2><div><p>Conditions can combine screen or pixel matches with AND, OR and NOT. They can also inspect target state, whether a binding is active or enabled, numeric comparisons and match-score thresholds. Sharing this condition representation across triggers, branches and loops reduces the number of subtly different ways to describe the same rule.</p>
+<p>Older trigger fields are migrated into the unified trigger-condition representation. Saving a workspace and loading it again must retain that meaning. JSON round-trip behaviour is therefore part of the editor's correctness, not just a convenience for storing blocks.</p></div></section>
+        <figure class="project-figure capture-figure" id="capture-capture"><div class="capture-placeholder" role="img" aria-label="Defining a screen state: media pending"><span>Screenshot pending</span><strong>Defining a screen state</strong></div><figcaption>Reference capture, sampled pixels and the match threshold.</figcaption></figure>
+        <section class="project-section" id="section-3"><h2>Actions and Execution Ownership</h2><div><p>The runtime supports presses, waits, timed holds, holds until a condition, loops until a condition, conditional branches and background watchers. These constructs let an automation express both a planned sequence and the checks that decide when it may continue.</p>
+<p>Each binding may watch for its trigger, but only one main sequence owns the action-execution slot at a time. A trigger is checked again after that slot is acquired. Without the second check, a binding could queue while a screen matched and execute later after the application had moved somewhere else.</p>
+<p>Background watchers belong to the active binding and react to false-to-true transitions. Their work is joined before the main slot is released. That lifecycle prevents a completed sequence from leaving an old watcher competing with the next binding for control.</p></div></section>
+        <section class="project-section" id="section-4"><h2>Showing What Is Running</h2><div><p>A visual program needs runtime feedback at the same level as its editing model. Block identifiers travel through execution so the editor can highlight the action or condition currently being processed. Waits remain highlighted for their actual lifetime, while short input actions are still visible long enough to inspect.</p>
+<p>Nested execution exposed two different problems. A descendant CSS selector made more than the intended block appear active, and a loop path needed to preserve the child step wrapper so its identifiers reached the feedback channel. Correcting both made the highlight describe real execution rather than merely indicating that some outer block was running.</p>
+<p>The editor polls runtime state frequently enough to follow a sequence without treating the UI as a frame-by-frame video stream. The stop hotkey provides an explicit interruption route; visual conditions do not remove the need to supervise automation.</p></div></section>
+        <figure class="project-figure capture-figure" id="capture-execution"><div class="capture-placeholder" role="img" aria-label="Following a running sequence: media pending"><span>GIF pending</span><strong>Following a running sequence</strong></div><figcaption>The active block highlight moving through a loop and conditional branch.</figcaption></figure>
+        <section class="project-section" id="section-5"><h2>What Needed Solving</h2><div><p>The hardest design issue was coordinating concurrent observation with serial input. Watching several bindings is useful, but allowing each to send keys independently would make the result depend on timing. The shared execution slot and post-acquisition trigger check establish an understandable ordering.</p>
+<p>Another issue was keeping the editor, saved document and runtime aligned as the condition model evolved. A block that displays correctly but reloads with a different trigger is a behavioural bug. Migration and round-trip checks protect that contract across all three representations.</p></div></section>
+        <section class="project-section" id="section-6"><h2>Lessons and Limitations</h2><div><p>State-based automation is more adaptable than a sequence of sleeps, but it still depends on the quality of its observations. This implementation does not infer game state from telemetry or OCR. A visual match remains vulnerable to display and application changes, so thresholds and sample locations must be treated as part of the program.</p>
+<p>The broader lesson is that an automation tool has two users: the person defining a sequence and the person trying to understand why it ran. Explicit ownership, visible conditions, persistent block identity and inspectable feedback serve both.</p></div></section>
     </main>
 </body>
 </html>

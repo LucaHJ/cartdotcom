@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Media Influence on Market Prices | Luca Jeannin</title>
+    <title>Public View: Media Influence on Market Prices | Luca Jeannin</title>
     <meta name="description" content="A growing news corpus connected to later market observations, with explicit timing and sample-size limits on what those relationships can mean.">
     <script>
         try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
@@ -11,8 +11,10 @@
     <link rel="stylesheet" href="home.css?v=sidebar-20260923">
     <link rel="stylesheet" href="project-pages.css?v=case-studies-20260926">
     <script src="project-pages.js" defer></script>
+    <link rel="stylesheet" href="public-projects.css?v=20260926">
+    <script src="public-projects.js?v=20260926" defer></script>
 </head>
-<body class="project-page">
+<body class="project-page public-page" data-dataset="market">
     <a class="skip-link" href="#project-content">Skip to project</a>
     <svg class="logo-filters" width="0" height="0" aria-hidden="true" focusable="false">
         <defs>
@@ -97,30 +99,22 @@
     </details>
     <main id="project-content" class="project-content">
         <header class="project-heading">
-            <p class="project-category">Data collection / Market observations</p>
+            <p class="project-category">Live production / Read only</p>
             <h1>Media Influence on Market Prices</h1>
-            <p class="project-lead">A growing news corpus connected to later market observations, with explicit timing and sample-size limits on what those relationships can mean.</p>
-            <p class="project-stack">JavaScript / PostgreSQL / Background workers / Cloudflare / Snapshot publishing</p>
-
+            <a class="case-study-link" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">Project breakdown &#8599;</a>
         </header>
-        <section class="public-entry"><h2>Live Production View</h2><p>Browse production article records, filter by source or ticker and inspect stored price changes over the available horizons. Missing observations remain missing; the page does not manufacture predictions.</p><a href="public-market.html" target="_blank" rel="noopener noreferrer">Open the public news and market view <span aria-hidden="true">&#8599;</span></a></section>
-        <ol class="project-flow" aria-label="Processing sequence"><li>Collect articles with source provenance</li><li>Classify relevance and identify explicit tickers</li><li>Record features and later market observations</li><li>Publish bounded, timestamped research views</li></ol>
-        <nav class="article-contents" aria-label="On this page"><a href="#section-0">Collection Before Prediction</a><a href="#section-1">Provenance and Measurable Features</a><a href="#section-2">Connecting News to Prices</a><a href="#section-3">Reproducible Daily Snapshots</a><a href="#section-4">The Denominator Problem</a><a href="#section-5">What the Architecture Solves</a><a href="#section-6">Lessons and Scope</a></nav>
-        <section class="project-section" id="section-0"><h2>Collection Before Prediction</h2><div><p>The current collection profile prioritises investment relevance and directly identifiable tickers. It does not ask the collection worker to browse for supporting evidence, write a summary, assign sentiment or predict a market move. This narrower contract makes the incoming corpus easier to inspect and separates collection from later analysis.</p>
-<p>Historical bullish and bearish predictions are retained as historical data, not relabelled as outputs of the current profile. New records can be unscored. Keeping those generations distinct avoids suggesting that all entries were produced by one unchanged methodology.</p></div></section>
-        <section class="project-section" id="section-1"><h2>Provenance and Measurable Features</h2><div><p>Article records preserve a source link and discovery and publication timing. Direction-neutral analysis extracts properties such as document structure, words and phrases, ticker mentions, source and timing. Those features can later be compared with observed market behaviour without requiring a sentiment label as the starting point.</p>
-<p>Incremental extraction and bounded database work keep the analysis from repeatedly rebuilding everything. The corpus, feature observations and market records have separate lifecycles: discovering an article does not mean all of its text or future price horizons are already available.</p></div></section>
-        <section class="project-section" id="section-2"><h2>Connecting News to Prices</h2><div><p>A baseline price anchors subsequent observations for a ticker. Each horizon records the time and price available for that observation and the percentage change relative to the baseline. A horizon that has not matured, or for which data is absent, must not be treated as a zero-percent move.</p>
-<p>The public view presents recent stored observations and their source articles. It is a window into the production corpus, not a complete export of every article or every analytical table. The capture time tells visitors when that window was refreshed; each article and observation retains its own timestamp.</p>
-<p>Despite the project title, temporal association does not prove that an article caused a price change. Market-wide events, overlapping coverage and other factors remain possible explanations. The project supports exploration of relationships, not a causal claim.</p></div></section>
-        <section class="project-section" id="section-3"><h2>Reproducible Daily Snapshots</h2><div><p>The deeper relationship analysis uses a fixed daily cutoff at Brisbane midnight. Articles discovered after that cutoff, features generated after it and market observations arriving after it are excluded from that snapshot. Using an exact cutoff prevents a later run from silently including information that was unavailable at the intended point in time.</p>
-<p>Outputs are built into compressed shards with a manifest describing sizes and hashes. Publication changes the active pointer only after staging is complete. If generation fails, the previous complete snapshot remains available rather than exposing a mixture of old and new files.</p></div></section>
-        <section class="project-section" id="section-4"><h2>The Denominator Problem</h2><div><p>One correction concerned a confidence-style score based on samples divided by samples plus 100. The relevant sample count is the number of observations available for the particular horizon, not the size of the original article cohort. A large source cohort cannot supply evidence for a horizon with only one recorded outcome.</p>
-<p>Under that heuristic, one observation gives approximately 0.99 percent, while 100 observations give 50 percent. These values are a sample-coverage heuristic, not statistical significance or a guarantee that observations are independent. Filtering must occur before sorting and limiting so the visible result set actually obeys the requested criteria.</p></div></section>
-        <section class="project-section" id="section-5"><h2>What the Architecture Solves</h2><div><p>The authenticated API, background collectors, market tracking and snapshot generation are separated so a public read does not trigger expensive analytical work. The portfolio copy follows the same principle: it serves small, precomputed read-only projections rather than forwarding arbitrary requests to operator endpoints.</p>
-<p>Timestamps and missing values are first-class data. They make delayed observations, incomplete collection and stale publication visible instead of allowing a polished dashboard to imply a completeness the underlying corpus has not reached.</p></div></section>
-        <section class="project-section" id="section-6"><h2>Lessons and Scope</h2><div><p>Data-pipeline correctness often depends on apparently small choices: the denominator of a score, whether a filter happens before a limit, and which timestamp defines inclusion. Those choices can change the interpretation of an entire result table.</p>
-<p>The public page links back to original sources and publishes bounded metadata and price observations, not full article bodies or private operational logs. It is an engineering research view, not financial advice or evidence of a profitable strategy.</p></div></section>
+        <div class="snapshot-line"><p id="snapshot-status" role="status">Loading production records...</p><button id="refresh" class="refresh-button" type="button" aria-label="Refresh data" title="Refresh data"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16M8 16H3v5"/></svg></button></div>
+        <div id="view-tabs" class="view-tabs" role="tablist" aria-label="Records"></div>
+        <div class="data-filters">
+            <label>Search<input id="record-search" type="search" autocomplete="off" placeholder="Search records"></label>
+            <label id="kind-filter-label">Filter<select id="kind-filter"><option value="">All</option></select></label>
+            <label id="horizon-label" hidden>Horizon<select id="horizon"><option>24h</option><option>1h</option><option>6h</option><option>12h</option><option>1d</option><option>48h</option><option>1w</option><option>2w</option><option>1m</option><option>3m</option><option>6m</option><option>1y</option><option>2y</option><option>3y</option><option>4y</option></select></label>
+            <label>Sort<select id="record-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="alphabetical">A to Z</option></select></label>
+        </div>
+        <p id="record-count" class="record-count" aria-live="polite"></p>
+        <section id="records" role="tabpanel" tabindex="0" aria-label="Production records" aria-busy="true"></section>
+        <noscript><p>JavaScript is required to load current production records.</p></noscript>
+        <p class="data-footnote">Observed price changes do not establish that an article caused a move. An unavailable horizon is not a zero return. Article text remains with the linked publisher.</p>
     </main>
 </body>
 </html>

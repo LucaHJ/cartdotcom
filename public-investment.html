@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Automated Investment Research and Execution | Luca Jeannin</title>
+    <title>Public View: Automated Investment Research and Execution | Luca Jeannin</title>
     <meta name="description" content="Scheduled research, durable decisions and monitored paper-trade execution, with reporting that distinguishes an idea from a confirmed fill.">
     <script>
         try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
@@ -11,8 +11,10 @@
     <link rel="stylesheet" href="home.css?v=sidebar-20260923">
     <link rel="stylesheet" href="project-pages.css?v=case-studies-20260926">
     <script src="project-pages.js" defer></script>
+    <link rel="stylesheet" href="public-projects.css?v=20260926">
+    <script src="public-projects.js?v=20260926" defer></script>
 </head>
-<body class="project-page">
+<body class="project-page public-page" data-dataset="investment">
     <a class="skip-link" href="#project-content">Skip to project</a>
     <svg class="logo-filters" width="0" height="0" aria-hidden="true" focusable="false">
         <defs>
@@ -97,29 +99,22 @@
     </details>
     <main id="project-content" class="project-content">
         <header class="project-heading">
-            <p class="project-category">Research automation / Paper trading</p>
+            <p class="project-category">Live production / Read only / Paper trading</p>
             <h1>Automated Investment Research and Execution</h1>
-            <p class="project-lead">Scheduled research, durable decisions and monitored paper-trade execution, with reporting that distinguishes an idea from a confirmed fill.</p>
-            <p class="project-stack">Python / FastAPI / PostgreSQL / Broker API / Docker</p>
-
+            <a class="case-study-link" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">Project breakdown &#8599;</a>
         </header>
-        <section class="public-entry"><h2>Live Production View</h2><p>Review recent research runs, target allocations and recorded paper executions from the production system. Research and execution remain separate, and the public view has no order controls.</p><a href="public-investment.html" target="_blank" rel="noopener noreferrer">Open the public research and execution view <span aria-hidden="true">&#8599;</span></a></section>
-        <ol class="project-flow" aria-label="Processing sequence"><li>Schedule portfolio research</li><li>Validate and persist target allocations</li><li>Refresh broker state and execution checks</li><li>Reconcile orders and archive outcomes</li></ol>
-        <nav class="article-contents" aria-label="On this page"><a href="#section-0">Research Without Execution</a><a href="#section-1">A Durable Decision Pipeline</a><a href="#section-2">Orders and Reconciliation</a><a href="#section-3">Reporting Has Different Rules</a><a href="#section-4">Failures That Shaped It</a><a href="#section-5">Public Scope and Limits</a><a href="#section-6">Engineering Lessons</a></nav>
-        <section class="project-section" id="section-0"><h2>Research Without Execution</h2><div><p>A dedicated research worker prepares portfolio research and records its outcome in PostgreSQL. The schedule follows the official exchange session, including shortened trading days, rather than assuming every weekday has the same hours. A decision to hold is a legitimate output; activity is not treated as evidence of a better decision.</p>
-<p>The research report and target allocations are persisted before the execution worker attempts to act. That separation allows research to continue through a broker-gateway outage. It also makes the history explainable: a completed research run does not imply an order was submitted, and a submitted order does not imply a fill.</p></div></section>
-        <section class="project-section" id="section-1"><h2>A Durable Decision Pipeline</h2><div><p>The execution queue stores work independently of the process handling it. Restarting the worker therefore does not erase a decision or require guessing what was underway. Decisions can expire or be superseded, and changes to portfolio state can require fresh research instead of replaying an outdated allocation.</p>
-<p>Before execution, the worker refreshes holdings, available cash, prices and foreign-exchange information. Target weights must be translated into feasible trades under position, turnover and cash-reserve constraints. The queue is a request to re-evaluate those conditions, not permission to place the same order indefinitely.</p></div></section>
-        <section class="project-section" id="section-2"><h2>Orders and Reconciliation</h2><div><p>The system submits monitored whole-share DAY limit orders in a paper account. It records order state and confirmed executions separately. If a connection fails around submission, the next step is reconciliation against broker records, not blindly submitting another order.</p>
-<p>That uncertainty is one of the central integration problems. A timeout only describes what the client observed; it does not prove the broker rejected the request. Explicit cancellation and reconciliation paths prevent a retry policy from becoming a duplicate-order policy. A kill switch can stop execution without stopping the research process.</p></div></section>
-        <section class="project-section" id="section-3"><h2>Reporting Has Different Rules</h2><div><p>The reporting path can use independent market prices when the gateway is unavailable. Those prices may be delayed, and FX fallbacks have their own freshness and cross-rate handling. They support continuity of reporting; they do not silently replace the quotes required by execution checks.</p>
-<p>Performance history is archived on wall-clock hours independently of the trading loop, with retries and restart backfill. Existing observations are preserved rather than overwritten by a later valuation. This keeps historical reporting from becoming an accidental side effect of whether a trade happened that day.</p></div></section>
-        <section class="project-section" id="section-4"><h2>Failures That Shaped It</h2><div><p>A broker callback changed the commission field it exposed, breaking an assumption in the order-handling path. Compatibility handling was needed for commissionAndFees as well as the older field. Another fault involved account-summary subscriptions: unsuccessful cancellation accumulated active subscriptions until repeated refreshes hit the broker's limit.</p>
-<p>A single successful connection could not reveal that second problem. Repeated read-only refresh checks were needed to demonstrate that the subscription lifecycle was actually being cleaned up. Session conflicts, missing permissions and uncertain submissions similarly required testing beyond the happy path.</p></div></section>
-        <section class="project-section" id="section-5"><h2>Public Scope and Limits</h2><div><p>The public dashboard is a read-only projection of the running system, not a simulated dataset and not an authenticated operator session. It exposes recent run states, decision symbols and target weights, plus a limited execution history. Account identifiers, balances, private report text, raw broker responses and execution controls are not published.</p>
-<p>Production refers to the deployed application. Trading remains paper-only. These records demonstrate scheduling, persistence and integration engineering; they do not establish profitable returns, live-trading readiness or an investment recommendation.</p></div></section>
-        <section class="project-section" id="section-6"><h2>Engineering Lessons</h2><div><p>Research, execution and reporting have different availability requirements. Keeping them separate lets one recover without pretending that another succeeded. Durable state provides the evidence needed to resume work safely.</p>
-<p>The external system remains the authority for what happened to an order. Local intent, network success and broker completion are three distinct states, and the application has to preserve that distinction in both its database and its user-facing reports.</p></div></section>
+        <div class="snapshot-line"><p id="snapshot-status" role="status">Loading production records...</p><button id="refresh" class="refresh-button" type="button" aria-label="Refresh data" title="Refresh data"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.36 6.36L3 16M8 16H3v5"/></svg></button></div>
+        <div id="view-tabs" class="view-tabs" role="tablist" aria-label="Records"></div>
+        <div class="data-filters">
+            <label>Search<input id="record-search" type="search" autocomplete="off" placeholder="Search records"></label>
+            <label id="kind-filter-label">Filter<select id="kind-filter"><option value="">All</option></select></label>
+            <label id="horizon-label" hidden>Horizon<select id="horizon"><option>24h</option><option>1h</option><option>6h</option><option>12h</option><option>1d</option><option>48h</option><option>1w</option><option>2w</option><option>1m</option><option>3m</option><option>6m</option><option>1y</option><option>2y</option><option>3y</option><option>4y</option></select></label>
+            <label>Sort<select id="record-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="alphabetical">A to Z</option></select></label>
+        </div>
+        <p id="record-count" class="record-count" aria-live="polite"></p>
+        <section id="records" role="tabpanel" tabindex="0" aria-label="Production records" aria-busy="true"></section>
+        <noscript><p>JavaScript is required to load current production records.</p></noscript>
+        <p class="data-footnote">Paper-account records, not live-money trading. Target allocations are research outputs, not confirmed holdings. Account identifiers, balances and trading controls are excluded.</p>
     </main>
 </body>
 </html>

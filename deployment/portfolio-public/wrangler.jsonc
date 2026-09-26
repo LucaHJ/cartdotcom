@@ -1,0 +1,10 @@
+{
+  "name": "cartdotcom-portfolio-public",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-26",
+  "workers_dev": true,
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  "vpc_services": [
+    { "binding": "ORIGIN", "service_id": "01a0dc5f-8344-7c70-965a-651f34377f00", "remote": true }
+  ]
+}

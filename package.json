@@ -2,7 +2,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/build-pages.mjs"
+    "build": "node scripts/build-pages.mjs",
+    "render:projects": "node scripts/render-project-pages.mjs",
+    "test:portfolio": "node --test deployment/portfolio-public/test-worker.mjs"
   },
   "dependencies": {
     "@cloudflare/pages-plugin-cloudflare-access": "^1.0.5",
