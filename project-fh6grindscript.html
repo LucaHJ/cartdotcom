@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FH6GrindScript | Luca Jeannin</title>
+    <meta name="description" content="A visual macro editor that reacts to screen content, turning a small pixel-triggered input script into inspectable, reusable automation.">
+    <script>
+        try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
+    </script>
+    <link rel="stylesheet" href="home.css?v=sidebar-20260923">
+    <link rel="stylesheet" href="project-pages.css?v=sidebar-20260923">
+    <script src="project-pages.js" defer></script>
+</head>
+<body class="project-page">
+    <a class="skip-link" href="#project-content">Skip to project</a>
+    <svg class="logo-filters" width="0" height="0" aria-hidden="true" focusable="false">
+        <defs>
+            <!-- Recolour the existing source logo, preserving its silhouette and play symbol. -->
+            <filter id="youtube-ink" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="0 1 0 0 0  0 1 0 0 0  0 1 0 0 0  0 0 0 1 0"/>
+                <feComponentTransfer>
+                    <feFuncR type="discrete" tableValues="0.0666667 1"/>
+                    <feFuncG type="discrete" tableValues="0.0509804 0.9529412"/>
+                    <feFuncB type="discrete" tableValues="0 0.8784314"/>
+                </feComponentTransfer>
+            </filter>
+            <filter id="youtube-paper" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="0 1 0 0 0  0 1 0 0 0  0 1 0 0 0  0 0 0 1 0"/>
+                <feComponentTransfer>
+                    <feFuncR type="discrete" tableValues="1 0.0666667"/>
+                    <feFuncG type="discrete" tableValues="0.9529412 0.0509804"/>
+                    <feFuncB type="discrete" tableValues="0.8784314 0"/>
+                </feComponentTransfer>
+            </filter>
+        </defs>
+    </svg>
+    <a class="home-shortcut" href="home.html#main-content" aria-label="Home" title="Home"><svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg></a>
+    <button class="theme-toggle" type="button" aria-label="Switch to dark mode">
+        <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 15.4A8.5 8.5 0 0 1 8.6 4a7 7 0 1 0 11.4 11.4z"></path>
+        </svg>
+        <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2"></path>
+            <path d="M12 20v2"></path>
+            <path d="M4.9 4.9l1.4 1.4"></path>
+            <path d="M17.7 17.7l1.4 1.4"></path>
+            <path d="M2 12h2"></path>
+            <path d="M20 12h2"></path>
+            <path d="M4.9 19.1l1.4-1.4"></path>
+            <path d="M17.7 6.3l1.4-1.4"></path>
+        </svg>
+    </button>
+    <details class="project-navigation" open>
+        <summary>Projects <span aria-hidden="true">+</span></summary>
+        <nav class="sidebar-navigation" aria-label="Portfolio navigation">
+            <div class="sidebar-platforms" aria-label="Platform links">
+                <a class="link-icon" href="blogs.html" data-label="Blog Posts" aria-label="Blog Posts">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 4h9l3 3v13H6z"></path>
+                        <path d="M15 4v4h3"></path>
+                        <path d="M9 11h6"></path>
+                        <path d="M9 15h6"></path>
+                    </svg>
+                </a>
+                <a class="link-icon" href="https://lucahj.itch.io/" target="_blank" rel="noopener noreferrer" data-label="itch.io" aria-label="itch.io">
+                    <img class="link-logo" src="assets/itchio-textless-black.svg" alt="" aria-hidden="true">
+                </a>
+                <a class="link-icon link-icon-text" href="https://www.linkedin.com/in/luca-jeannin-300760288/" target="_blank" rel="noopener noreferrer" data-label="LinkedIn" aria-label="LinkedIn">
+                    <span aria-hidden="true">in</span>
+                </a>
+                <a class="link-icon" href="https://github.com/LucaHJ" target="_blank" rel="noopener noreferrer" data-label="GitHub" aria-label="GitHub">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 19c-4 1.2-4-2-6-2"></path>
+                        <path d="M15 22v-3.8c0-1 .1-1.4-.5-2 3.8-.4 7.5-1.8 7.5-8A6.2 6.2 0 0 0 20.3 4c.2-.6.7-2.3-.2-4 0 0-1.4-.4-4.5 1.7a15.4 15.4 0 0 0-8.2 0C4.3-.4 2.9 0 2.9 0c-.9 1.7-.4 3.4-.2 4A6.2 6.2 0 0 0 1 8.2c0 6.2 3.7 7.6 7.5 8-.6.6-.7 1.2-.7 2V22"></path>
+                    </svg>
+                </a>
+                <a class="link-icon" href="https://www.youtube.com/@lucajeannin" target="_blank" rel="noopener noreferrer" data-label="YouTube" aria-label="YouTube">
+                    <img class="link-logo link-logo-youtube" src="assets/youtube-icon.png" alt="" aria-hidden="true">
+                </a>
+            </div>
+            <div class="sidebar-projects">
+                <a class="sidebar-home" href="home.html#main-content"><svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg><span>Home</span></a>
+                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer">GForceSimSim</a>
+                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">IBKR</a>
+                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">MangaSaver</a>
+                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer" aria-current="page">FH6GrindScript</a>
+                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">NewsSignalDashboard</a>
+                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Design Instagram Research System</a>
+                <a class="sidebar-project" href="open-close-backtest.html" target="_blank" rel="noopener noreferrer">Open Close Backtest</a>
+                <a class="sidebar-project" href="imdb-top250.html" target="_blank" rel="noopener noreferrer">IMDb Top 250 Re-ranker</a>
+                <a class="sidebar-project" href="https://some-game-designer.itch.io/clocking-off-beta" target="_blank" rel="noopener noreferrer">Clocking Off Beta</a>
+                <a class="sidebar-project" href="https://lucahj.itch.io/theskullcries" target="_blank" rel="noopener noreferrer">The Skull Cries</a>
+            </div>
+        </nav>
+    </details>
+    <main id="project-content" class="project-content">
+        <header class="project-heading">
+            <p class="project-category">Visual programming / Desktop automation</p>
+            <h1>FH6GrindScript</h1>
+            <p class="project-lead">A visual macro editor that reacts to screen content, turning a small pixel-triggered input script into inspectable, reusable automation.</p>
+            <p class="project-stack">Python / Blockly / JavaScript / pywebview</p>
+        </header>
+
+        <ol class="project-flow" aria-label="Processing sequence">
+            <li>Capture a visual condition</li>
+            <li>Compose Blockly actions</li>
+            <li>Run a matching bind</li>
+            <li>Inspect active steps</li>
+        </ol>
+        <section class="project-section">
+            <h2>What It Does</h2>
+            <div><p>FH6GrindScript watches for saved pixel sets or screen states and runs sequences of keyboard actions. Its Scratch-style editor supports presses, timed waits, held inputs, loops, conditional branches and background checks. A global start/stop hotkey controls execution.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>How It Works</h2>
+            <div><p>Blockly provides the editing canvas inside a desktop WebView, while Python handles screen capture, native input and the runtime. A shared JSON project stores captures, bindings and nested steps. Boolean condition blocks can be reused for activation, branching and waiting, with migration from the earlier pixel-only trigger fields.</p>
+                <p>Each enabled bind has a watcher. Only one bind owns the main execution slot at a time, and its trigger is checked again before actions begin. Runtime block IDs feed status updates back to the editor so the currently executing steps can be highlighted.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>What Needed Solving</h2>
+            <div><p>The first highlighting implementation coloured nested blocks that had not run because its CSS selector reached every descendant. Separately, loop children bypassed the wrapper that tracked active steps. Fixing both paths allowed an outer loop and its executing child to appear together. Short key presses now flash briefly, while waits remain highlighted for their actual duration.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Lessons From Development</h2>
+            <div><p>A visual programming interface needs a faithful connection between saved blocks, runtime state and feedback. Reusing one condition representation reduced inconsistencies across features. Screen matching also made the limits of visual automation clear: resolution, window placement and animated pixels can change whether a trigger matches.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Current Scope</h2>
+            <div><p>A Windows screen-content macro editor. Detection uses pixel and screen comparisons; OCR and direct application telemetry are possible extensions, not implemented capabilities claimed here.</p></div>
+        </section>
+
+    </main>
+</body>
+</html>

@@ -7,7 +7,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const output = path.join(root, ".pages-dist");
 const publicDirectories = new Set(["assets", "backend", "efb228-study-app", "management"]);
 const publicExtensions = new Set([
-    ".html", ".css", ".js", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".webp", ".woff", ".woff2"
+    ".html", ".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".woff", ".woff2"
 ]);
 const publicData = ["data/open-close-universe.json", "data/pairs-universe.json"];
 const specialFiles = new Set(["_headers", "_redirects", "_routes.json", "robots.txt", "sitemap.xml"]);

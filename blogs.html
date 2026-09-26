@@ -3,13 +3,36 @@
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>cartdotcom blogs</title>
     <script>
         document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light";
     </script>
-    <link rel="stylesheet" href="home.css?v=flat-theme-20260630e">
+    <link rel="stylesheet" href="home.css?v=project-pages-20260923">
 </head>
 <body>
+    <svg class="logo-filters" width="0" height="0" aria-hidden="true" focusable="false">
+        <defs>
+            <!-- Recolour the existing source logo, preserving its silhouette and play symbol. -->
+            <filter id="youtube-ink" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="0 1 0 0 0  0 1 0 0 0  0 1 0 0 0  0 0 0 1 0"/>
+                <feComponentTransfer>
+                    <feFuncR type="discrete" tableValues="0.0666667 1"/>
+                    <feFuncG type="discrete" tableValues="0.0509804 0.9529412"/>
+                    <feFuncB type="discrete" tableValues="0 0.8784314"/>
+                </feComponentTransfer>
+            </filter>
+            <filter id="youtube-paper" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="0 1 0 0 0  0 1 0 0 0  0 1 0 0 0  0 0 0 1 0"/>
+                <feComponentTransfer>
+                    <feFuncR type="discrete" tableValues="1 0.0666667"/>
+                    <feFuncG type="discrete" tableValues="0.9529412 0.0509804"/>
+                    <feFuncB type="discrete" tableValues="0.8784314 0"/>
+                </feComponentTransfer>
+            </filter>
+        </defs>
+    </svg>
+
     <button class="theme-toggle" type="button" aria-label="Switch to dark mode">
         <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M20 15.4A8.5 8.5 0 0 1 8.6 4a7 7 0 1 0 11.4 11.4z"></path>

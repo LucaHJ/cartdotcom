@@ -294,15 +294,27 @@ p.para {
     filter: invert(0);
 }
 
-.link-logo-youtube,
-:root[data-theme="dark"] .link-logo-youtube,
+.logo-filters {
+    position: absolute;
+    pointer-events: none;
+}
+
+.link-icon .link-logo-youtube {
+    filter: url("#youtube-ink");
+    transition: none;
+}
+
+:root[data-theme="dark"] .link-icon .link-logo-youtube,
 .link-icon:hover .link-logo-youtube,
 .link-icon.is-hovered .link-logo-youtube,
-.link-icon:focus-visible .link-logo-youtube,
+.link-icon:focus-visible .link-logo-youtube {
+    filter: url("#youtube-paper");
+}
+
 :root[data-theme="dark"] .link-icon:hover .link-logo-youtube,
 :root[data-theme="dark"] .link-icon.is-hovered .link-logo-youtube,
 :root[data-theme="dark"] .link-icon:focus-visible .link-logo-youtube {
-    filter: none;
+    filter: url("#youtube-ink");
 }
 
 .link-icon-text span {
@@ -354,6 +366,7 @@ p.para {
 
 .project-title {
     color: var(--ink);
+    overflow-wrap: anywhere;
     font-size: clamp(24px, 3vw, 36px);
     font-weight: 900;
     line-height: 1.04;
@@ -507,7 +520,7 @@ p.para {
     }
 
     .home-page .pageheadertext {
-        font-size: clamp(58px, 18vw, 96px);
+        font-size: 52px;
     }
 
     .theme-toggle {
@@ -531,4 +544,33 @@ p.para {
     .blogbodytext {
         font-size: 16px;
     }
+}
+
+@media (max-width: 380px) {
+    .home-page .pageheadertext {
+        font-size: 44px;
+    }
+}
+/* Shared Home shortcut; reference markup is commented beside the homepage theme switch. */
+.home-shortcut {
+    position: fixed;
+    top: 24px;
+    right: 84px;
+    z-index: 20;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    background: var(--paper);
+    color: var(--ink);
+}
+.home-shortcut:hover, .home-shortcut:focus-visible {
+    color: var(--paper);
+    background: var(--ink);
+}
+@media (max-width: 540px) {
+    .home-shortcut { top: 14px; right: 70px; width: 44px; height: 44px; }
 }

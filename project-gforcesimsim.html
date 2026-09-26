@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GForceSimSim | Luca Jeannin</title>
+    <meta name="description" content="Exploring how a rotating arm and an adjustable seat could reproduce the direction and magnitude of a racing driver's apparent G-force.">
+    <script>
+        try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
+    </script>
+    <link rel="stylesheet" href="home.css?v=sidebar-20260923">
+    <link rel="stylesheet" href="project-pages.css?v=sidebar-20260923">
+    <script src="project-pages.js" defer></script>
+</head>
+<body class="project-page">
+    <a class="skip-link" href="#project-content">Skip to project</a>
+    <svg class="logo-filters" width="0" height="0" aria-hidden="true" focusable="false">
+        <defs>
+            <!-- Recolour the existing source logo, preserving its silhouette and play symbol. -->
+            <filter id="youtube-ink" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="0 1 0 0 0  0 1 0 0 0  0 1 0 0 0  0 0 0 1 0"/>
+                <feComponentTransfer>
+                    <feFuncR type="discrete" tableValues="0.0666667 1"/>
+                    <feFuncG type="discrete" tableValues="0.0509804 0.9529412"/>
+                    <feFuncB type="discrete" tableValues="0 0.8784314"/>
+                </feComponentTransfer>
+            </filter>
+            <filter id="youtube-paper" color-interpolation-filters="sRGB">
+                <feColorMatrix type="matrix" values="0 1 0 0 0  0 1 0 0 0  0 1 0 0 0  0 0 0 1 0"/>
+                <feComponentTransfer>
+                    <feFuncR type="discrete" tableValues="1 0.0666667"/>
+                    <feFuncG type="discrete" tableValues="0.9529412 0.0509804"/>
+                    <feFuncB type="discrete" tableValues="0.8784314 0"/>
+                </feComponentTransfer>
+            </filter>
+        </defs>
+    </svg>
+    <a class="home-shortcut" href="home.html#main-content" aria-label="Home" title="Home"><svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg></a>
+    <button class="theme-toggle" type="button" aria-label="Switch to dark mode">
+        <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 15.4A8.5 8.5 0 0 1 8.6 4a7 7 0 1 0 11.4 11.4z"></path>
+        </svg>
+        <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2"></path>
+            <path d="M12 20v2"></path>
+            <path d="M4.9 4.9l1.4 1.4"></path>
+            <path d="M17.7 17.7l1.4 1.4"></path>
+            <path d="M2 12h2"></path>
+            <path d="M20 12h2"></path>
+            <path d="M4.9 19.1l1.4-1.4"></path>
+            <path d="M17.7 6.3l1.4-1.4"></path>
+        </svg>
+    </button>
+    <details class="project-navigation" open>
+        <summary>Projects <span aria-hidden="true">+</span></summary>
+        <nav class="sidebar-navigation" aria-label="Portfolio navigation">
+            <div class="sidebar-platforms" aria-label="Platform links">
+                <a class="link-icon" href="blogs.html" data-label="Blog Posts" aria-label="Blog Posts">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 4h9l3 3v13H6z"></path>
+                        <path d="M15 4v4h3"></path>
+                        <path d="M9 11h6"></path>
+                        <path d="M9 15h6"></path>
+                    </svg>
+                </a>
+                <a class="link-icon" href="https://lucahj.itch.io/" target="_blank" rel="noopener noreferrer" data-label="itch.io" aria-label="itch.io">
+                    <img class="link-logo" src="assets/itchio-textless-black.svg" alt="" aria-hidden="true">
+                </a>
+                <a class="link-icon link-icon-text" href="https://www.linkedin.com/in/luca-jeannin-300760288/" target="_blank" rel="noopener noreferrer" data-label="LinkedIn" aria-label="LinkedIn">
+                    <span aria-hidden="true">in</span>
+                </a>
+                <a class="link-icon" href="https://github.com/LucaHJ" target="_blank" rel="noopener noreferrer" data-label="GitHub" aria-label="GitHub">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 19c-4 1.2-4-2-6-2"></path>
+                        <path d="M15 22v-3.8c0-1 .1-1.4-.5-2 3.8-.4 7.5-1.8 7.5-8A6.2 6.2 0 0 0 20.3 4c.2-.6.7-2.3-.2-4 0 0-1.4-.4-4.5 1.7a15.4 15.4 0 0 0-8.2 0C4.3-.4 2.9 0 2.9 0c-.9 1.7-.4 3.4-.2 4A6.2 6.2 0 0 0 1 8.2c0 6.2 3.7 7.6 7.5 8-.6.6-.7 1.2-.7 2V22"></path>
+                    </svg>
+                </a>
+                <a class="link-icon" href="https://www.youtube.com/@lucajeannin" target="_blank" rel="noopener noreferrer" data-label="YouTube" aria-label="YouTube">
+                    <img class="link-logo link-logo-youtube" src="assets/youtube-icon.png" alt="" aria-hidden="true">
+                </a>
+            </div>
+            <div class="sidebar-projects">
+                <a class="sidebar-home" href="home.html#main-content"><svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg><span>Home</span></a>
+                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer" aria-current="page">GForceSimSim</a>
+                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">IBKR</a>
+                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">MangaSaver</a>
+                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer">FH6GrindScript</a>
+                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">NewsSignalDashboard</a>
+                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Design Instagram Research System</a>
+                <a class="sidebar-project" href="open-close-backtest.html" target="_blank" rel="noopener noreferrer">Open Close Backtest</a>
+                <a class="sidebar-project" href="imdb-top250.html" target="_blank" rel="noopener noreferrer">IMDb Top 250 Re-ranker</a>
+                <a class="sidebar-project" href="https://some-game-designer.itch.io/clocking-off-beta" target="_blank" rel="noopener noreferrer">Clocking Off Beta</a>
+                <a class="sidebar-project" href="https://lucahj.itch.io/theskullcries" target="_blank" rel="noopener noreferrer">The Skull Cries</a>
+            </div>
+        </nav>
+    </details>
+    <main id="project-content" class="project-content">
+        <header class="project-heading">
+            <p class="project-category">Simulation / Windows desktop</p>
+            <h1>GForceSimSim</h1>
+            <p class="project-lead">Exploring how a rotating arm and an adjustable seat could reproduce the direction and magnitude of a racing driver's apparent G-force.</p>
+            <p class="project-stack">C# / .NET / WPF / JSON telemetry</p>
+        </header>
+        <figure class="project-figure">
+            <a href="assets/gforce-showcase.gif" target="_blank" rel="noopener noreferrer" aria-label="Open full-size GForceSimSim animation">
+                <img src="assets/gforce-showcase.gif" width="2546" height="1376" alt="GForceSimSim with a 3D rotating rig, synchronized F1 telemetry, track position and G-force history.">
+            </a>
+            <figcaption>GForceSimSim in motion, recorded from the desktop application.</figcaption>
+        </figure>
+        <ol class="project-flow" aria-label="Processing sequence">
+            <li>Load a telemetry lap</li>
+            <li>Resolve the load vector</li>
+            <li>Align the carriage and gimbal</li>
+            <li>Compare synchronized views</li>
+        </ol>
+        <section class="project-section">
+            <h2>What It Does</h2>
+            <div><p>GForceSimSim is a desktop concept simulator for a horizontal centrifuge with a sliding carriage and a three-axis gimbal. An animated 3D rig makes the relationship between arm speed, rider position and seat orientation visible. A race browser filters telemetry by race, session and driver, then ranks laps by time, peak speed or G load.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>How It Works</h2>
+            <div><p>The physics model separates rotational acceleration from total apparent load, which also includes Earth's gravity. For telemetry playback, the peak horizontal load sets a constant arm speed; the carriage moves along a five-metre arm to reproduce smaller loads, while the gimbal aligns the rider with the target vector. Throttle, braking, gear, speed, a track-position marker and G-force traces share the same playback timeline.</p>
+                <p>The application uses C# and WPF, with physics in a separate project. Telemetry arrives as JSON; expensive lap comparisons are cached. Missing channels, such as steering in the supplied dataset, are shown as unavailable.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>What Needed Solving</h2>
+            <div><p>The difficult part was keeping the physical model and its visual explanation consistent. Early arrows showed only rotational load, and later left/right discrepancies exposed a mismatch between the rider's coordinates and the vector display. Correcting the arrows, reference frames and lateral mapping made the different views agree.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Lessons From Development</h2>
+            <div><p>A physically meaningful value still needs an unambiguous reference frame and label. Distinguishing vehicle acceleration, apparent rider load and Earth gravity was as important as drawing the rig. Shared playback timing and repeatable physics checks made visual changes easier to verify.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Current Scope</h2>
+            <div><p>A working ideal steady-state simulator, not a validated physical rig or machine-control system. Moving-carriage dynamics, structural loads and human tolerance are outside its model.</p></div>
+        </section>
+
+    </main>
+</body>
+</html>
