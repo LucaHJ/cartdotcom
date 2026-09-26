@@ -7,6 +7,7 @@ import json
 import os
 import re
 import signal
+import sys
 import copy
 import tempfile
 import time
@@ -31,7 +32,7 @@ STARTUP_TIMEOUT = int(os.getenv("CODEX_STARTUP_TIMEOUT_SECONDS", "300"))
 IDLE_TIMEOUT = int(os.getenv("CODEX_IDLE_TIMEOUT_SECONDS", "600"))
 HEARTBEAT_SECONDS = 30
 WORK_ROOT = Path(os.getenv("RESEARCH_WORK_ROOT", "/work"))
-RUNNER_REVISION = "allocation-recovery-v4"
+RUNNER_REVISION = "allocation-recovery-v5"
 EVENT_URL = os.getenv("INTERNAL_EVENT_URL", "")
 RESULT_ROOT = Path(os.getenv("ARTIFACT_ROOT", "/data/artifacts")) / "runner-results"
 active_run: str | None = None
@@ -130,6 +131,9 @@ async def run_stage(run_id, prompt, schema, timeout, record, on_progress=None):
             process = await asyncio.create_subprocess_exec(
                 "codex", "--search", "--ask-for-approval", "never", "exec", "--model", MODEL, "-c", f'model_reasoning_effort="{EFFORT}"',
                 "--sandbox", "read-only", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
+                "-c", f'mcp_servers.research_evidence.command={json.dumps(sys.executable)}',
+                "-c", 'mcp_servers.research_evidence.args=' + json.dumps([str(Path(__file__).with_name("evidence_server.py")), temp]),
+                "-c", 'mcp_servers.research_evidence.required=true',
                 "--output-schema", str(schema_path), "--output-last-message", str(output), "--json", "--color", "never",
                 limit=4 * 1024 * 1024, cwd=temp, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -334,6 +338,10 @@ async def research(request: ResearchRequest):
     try:
         if payload["protocol"] != VERSION:
             raise RuntimeError("Cannot resume an incompatible research protocol.")
+        revisions = payload.setdefault("runner_revisions", [payload.get("runner_revision", RUNNER_REVISION)])
+        if RUNNER_REVISION not in revisions:
+            revisions.append(RUNNER_REVISION)
+        payload["runner_revision"] = RUNNER_REVISION
         if request.resume_from_run_id and not payload["attempts"]:
             if str(UUID(request.resume_from_run_id)) == run_id:
                 raise ValueError("A run cannot recover from itself.")
@@ -359,7 +367,7 @@ async def research(request: ResearchRequest):
                 if name != "allocation":
                     return len(previous_attempts) < max_attempts
                 invalid = sum(a.get("failure_kind") == "validation_error" for a in previous_attempts)
-                transient = len(previous_attempts) - invalid
+                transient = sum(a.get("failure_kind") != "validation_error" and a["status"] != "interrupted" for a in previous_attempts)
                 return len(previous_attempts) < 4 and invalid < 2 and transient < 2
             while can_attempt():
                 remaining = payload["deadline"] - datetime.now(UTC).timestamp()
@@ -369,7 +377,7 @@ async def research(request: ResearchRequest):
                 if previous_attempts:
                     prompt += "\nPrevious attempt outcome: " + safe_diagnostic(previous_attempts[-1].get("error", "interrupted"))[-1500:] + ". Use the reduced context to complete the full required work product."
                     if any(a.get("result") for a in previous_attempts):
-                        prompt += " Read previous-invalid-output.json for the full rejected draft and error. Correct the stated problem and check ALL invariants, preserving justified research rather than redoing discovery. The draft is not approved and does not authorize trades."
+                        prompt += " Use read_research_evidence(section=previous_invalid_output) for the full rejected draft (previous-invalid-output.json) and error. Correct the stated problem and check ALL invariants, preserving justified research rather than redoing discovery. The draft is not approved and does not authorize trades."
                 attempt = {"name": name, "status": "running", "prompt": prompt, "events": [], "usage": {},
                            "started_at": datetime.now(UTC).isoformat(), "runtime_seconds": 0,
                            "input_chars": len(prompt), "input_mode": "lean_recovery" if previous_attempts else "stage_specific"}

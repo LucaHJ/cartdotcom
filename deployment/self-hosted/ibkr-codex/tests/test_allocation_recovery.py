@@ -138,3 +138,26 @@ def test_sale_needs_independent_case_or_actual_buy_replacement():
     output["research_conclusion"]["sell_review"].append(copy.deepcopy(review))
     with pytest.raises(ValueError, match="exactly one"):
         validate_stage("allocation", output)
+
+
+@pytest.mark.asyncio
+async def test_interrupted_allocation_keeps_deadline_and_correction_budget(monkeypatch, tmp_path):
+    import hashlib
+    monkeypatch.setattr(runner, "RESULT_ROOT", tmp_path)
+    rid = str(uuid4())
+    deadline = datetime.now(UTC).timestamp()+1800
+    payload = {"status": "running", "protocol": VERSION, "prompt_sha256": hashlib.sha256(b"base").hexdigest(),
+        "deadline": deadline, "runner_revision": "allocation-recovery-v4",
+        "stages": [{"name": n, "result": stage_result(n)} for n, _, _ in stages()[:-1]],
+        "attempts": [{"name": "allocation", "status": "failed", "failure_kind": "startup_timeout", "usage": {}},
+                     {"name": "allocation", "status": "running", "usage": {}}]}
+    runner.save_checkpoint(tmp_path/f"{rid}.json.gz", payload)
+    calls = []
+    async def fake(run_id, prompt, schema, timeout, record, on_progress=None):
+        calls.append(record["name"])
+        return {} if len(calls) == 1 else stage_result("allocation")
+    monkeypatch.setattr(runner, "run_stage", fake)
+    result = await runner.research(runner.ResearchRequest(run_id=rid, prompt="base"))
+    assert result["ok"] and calls == ["allocation", "allocation"]
+    assert result["deadline"] == deadline and result["attempts"][1]["status"] == "interrupted"
+    assert result["runner_revisions"] == ["allocation-recovery-v4", runner.RUNNER_REVISION]
