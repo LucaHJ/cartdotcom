@@ -53,6 +53,19 @@ def test_analysis_recovery_expiry_and_dependency_age(monkeypatch, tmp_path):
     assert len(imported) == 6  # New child cannot refresh old dependencies.
 
 
+def test_allocation_digest_preserves_all_candidates_and_full_review():
+    from app.research_inputs import compact_prior
+    synthesis = stage_result("synthesis")
+    synthesis["ranked_candidates"][0]["thesis"] = "x"*5000
+    review = stage_result("challenge")
+    digest = compact_prior([{"name": "synthesis", "result": synthesis}, {"name": "challenge", "result": review}], "allocation")
+    candidates = digest[0]["result"]["ranked_candidates"]
+    assert len(candidates) == len(synthesis["ranked_candidates"])
+    assert len(candidates[0]["thesis"]) < 500
+    assert "read_research_evidence" in digest[0]["result"]["selection_note"]
+    assert digest[1]["result"] == review
+
+
 @pytest.mark.asyncio
 async def test_timeout_does_not_spend_validation_correction(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "RESULT_ROOT", tmp_path)

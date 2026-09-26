@@ -32,7 +32,7 @@ STARTUP_TIMEOUT = int(os.getenv("CODEX_STARTUP_TIMEOUT_SECONDS", "300"))
 IDLE_TIMEOUT = int(os.getenv("CODEX_IDLE_TIMEOUT_SECONDS", "600"))
 HEARTBEAT_SECONDS = 30
 WORK_ROOT = Path(os.getenv("RESEARCH_WORK_ROOT", "/work"))
-RUNNER_REVISION = "allocation-recovery-v5"
+RUNNER_REVISION = "allocation-recovery-v6"
 EVENT_URL = os.getenv("INTERNAL_EVENT_URL", "")
 RESULT_ROOT = Path(os.getenv("ARTIFACT_ROOT", "/data/artifacts")) / "runner-results"
 active_run: str | None = None
@@ -66,9 +66,9 @@ def safe_diagnostic(value):
 def process_failure(message):
     message = safe_diagnostic(message)
     lower = message.lower()
-    if any(s in lower for s in ("usage limit", "quota", "rate limit", "429")):
+    if any(s in lower for s in ("usage limit", "quota", "rate limit")) or re.search(r"\b429\b", lower):
         return StageFailure("usage_limit", message, False)
-    if any(s in lower for s in ("unauthorized", "authentication", "refresh token", "401", "login required")):
+    if any(s in lower for s in ("unauthorized", "authentication", "refresh token", "login required")) or re.search(r"\b401\b", lower):
         return StageFailure("authentication", message, False)
     return StageFailure("process_error", message)
 
@@ -108,7 +108,9 @@ async def run_stage(run_id, prompt, schema, timeout, record, on_progress=None):
     started = time.monotonic()
     last_progress = started
     substantive = False
+    startup_limit = STARTUP_TIMEOUT * (2 if record.get("name") == "allocation" else 1)
     record.update(stderr_tail="", last_event_at=None, event_count=0, usage_complete=False)
+    record["startup_timeout_seconds"] = startup_limit
     temporary = tempfile.TemporaryDirectory(dir=WORK_ROOT)
     try:
         with nullcontext(temporary.name) as temp:
@@ -122,7 +124,7 @@ async def run_stage(run_id, prompt, schema, timeout, record, on_progress=None):
                 saved = None  # Standalone diagnostic invocation, no archive.
             archive = json.loads(gzip.decompress(saved.read_bytes())) if saved and saved.exists() else {}
             evidence = {"stages": archive.get("stages", []),
-                        "portfolio_context": portfolio_context(prompt)}
+                        "portfolio_context": archive.get("portfolio_context") or portfolio_context(prompt)}
             (Path(temp) / "prior-research.json").write_text(json.dumps(evidence), encoding="utf-8")
             drafts = [a for a in archive.get("attempts", []) if a.get("name") == record["name"] and a.get("result")]
             if drafts:
@@ -183,7 +185,7 @@ async def run_stage(run_id, prompt, schema, timeout, record, on_progress=None):
                                   phase="researching" if substantive else "waiting_for_first_output")
                     if on_progress:
                         on_progress()
-                    if not substantive and elapsed >= STARTUP_TIMEOUT:
+                    if not substantive and elapsed >= startup_limit:
                         raise StageFailure("startup_timeout", f"No research output or tool activity for {round(elapsed)} seconds after process start.")
                     if substantive and quiet >= IDLE_TIMEOUT:
                         raise StageFailure("idle_timeout", f"No progress events for {round(quiet)} seconds during research.")
@@ -210,11 +212,6 @@ async def run_stage(run_id, prompt, schema, timeout, record, on_progress=None):
                 return json.loads(output.read_text(encoding="utf-8"))
             except (FileNotFoundError, json.JSONDecodeError) as exc:
                 raise StageFailure("validation_error", "Codex completed without a valid final JSON work product.") from exc
-    except StageFailure:
-        diagnostic = process_failure(record.get("stderr_tail", ""))
-        if not diagnostic.retryable:
-            raise diagnostic
-        raise
     finally:
         for task in tasks:
             if not task.done():
@@ -296,7 +293,7 @@ async def health():
     return {"ok": True, "active_run": active_run, "model": MODEL, "reasoning_effort": EFFORT,
             "protocol": VERSION, "stage_count": len(stages()), "timeout_seconds": TIMEOUT,
             "runner_revision": RUNNER_REVISION, "startup_timeout_seconds": STARTUP_TIMEOUT,
-            "idle_timeout_seconds": IDLE_TIMEOUT}
+            "idle_timeout_seconds": IDLE_TIMEOUT, "allocation_startup_timeout_seconds": STARTUP_TIMEOUT * 2}
 
 
 @app.post("/research")
@@ -342,6 +339,7 @@ async def research(request: ResearchRequest):
         if RUNNER_REVISION not in revisions:
             revisions.append(RUNNER_REVISION)
         payload["runner_revision"] = RUNNER_REVISION
+        payload.setdefault("portfolio_context", portfolio_context(request.prompt))
         if request.resume_from_run_id and not payload["attempts"]:
             if str(UUID(request.resume_from_run_id)) == run_id:
                 raise ValueError("A run cannot recover from itself.")

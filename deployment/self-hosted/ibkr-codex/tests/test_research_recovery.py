@@ -120,3 +120,5 @@ def test_usage_and_auth_errors_are_not_blindly_retried():
     assert runner.process_failure("429 quota exceeded").retryable is False
     assert runner.process_failure("401 unauthorized").kind == "authentication"
     assert runner.process_failure("Network disconnected").retryable is True
+    assert runner.process_failure("2026-09-26T06:32:12.429086Z auxiliary transport warning").kind == "process_error"
+    assert runner.process_failure("2026-09-26T06:32:12.401086Z auxiliary transport warning").kind == "process_error"

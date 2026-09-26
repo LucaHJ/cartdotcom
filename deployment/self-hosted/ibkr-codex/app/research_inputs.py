@@ -58,7 +58,9 @@ def compact_base(base, stage, lean=False):
     news = decoder.raw_decode(after.split(NEWS_MARKER, 1)[1].lstrip())[0] if NEWS_MARKER in after else {}
     screen = stage.startswith("screen_")
     result = {k: v for k, v in portfolio.items() if k not in {"performance_history", "confirmed_trades", "open_orders"}}
-    if screen:
+    if stage == "allocation":
+        result["input_selection"] = "Current portfolio and current performance retained. Full history/trades are available via read_research_evidence(section=portfolio); reuse completed synthesis/review and retrieve details as needed."
+    elif screen:
         # Screens investigate industries, not attribution. Current holdings and
         # capital boundaries remain present; historical data goes to synthesis.
         result["input_selection"] = "Current portfolio only; historical attribution is performed in synthesis, not this independent industry screen."
@@ -86,6 +88,13 @@ def compact_prior(previous, stage, lean=False):
     for prior in previous:
         name, result = prior["name"], prior["result"]
         if name.startswith("screen_"):
+            if stage == "allocation":
+                evidence.append({"stage": name, "result": {"industries": [
+                    {"industry": r["industry"], "verdict": r["verdict"], "investable_symbols": r["investable_symbols"]}
+                    for r in result["industries"]]}, "reused": prior.get("reused", False),
+                    "source_completed_at": prior.get("source_completed_at"),
+                    "selection_note": "Full sources, timelines and mechanisms available through read_research_evidence."})
+                continue
             if stage in {"challenge", "allocation"}:
                 evidence.append({"stage": name, "result": {"industries": [
                     {"industry": r["industry"], "verdict": r["verdict"], "investable_symbols": r["investable_symbols"],
@@ -103,6 +112,16 @@ def compact_prior(previous, stage, lean=False):
                                    [next(x for x in r["events"] if x["timing"] == timing) for timing in ("past", "present", "future")]]}
                        for r in result["industries"]]
             selected = {"summary": clipped(result["summary"], size), "industries": sectors}
+        elif stage == "allocation" and name == "synthesis":
+            selected = {"summary": clipped(result["summary"], 1800),
+                        "performance_attribution": clipped(result["performance_attribution"], 2500),
+                        "data_limitations": result["data_limitations"],
+                        "ranked_candidates": [{"symbol": c["symbol"], "industry": c["industry"],
+                            **{k: clipped(c[k], 250) for k in ("thesis", "valuation", "bull_base_bear", "replace_or_keep_comparison", "overlap", "invalidation")},
+                            "citations": c["citations"][:2],
+                            "catalyst_calendar": [{"date_or_window": e["date_or_window"], "status": e["status"], "event": clipped(e["event"], 180)} for e in c["catalyst_calendar"]]}
+                            for c in result["ranked_candidates"]],
+                        "selection_note": "All candidates retained as excerpts. Full candidate work products and cross-industry mechanisms are available through read_research_evidence(section=synthesis)."}
         else:
             # Synthesis and audit contain the candidate comparisons and objections
             # needed by the final allocator, so preserve them in full.
