@@ -10,6 +10,7 @@ import signal
 import copy
 import tempfile
 import time
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -19,7 +20,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from app.research_protocol import VERSION, stages, stage_prompt, validate_stage
+from app.research_protocol import VERSION, stages, stage_prompt, validate_stage, validate_research_output
+from app.research_inputs import portfolio_context
 
 PORT = int(os.getenv("RUNNER_PORT", "3010"))
 MODEL = os.getenv("CODEX_MODEL", "gpt-5.6-sol")
@@ -29,7 +31,7 @@ STARTUP_TIMEOUT = int(os.getenv("CODEX_STARTUP_TIMEOUT_SECONDS", "300"))
 IDLE_TIMEOUT = int(os.getenv("CODEX_IDLE_TIMEOUT_SECONDS", "600"))
 HEARTBEAT_SECONDS = 30
 WORK_ROOT = Path(os.getenv("RESEARCH_WORK_ROOT", "/work"))
-RUNNER_REVISION = "diagnostic-recovery-v3"
+RUNNER_REVISION = "allocation-recovery-v4"
 EVENT_URL = os.getenv("INTERNAL_EVENT_URL", "")
 RESULT_ROOT = Path(os.getenv("ARTIFACT_ROOT", "/data/artifacts")) / "runner-results"
 active_run: str | None = None
@@ -106,15 +108,30 @@ async def run_stage(run_id, prompt, schema, timeout, record, on_progress=None):
     last_progress = started
     substantive = False
     record.update(stderr_tail="", last_event_at=None, event_count=0, usage_complete=False)
+    temporary = tempfile.TemporaryDirectory(dir=WORK_ROOT)
     try:
-        with tempfile.TemporaryDirectory(dir=WORK_ROOT) as temp:
+        with nullcontext(temporary.name) as temp:
             output, schema_path = Path(temp) / "output.json", Path(temp) / "schema.json"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            # Read-only evidence, not a repeated giant prompt. Never expose auth
+            # or broker credentials; these are the already-sanitized run inputs.
+            try:
+                saved = RESULT_ROOT / f"{UUID(run_id)}.json.gz"
+            except ValueError:
+                saved = None  # Standalone diagnostic invocation, no archive.
+            archive = json.loads(gzip.decompress(saved.read_bytes())) if saved and saved.exists() else {}
+            evidence = {"stages": archive.get("stages", []),
+                        "portfolio_context": portfolio_context(prompt)}
+            (Path(temp) / "prior-research.json").write_text(json.dumps(evidence), encoding="utf-8")
+            drafts = [a for a in archive.get("attempts", []) if a.get("name") == record["name"] and a.get("result")]
+            if drafts:
+                (Path(temp) / "previous-invalid-output.json").write_text(
+                    json.dumps({"error": drafts[-1].get("error"), "result": drafts[-1]["result"]}), encoding="utf-8")
             process = await asyncio.create_subprocess_exec(
                 "codex", "--search", "--ask-for-approval", "never", "exec", "--model", MODEL, "-c", f'model_reasoning_effort="{EFFORT}"',
                 "--sandbox", "read-only", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
                 "--output-schema", str(schema_path), "--output-last-message", str(output), "--json", "--color", "never",
-                limit=4 * 1024 * 1024, cwd=str(WORK_ROOT), stdin=asyncio.subprocess.PIPE,
+                limit=4 * 1024 * 1024, cwd=temp, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 start_new_session=os.name == "posix",
                 env={"PATH": os.getenv("PATH", ""), "HOME": "/home/app",
@@ -185,7 +202,10 @@ async def run_stage(run_id, prompt, schema, timeout, record, on_progress=None):
             stderr = await stderr_task
             if process.returncode:
                 raise process_failure(f"Codex exited with {process.returncode}: {stderr}")
-            return json.loads(output.read_text(encoding="utf-8"))
+            try:
+                return json.loads(output.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError) as exc:
+                raise StageFailure("validation_error", "Codex completed without a valid final JSON work product.") from exc
     except StageFailure:
         diagnostic = process_failure(record.get("stderr_tail", ""))
         if not diagnostic.retryable:
@@ -214,6 +234,7 @@ async def run_stage(run_id, prompt, schema, timeout, record, on_progress=None):
                 record["stderr_truncated"] = True
         record["process_exit_code"] = process.returncode if process else None
         record["runtime_seconds"] = round(time.monotonic() - started, 3)
+        temporary.cleanup()  # Child must exit before removing its working directory.
 
 
 def save_checkpoint(path, payload):
@@ -223,7 +244,11 @@ def save_checkpoint(path, payload):
 
 
 def recovery_screens(source_id, now):
-    """Import validated discovery only, never old allocations or trade intents."""
+    """Import compatible evidence, never old allocations or trade intents.
+
+    Synthesis/review require a complete reusable dependency chain and <=24h
+    evidence. Discovery may be <=72h. Original ages survive recovery chains.
+    """
     source_id = str(UUID(source_id))
     path = RESULT_ROOT / f"{source_id}.json.gz"
     if not path.exists():
@@ -236,15 +261,22 @@ def recovery_screens(source_id, now):
         raise ValueError("Recovery discovery is older than 72 hours; fresh research is required.")
     imported, records = [], []
     for name, industries, _ in stages():
-        if not name.startswith("screen_"):
+        if name == "allocation":
+            break
+        dependent = name in {"synthesis", "challenge"}
+        expected = 6 if name == "synthesis" else 7
+        if dependent and len(imported) != expected:
             continue
         stage = next((s for s in source.get("stages", []) if s["name"] == name), None)
         if stage is None:
             continue
         validate_stage(name, stage["result"], industries)
         original_time = stage.get("source_completed_at") or source["completed_at"]
-        if (now - datetime.fromisoformat(original_time)).total_seconds() > 72 * 3600:
+        age = (now - datetime.fromisoformat(original_time)).total_seconds()
+        if not 0 <= age <= (24 if dependent else 72) * 3600:
             continue  # Repeated recovery cannot refresh the evidence-age clock.
+        if dependent and any((now - datetime.fromisoformat(s["source_completed_at"])).total_seconds() > 24 * 3600 for s in imported):
+            continue
         imported.append({**copy.deepcopy(stage), "reused": True, "source_run_id": source_id,
                          "source_completed_at": original_time})
         original = next((a for a in reversed(source.get("attempts", [])) if a["name"] == name and a["status"] in {"completed", "reused"}), {})
@@ -308,7 +340,7 @@ async def research(request: ResearchRequest):
             payload["stages"], payload["attempts"] = recovery_screens(request.resume_from_run_id, now)
             checkpoint()
             await publish(run_id, {"type": "research.recovered", "message":
-                f"Reused {len(payload['stages'])} validated discovery screens from {request.resume_from_run_id}. Portfolio context and all later stages are fresh."})
+                f"Reused {len(payload['stages'])} validated evidence stages from {request.resume_from_run_id}. Portfolio context is fresh; allocation and execution authority are never reused."})
         # A killed process cannot have an unverified partial result reused.
         for attempt in payload["attempts"]:
             if attempt["status"] == "running":
@@ -320,13 +352,24 @@ async def research(request: ResearchRequest):
                 validate_stage(name, existing["result"], industries)
                 return
             previous_attempts = [a for a in payload["attempts"] if a["name"] == name and a["status"] != "reused"]
-            while len(previous_attempts) < max_attempts:
+            # Allocation has separate bounded budgets: up to two transport
+            # failures and two invalid drafts, maximum four process launches.
+            # One startup timeout must not consume the JSON-correction chance.
+            def can_attempt():
+                if name != "allocation":
+                    return len(previous_attempts) < max_attempts
+                invalid = sum(a.get("failure_kind") == "validation_error" for a in previous_attempts)
+                transient = len(previous_attempts) - invalid
+                return len(previous_attempts) < 4 and invalid < 2 and transient < 2
+            while can_attempt():
                 remaining = payload["deadline"] - datetime.now(UTC).timestamp()
                 if remaining < 30:
                     raise StageFailure("total_deadline", "The three-hour research deadline was reached; no new orders are approved.", False)
                 prompt = stage_prompt(request.prompt, name, industries, payload["stages"], lean=bool(previous_attempts))
                 if previous_attempts:
                     prompt += "\nPrevious attempt outcome: " + safe_diagnostic(previous_attempts[-1].get("error", "interrupted"))[-1500:] + ". Use the reduced context to complete the full required work product."
+                    if any(a.get("result") for a in previous_attempts):
+                        prompt += " Read previous-invalid-output.json for the full rejected draft and error. Correct the stated problem and check ALL invariants, preserving justified research rather than redoing discovery. The draft is not approved and does not authorize trades."
                 attempt = {"name": name, "status": "running", "prompt": prompt, "events": [], "usage": {},
                            "started_at": datetime.now(UTC).isoformat(), "runtime_seconds": 0,
                            "input_chars": len(prompt), "input_mode": "lean_recovery" if previous_attempts else "stage_specific"}
@@ -343,6 +386,10 @@ async def research(request: ResearchRequest):
                     attempt["result"] = result
                     try:
                         validate_stage(name, result, industries)
+                        context = portfolio_context(request.prompt)
+                        if name == "allocation" and context is not None:
+                            checked = {**result, "research_dossier": {"protocol": VERSION, "stages": payload["stages"]}}
+                            validate_research_output(checked, context.get("positions", []), context.get("strategy_performance"))
                     except ValueError as exc:
                         raise StageFailure("validation_error", str(exc)) from exc
                     attempt["status"] = "completed"

@@ -5,6 +5,12 @@ PORTFOLIO_MARKER = "Saved portfolio, strategy performance and history:\n"
 NEWS_MARKER = "Exploratory News Signal context:\n"
 
 
+def portfolio_context(base):
+    if PORTFOLIO_MARKER not in base:
+        return None
+    return json.JSONDecoder().raw_decode(base.split(PORTFOLIO_MARKER, 1)[1].lstrip())[0]
+
+
 def clipped(value, limit):
     value = str(value or "")
     return value if len(value) <= limit else value[:limit] + " [excerpt; verify source]"

@@ -61,7 +61,9 @@ def validate_plan(plan, decisions, holdings=None):
         actual = sum((percentage(p["target_weight_pct"], "weight") for p in positions.values()
                       if p["industry"] == industry), Decimal(0))
         if abs(actual - target) > Decimal("0.02"):
-            raise PolicyViolation("Industry targets must equal their constituent position targets.")
+            raise PolicyViolation(f"Industry {industry} target {target}% differs from its positions total {actual}%. "
+                                  "Cash belongs ONLY in cash_target_pct, never an industry or security position. "
+                                  "Industry targets must equal their constituent position targets.")
     for holding in holdings or ():
         if Decimal(str(holding.get("quantity", 0))) and holding["symbol"] not in positions:
             raise PolicyViolation("Allocation plan omitted an existing holding (include exits at zero).")
