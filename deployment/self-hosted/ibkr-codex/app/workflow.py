@@ -396,12 +396,14 @@ def execute_run(run_id: str) -> None:
             conn.commit()
         if not claimed:
             return
-        previous = fetch_one("SELECT research_context,prompt_path FROM research_runs WHERE id=%s", (run_id,))
+        previous = fetch_one("SELECT research_context,prompt_path,recovery_from_run_id FROM research_runs WHERE id=%s", (run_id,))
         if previous["research_context"] and previous["prompt_path"]:
             snapshot = previous["research_context"]
             prompt = read_artifact(previous["prompt_path"])
         else:
             snapshot = research_context()
+            snapshot["run_mode"] = "Manual recovery" if previous.get("recovery_from_run_id") else "Scheduled or manual research"
+            snapshot["run_note"] = "An explicitly requested manual/recovery run may research on a weekend; execution still waits for the next regular market session."
             prompt = research_prompt(snapshot, _news_context())
         add_event(run_id, "run.started", "Research is using saved portfolio context independently of IBKR.",
                   snapshot["research_data_status"])
@@ -413,7 +415,14 @@ def execute_run(run_id: str) -> None:
                 (json.dumps(snapshot, default=str), prompt_artifact.path, prompt_artifact.sha256, prompt_artifact.bytes, run_id))
             conn.commit()
         add_event(run_id, "research.started", "Nine-stage, 36-industry research started with a three-hour ceiling.")
-        response = httpx.post(settings.codex_runner_url, json={"run_id": run_id, "prompt": prompt},
+        request = {"run_id": run_id, "prompt": prompt}
+        if previous.get("recovery_from_run_id"):
+            source_id = str(previous["recovery_from_run_id"])
+            source = fetch_one("SELECT research_context FROM research_runs WHERE id=%s", (source_id,))
+            if (source["research_context"] or {}).get("account_id") != snapshot.get("account_id"):
+                raise ValueError("Recovery account differs from the original research; use a fresh manual run.")
+            request["resume_from_run_id"] = source_id
+        response = httpx.post(settings.codex_runner_url, json=request,
                               timeout=settings.codex_timeout_seconds + 120)
         if response.status_code == 429:
             with connection() as conn:
@@ -505,3 +514,32 @@ def queue_run(scheduled_for: datetime, trigger: str) -> str:
         )
         conn.commit()
     return run_id
+
+
+def queue_recovery(source_id: str) -> str:
+    """Explicit, idempotent recovery creates a new audited run; never edits history."""
+    source_id = str(uuid.UUID(str(source_id)))
+    with connection() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(491720260903)")
+        source = conn.execute("SELECT status,finished_at FROM research_runs WHERE id=%s", (source_id,)).fetchone()
+        if not source or source["status"] != "failed":
+            raise ValueError("Recovery requires a failed research run.")
+        if not source["finished_at"] or datetime.now(UTC) - source["finished_at"] > timedelta(hours=72):
+            raise ValueError("Research is older than 72 hours. Start a fresh manual run instead.")
+        existing = conn.execute("SELECT id FROM research_runs WHERE recovery_from_run_id=%s "
+                                "AND status NOT IN ('failed','cancelled') ORDER BY created_at DESC LIMIT 1", (source_id,)).fetchone()
+        if existing:
+            return str(existing["id"])
+        if conn.execute("SELECT id FROM research_runs WHERE status IN ('queued','snapshotting','researching','validating') LIMIT 1").fetchone():
+            raise ValueError("Another research run is already queued or active.")
+        if conn.execute("SELECT id FROM orders WHERE run_id=%s LIMIT 1", (source_id,)).fetchone():
+            raise ValueError("A run with submitted orders cannot use research recovery.")
+        target = str(uuid.uuid4())
+        conn.execute("INSERT INTO research_runs(id,scheduled_for,status,trigger,model,reasoning_effort,recovery_from_run_id) "
+                     "VALUES(%s,now(),'queued','recovery',%s,%s,%s)",
+                     (target, settings.codex_model, settings.codex_reasoning_effort, source_id))
+        conn.execute("INSERT INTO run_events(run_id,event_type,message,details) VALUES(%s,'research.recovery_requested',%s,%s::jsonb)",
+                     (target, f"Explicit recovery from {source_id}; refresh portfolio and retain only validated recent industry discovery.",
+                      json.dumps({"source_run_id": source_id})))
+        conn.commit()
+        return target

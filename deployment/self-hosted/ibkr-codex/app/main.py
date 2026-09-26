@@ -26,7 +26,7 @@ from app.performance import (
 )
 from app.policy import POLICY
 from app.schedule import daily_checkpoint_time, research_day_status
-from app.workflow import queue_run
+from app.workflow import queue_run, queue_recovery
 
 
 @asynccontextmanager
@@ -276,6 +276,15 @@ def run_now() -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=f"Run {active['id']} is already active or queued.")
     run_id = queue_run(datetime.now(UTC), "manual")
     return {"run_id": run_id, "status": "queued"}
+
+
+@app.post("/api/control/recover/{run_id}", dependencies=[Depends(dashboard_auth)])
+def recover_research(run_id: uuid.UUID) -> dict[str, Any]:
+    try:
+        child = queue_recovery(str(run_id))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"run_id": child, "recovery_from_run_id": str(run_id)}
 
 
 @app.post("/internal/run-event", dependencies=[Depends(internal_auth)])

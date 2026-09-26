@@ -168,6 +168,27 @@ class QueueIntegrationTests(unittest.TestCase):
         self.assertIsNone(db.fetch_one("SELECT * FROM execution_queue WHERE run_id=%s", (failed,)))
         self.assertEqual(self.queue_status(run_id), "pending")
 
+    def test_recovery_creates_one_new_run_and_preserves_failed_history(self):
+        self.output["research_dossier"]["stages"].pop()
+        failed = workflow.queue_run(datetime.now(UTC), "test")
+        workflow.execute_run(failed)
+        before = db.fetch_one("SELECT * FROM research_runs WHERE id=%s", (failed,))
+        child = workflow.queue_recovery(failed)
+        self.assertEqual(workflow.queue_recovery(failed), child)
+        self.assertEqual(before, db.fetch_one("SELECT * FROM research_runs WHERE id=%s", (failed,)))
+        self.output.update(full_output())
+        workflow.execute_run(child)
+        self.assertEqual(db.fetch_one("SELECT status FROM research_runs WHERE id=%s", (child,))["status"], "completed")
+        self.assertEqual(workflow.httpx.post.call_args.kwargs["json"]["resume_from_run_id"], failed)
+        self.assertEqual(self.queue_status(child), "pending")
+        self.assertEqual(len(FakeBroker.submissions), 0)
+
+    def test_completed_or_stale_runs_cannot_use_recovery(self):
+        completed = self.research()
+        with self.assertRaises(ValueError): workflow.queue_recovery(completed)
+        db.execute("UPDATE research_runs SET status='failed',finished_at=now()-interval '4 days' WHERE id=%s", (completed,))
+        with self.assertRaises(ValueError): workflow.queue_recovery(completed)
+
     def test_aud_fx_permission_failure_executes_with_audited_fallback(self):
         run_id = self.research()
         db.set_setting("virtual_cash_reserve_currency", "AUD", "test")

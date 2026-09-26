@@ -56,7 +56,7 @@ async def test_durable_result_is_returned_without_launching_codex(monkeypatch, t
 async def test_pipeline_validates_nine_stages_and_sums_usage(monkeypatch, tmp_path):
     monkeypatch.setattr(codex_runner, "RESULT_ROOT", tmp_path)
     calls = []
-    async def fake(run_id, prompt, schema, timeout, record):
+    async def fake(run_id, prompt, schema, timeout, record, on_progress=None):
         calls.append(record["name"])
         assert timeout <= 2100
         record["usage"] = {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 30}
@@ -77,7 +77,7 @@ async def test_pipeline_validates_nine_stages_and_sums_usage(monkeypatch, tmp_pa
 async def test_failed_stage_stops_without_allocation_or_trading(monkeypatch, tmp_path):
     monkeypatch.setattr(codex_runner, "RESULT_ROOT", tmp_path)
     calls = []
-    async def fake(run_id, prompt, schema, timeout, record):
+    async def fake(run_id, prompt, schema, timeout, record, on_progress=None):
         calls.append(record["name"])
         return {}  # incomplete output, not a successful screen
     monkeypatch.setattr(codex_runner, "run_stage", fake)
@@ -97,7 +97,7 @@ async def test_restart_resumes_validated_stages_and_keeps_deadline(monkeypatch, 
                "attempts": [record]}
     codex_runner.save_checkpoint(tmp_path / f"{request.run_id}.json.gz", payload)
     calls = []
-    async def fake(run_id, prompt, schema, timeout, record):
+    async def fake(run_id, prompt, schema, timeout, record, on_progress=None):
         calls.append(record["name"])
         return stage_result(record["name"])
     monkeypatch.setattr(codex_runner, "run_stage", fake)
