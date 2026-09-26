@@ -3,13 +3,13 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Media Influence on Market Prices | Luca Jeannin</title>
-    <meta name="description" content="A growing news corpus connected to later market observations, with explicit timing and sample-size limits on what those relationships can mean.">
+    <title>NewsSignalDashboard | Luca Jeannin</title>
+    <meta name="description" content="Collecting investment-relevant articles and examining how their measurable features relate to subsequent market movement.">
     <script>
         try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
     </script>
     <link rel="stylesheet" href="home.css?v=sidebar-20260923">
-    <link rel="stylesheet" href="project-pages.css?v=case-studies-20260926">
+    <link rel="stylesheet" href="project-pages.css?v=sidebar-20260923">
     <script src="project-pages.js" defer></script>
 </head>
 <body class="project-page">
@@ -82,12 +82,12 @@
             </div>
             <div class="sidebar-projects">
                 <a class="sidebar-home" href="home.html#main-content"><svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg><span>Home</span></a>
-                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer">G-Force Simulating Centrifuge</a>
-                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">Automated Investment Research and Execution</a>
-                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">Media Library Reader</a>
-                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer">Screen State-Based Automation Execution</a>
-                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer" aria-current="page">Media Influence on Market Prices</a>
-                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Social Media Research to Database pipeline</a>
+                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer">GForceSimSim</a>
+                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">IBKR</a>
+                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">MangaSaver</a>
+                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer">FH6GrindScript</a>
+                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer" aria-current="page">NewsSignalDashboard</a>
+                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Design Instagram Research System</a>
                 <a class="sidebar-project" href="open-close-backtest.html" target="_blank" rel="noopener noreferrer">Open Close Backtest</a>
                 <a class="sidebar-project" href="imdb-top250.html" target="_blank" rel="noopener noreferrer">IMDb Top 250 Re-ranker</a>
                 <a class="sidebar-project" href="https://some-game-designer.itch.io/clocking-off-beta" target="_blank" rel="noopener noreferrer">Clocking Off Beta</a>
@@ -97,30 +97,40 @@
     </details>
     <main id="project-content" class="project-content">
         <header class="project-heading">
-            <p class="project-category">Data collection / Market observations</p>
-            <h1>Media Influence on Market Prices</h1>
-            <p class="project-lead">A growing news corpus connected to later market observations, with explicit timing and sample-size limits on what those relationships can mean.</p>
-            <p class="project-stack">JavaScript / PostgreSQL / Background workers / Cloudflare / Snapshot publishing</p>
-
+            <p class="project-category">Data systems / Relationship analysis</p>
+            <h1>NewsSignalDashboard</h1>
+            <p class="project-lead">Collecting investment-relevant articles and examining how their measurable features relate to subsequent market movement.</p>
+            <p class="project-stack">Node.js / PostgreSQL / Docker / Cloudflare</p>
         </header>
-        <section class="public-entry"><h2>Live Production View</h2><p>Browse production article records, filter by source or ticker and inspect stored price changes over the available horizons. Missing observations remain missing; the page does not manufacture predictions.</p><a href="public-market.html" target="_blank" rel="noopener noreferrer">Open the public news and market view <span aria-hidden="true">&#8599;</span></a></section>
-        <ol class="project-flow" aria-label="Processing sequence"><li>Collect articles with source provenance</li><li>Classify relevance and identify explicit tickers</li><li>Record features and later market observations</li><li>Publish bounded, timestamped research views</li></ol>
-        <nav class="article-contents" aria-label="On this page"><a href="#section-0">Collection Before Prediction</a><a href="#section-1">Provenance and Measurable Features</a><a href="#section-2">Connecting News to Prices</a><a href="#section-3">Reproducible Daily Snapshots</a><a href="#section-4">The Denominator Problem</a><a href="#section-5">What the Architecture Solves</a><a href="#section-6">Lessons and Scope</a></nav>
-        <section class="project-section" id="section-0"><h2>Collection Before Prediction</h2><div><p>The current collection profile prioritises investment relevance and directly identifiable tickers. It does not ask the collection worker to browse for supporting evidence, write a summary, assign sentiment or predict a market move. This narrower contract makes the incoming corpus easier to inspect and separates collection from later analysis.</p>
-<p>Historical bullish and bearish predictions are retained as historical data, not relabelled as outputs of the current profile. New records can be unscored. Keeping those generations distinct avoids suggesting that all entries were produced by one unchanged methodology.</p></div></section>
-        <section class="project-section" id="section-1"><h2>Provenance and Measurable Features</h2><div><p>Article records preserve a source link and discovery and publication timing. Direction-neutral analysis extracts properties such as document structure, words and phrases, ticker mentions, source and timing. Those features can later be compared with observed market behaviour without requiring a sentiment label as the starting point.</p>
-<p>Incremental extraction and bounded database work keep the analysis from repeatedly rebuilding everything. The corpus, feature observations and market records have separate lifecycles: discovering an article does not mean all of its text or future price horizons are already available.</p></div></section>
-        <section class="project-section" id="section-2"><h2>Connecting News to Prices</h2><div><p>A baseline price anchors subsequent observations for a ticker. Each horizon records the time and price available for that observation and the percentage change relative to the baseline. A horizon that has not matured, or for which data is absent, must not be treated as a zero-percent move.</p>
-<p>The public view presents recent stored observations and their source articles. It is a window into the production corpus, not a complete export of every article or every analytical table. The capture time tells visitors when that window was refreshed; each article and observation retains its own timestamp.</p>
-<p>Despite the project title, temporal association does not prove that an article caused a price change. Market-wide events, overlapping coverage and other factors remain possible explanations. The project supports exploration of relationships, not a causal claim.</p></div></section>
-        <section class="project-section" id="section-3"><h2>Reproducible Daily Snapshots</h2><div><p>The deeper relationship analysis uses a fixed daily cutoff at Brisbane midnight. Articles discovered after that cutoff, features generated after it and market observations arriving after it are excluded from that snapshot. Using an exact cutoff prevents a later run from silently including information that was unavailable at the intended point in time.</p>
-<p>Outputs are built into compressed shards with a manifest describing sizes and hashes. Publication changes the active pointer only after staging is complete. If generation fails, the previous complete snapshot remains available rather than exposing a mixture of old and new files.</p></div></section>
-        <section class="project-section" id="section-4"><h2>The Denominator Problem</h2><div><p>One correction concerned a confidence-style score based on samples divided by samples plus 100. The relevant sample count is the number of observations available for the particular horizon, not the size of the original article cohort. A large source cohort cannot supply evidence for a horizon with only one recorded outcome.</p>
-<p>Under that heuristic, one observation gives approximately 0.99 percent, while 100 observations give 50 percent. These values are a sample-coverage heuristic, not statistical significance or a guarantee that observations are independent. Filtering must occur before sorting and limiting so the visible result set actually obeys the requested criteria.</p></div></section>
-        <section class="project-section" id="section-5"><h2>What the Architecture Solves</h2><div><p>The authenticated API, background collectors, market tracking and snapshot generation are separated so a public read does not trigger expensive analytical work. The portfolio copy follows the same principle: it serves small, precomputed read-only projections rather than forwarding arbitrary requests to operator endpoints.</p>
-<p>Timestamps and missing values are first-class data. They make delayed observations, incomplete collection and stale publication visible instead of allowing a polished dashboard to imply a completeness the underlying corpus has not reached.</p></div></section>
-        <section class="project-section" id="section-6"><h2>Lessons and Scope</h2><div><p>Data-pipeline correctness often depends on apparently small choices: the denominator of a score, whether a filter happens before a limit, and which timestamp defines inclusion. Those choices can change the interpretation of an entire result table.</p>
-<p>The public page links back to original sources and publishes bounded metadata and price observations, not full article bodies or private operational logs. It is an engineering research view, not financial advice or evidence of a profitable strategy.</p></div></section>
+
+        <ol class="project-flow" aria-label="Processing sequence">
+            <li>Collect and classify articles</li>
+            <li>Extract ticker features</li>
+            <li>Track market observations</li>
+            <li>Publish relationship snapshots</li>
+        </ol>
+        <section class="project-section">
+            <h2>What It Does</h2>
+            <div><p>NewsSignalDashboard brings an article corpus, company references and market observations into one research interface. Its current collection workflow classifies investment relevance and identifies directly named public-company tickers. The relationship explorer compares article features with later signed price movement.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>How It Works</h2>
+            <div><p>A self-hosted backend stores articles and structured records, serves PostgreSQL-backed APIs and sends dashboard updates through authenticated WebSockets. Incremental analysis extracts direction-neutral features such as document structure, publication timing, words and ticker mentions. Cloudflare provides the edge connection to the private backend.</p>
+                <p>Large relationship queries are precomputed into daily snapshots with a fixed time cutoff. Each generation is validated before activation, so a failed build leaves the previous snapshot available. Historical prediction records remain, but new collection jobs do not predict prices or score sentiment.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>What Needed Solving</h2>
+            <div><p>The combined-horizon view originally used the starting cohort's size to calculate its confidence score. That could make a result supported by only one later observation look highly reliable. The correction calculates and filters the score from observations actually available at each horizon, before ranking or limiting results. Existing archives can be corrected when read.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Lessons From Development</h2>
+            <div><p>An analytical dashboard can be technically functional while communicating the wrong level of evidence. Sample coverage, timing boundaries and filter order must match the claim on screen. Precomputation improved responsiveness, but preserved provenance and validation were needed to keep those snapshots trustworthy.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Current Scope</h2>
+            <div><p>An exploratory relationship-analysis system. Its displayed confidence is a sample-volume heuristic, not statistical significance, causal evidence or proof of predictive performance.</p></div>
+        </section>
+
     </main>
 </body>
 </html>

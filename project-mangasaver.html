@@ -3,13 +3,13 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Media Library Reader | Luca Jeannin</title>
-    <meta name="description" content="A local library reader built around responsive browsing, right-to-left spreads and switching between black-and-white and colour editions without losing your place.">
+    <title>MangaSaver | Luca Jeannin</title>
+    <meta name="description" content="A local image-library toolkit that grew from organising chapter downloads into a responsive, right-to-left desktop reader.">
     <script>
         try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
     </script>
     <link rel="stylesheet" href="home.css?v=sidebar-20260923">
-    <link rel="stylesheet" href="project-pages.css?v=case-studies-20260926">
+    <link rel="stylesheet" href="project-pages.css?v=sidebar-20260923">
     <script src="project-pages.js" defer></script>
 </head>
 <body class="project-page">
@@ -82,12 +82,12 @@
             </div>
             <div class="sidebar-projects">
                 <a class="sidebar-home" href="home.html#main-content"><svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg><span>Home</span></a>
-                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer">G-Force Simulating Centrifuge</a>
-                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">Automated Investment Research and Execution</a>
-                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer" aria-current="page">Media Library Reader</a>
-                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer">Screen State-Based Automation Execution</a>
-                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">Media Influence on Market Prices</a>
-                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Social Media Research to Database pipeline</a>
+                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer">GForceSimSim</a>
+                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">IBKR</a>
+                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer" aria-current="page">MangaSaver</a>
+                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer">FH6GrindScript</a>
+                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">NewsSignalDashboard</a>
+                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Design Instagram Research System</a>
                 <a class="sidebar-project" href="open-close-backtest.html" target="_blank" rel="noopener noreferrer">Open Close Backtest</a>
                 <a class="sidebar-project" href="imdb-top250.html" target="_blank" rel="noopener noreferrer">IMDb Top 250 Re-ranker</a>
                 <a class="sidebar-project" href="https://some-game-designer.itch.io/clocking-off-beta" target="_blank" rel="noopener noreferrer">Clocking Off Beta</a>
@@ -97,35 +97,40 @@
     </details>
     <main id="project-content" class="project-content">
         <header class="project-heading">
-            <p class="project-category">Desktop reader / Draft</p>
-            <h1>Media Library Reader</h1>
-            <p class="project-lead">A local library reader built around responsive browsing, right-to-left spreads and switching between black-and-white and colour editions without losing your place.</p>
-            <p class="project-stack">Python / PySide6 / CPU raster rendering / Local filesystem</p>
-            <p class="draft-note">Draft case study / Screenshots and recordings pending.</p>
+            <p class="project-category">Media tools / Desktop reader</p>
+            <h1>MangaSaver</h1>
+            <p class="project-lead">A local image-library toolkit that grew from organising chapter downloads into a responsive, right-to-left desktop reader.</p>
+            <p class="project-stack">Python / PySide6 / Qt Widgets / Local files</p>
         </header>
-                <figure class="project-figure capture-figure" id="capture-library"><div class="capture-placeholder" role="img" aria-label="The library and chapter browser: media pending"><span>Screenshot pending</span><strong>The library and chapter browser</strong></div><figcaption>Album covers, chapter selection and saved reading progress.</figcaption></figure>
-        <ol class="project-flow" aria-label="Processing sequence"><li>Index albums and chapter identities</li><li>Load visible covers and nearby pages</li><li>Compose the current reading spread</li><li>Persist progress and edition preferences</li></ol>
-        <nav class="article-contents" aria-label="On this page"><a href="#section-0">A Reader for Existing Libraries</a><a href="#section-1">Library Identity and Progress</a><a href="#section-2">Right-to-Left Reading</a><a href="#section-3">Two Editions, One Place</a><a href="#section-4">Doing Less Work per Frame</a><a href="#section-5">A Cold-Start Failure</a><a href="#section-6">Lessons and Boundaries</a></nav>
-        <section class="project-section" id="section-0"><h2>A Reader for Existing Libraries</h2><div><p>This page focuses on viewing and navigating media already stored in local libraries. Albums and chapters form the browsing structure, while saved covers and progress make it possible to return to a long-running series without reconstructing the previous session.</p>
-<p>The reader is implemented with PySide6 and a custom CPU-painted viewport. It does not depend on a Qt Quick scene or an OpenGL, Direct3D or Vulkan rendering path. That choice concentrates the performance work on image decoding, scaling, caching and deciding which pages genuinely need to exist in memory.</p></div></section>
-        <section class="project-section" id="section-1"><h2>Library Identity and Progress</h2><div><p>Filesystem names are useful labels but are not always stable identities. A chapter named 1 in one edition can correspond to 0001 in another. Numeric chapter identity mapping allows those folders to be associated without requiring identical spelling.</p>
-<p>A local viewer-state file stores reading progress, selected covers, edition associations and preferences such as pairing shifts and fullscreen behaviour. Progress tracks the underlying chapter and source-page index, not just the number of a rendered spread. That distinction matters whenever two editions or pairing settings produce different layouts from the same sequence of pages.</p>
-<p>Directory, chapter and cover-path caches reduce repeated filesystem work. These caches serve navigation, while the thumbnail cache serves image presentation; treating those as different jobs makes it easier to invalidate or rebuild the part that changed.</p></div></section>
-        <section class="project-section" id="section-2"><h2>Right-to-Left Reading</h2><div><p>Two-page spreads follow a right-to-left arrangement. A pairing shift can leave the first page alone, and marking a page as fullscreen changes how subsequent pages are paired. These are reading decisions, not edits to the original image files.</p>
-<p>The renderer retains borders already present in the source rather than imposing an additional application gutter. Page zoom and an overview contact sheet support two different tasks: inspecting a page closely and finding a position in the chapter. Moving beyond the chapter end can continue into the next chapter instead of forcing a return to the library.</p>
-<p>Because progress is tied to the source sequence, changing how pages are paired need not be confused with changing the reader's place. The same principle supports restoring the precise chapter scroll position after another interaction.</p></div></section>
-        <figure class="project-figure capture-figure" id="capture-editions"><div class="capture-placeholder" role="img" aria-label="Black-and-white to colour: media pending"><span>GIF pending</span><strong>Black-and-white to colour</strong></div><figcaption>Switch between two mapped editions at the same source-page position.</figcaption></figure>
-        <section class="project-section" id="section-3"><h2>Two Editions, One Place</h2><div><p>The colour switch selects an associated alternate album. It is not an image-colourisation model: black-and-white and colour are separate source libraries supplied to the reader. Chapter mapping connects the editions, while per-mode cover and pairing preferences allow each to retain the layout that suits its files.</p>
-<p>Switching preserves the source location where the mapping permits it. Where an alternate chapter is unavailable, the reader falls back to the original material rather than showing an invented match. This turns a potentially disruptive library change into a reading operation with explicit limits.</p>
-<p>Alignment controls handle differences between editions through translation and scale. Fine adjustment modifiers and small scale increments support more precise matching than a coarse drag alone. Those controls are useful because corresponding pages can have different crop, margin or image dimensions.</p></div></section>
-        <section class="project-section" id="section-4"><h2>Doing Less Work per Frame</h2><div><p>The library viewport is virtualised: visible covers and the region near them receive work before content that is far off screen. Thumbnail decoding and scaling run asynchronously, and a disk cache keeps useful raster results between sessions. The goal is not to create a widget or decoded image for every page in an entire collection.</p>
-<p>During reading, neighbouring spreads are prefetched. A double-buffered handover keeps the current image visible until the replacement is ready, addressing the black flash that can otherwise accompany a page change. Prioritised work helps an alignment or reading interaction avoid waiting behind unrelated thumbnail generation.</p>
-<p>Alternate-edition covers are prewarmed after a short idle delay, in small batches around the visible area. This prepares an edition switch without eagerly decoding the whole other library. The optimisations are workload choices, not an unverified claim that every machine or collection loads a fixed number of times faster.</p></div></section>
-        <figure class="project-figure capture-figure" id="capture-reading"><div class="capture-placeholder" role="img" aria-label="Reading, pairing and zoom: media pending"><span>Screenshot or GIF pending</span><strong>Reading, pairing and zoom</strong></div><figcaption>A right-to-left spread, an intentionally unpaired page and the page overview.</figcaption></figure>
-        <section class="project-section" id="section-5"><h2>A Cold-Start Failure</h2><div><p>A particularly important failure involved two thumbnail workers entering image construction during a cold start. The resulting native deadlock did not behave like a normal Python exception. Initialising the relevant image path on the GUI thread before concurrent work addressed that startup ordering problem.</p>
-<p>The first reproduction approach was misleading: it warmed the image bindings and used a different window size, changing the thumbnail workload. A cold-cache run at the real application dimensions, using the actual context-menu route, reproduced the problem. An external native stack capture could then observe the blocked process without depending on the frozen UI.</p></div></section>
-        <section class="project-section" id="section-6"><h2>Lessons and Boundaries</h2><div><p>Responsiveness comes from controlling when work happens as much as from making each operation faster. Virtualisation, nearby prefetching, cache reuse and small idle batches address different parts of the experience and need to be evaluated together.</p>
-<p>The debugging lesson was equally concrete: a test that changes startup state can remove the failure it is meant to observe. This draft focuses on library browsing, edition switching and reading behaviour. Media acquisition is outside the scope of this presentation.</p></div></section>
+
+        <ol class="project-flow" aria-label="Processing sequence">
+            <li>Organise chapter images</li>
+            <li>Index the local library</li>
+            <li>Load visible spreads</li>
+            <li>Save progress and covers</li>
+        </ol>
+        <section class="project-section">
+            <h2>What It Does</h2>
+            <div><p>MangaSaver brings together image-download utilities, chapter organisation and a desktop reading interface. The reader supports paired pages, zoom, chapter overviews, resume points, custom covers and switching between matching black-and-white and colour editions.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>How It Works</h2>
+            <div><p>Download tools use supplied manifests or matching URLs from supplied page sources. The library is filesystem-backed, with cover choices, reading progress and page-pairing settings stored as local metadata. The newer CPU reader uses a custom-painted Qt Widgets viewport: only visible or nearby chapter covers request thumbnails.</p>
+                <p>A disk cache, adjacent-spread prefetching and double buffering reduce repeated decoding and flashes between pages. Cover alignment provides translation and scale controls, including finer adjustments with modifier keys.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>What Needed Solving</h2>
+            <div><p>Cover alignment could freeze even after a diagnostic reported success. The test had warmed up image bindings that were still cold during normal use. A closer reproduction captured two thumbnail workers deadlocking while initializing a PySide image constructor. Initializing that constructor on the GUI thread before launching workers resolved the reproduced fault.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Lessons From Development</h2>
+            <div><p>A passing test is only useful if its starting conditions match the failure. Cold caches, the real window dimensions and the actual navigation path mattered here. External stack capture revealed a native deadlock that ordinary Python logging could not explain. Restoring the chapter and scroll position after alignment was also part of making the workflow feel complete.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Current Scope</h2>
+            <div><p>A local downloader and reader, with browser and older desktop variants alongside the CPU renderer. Library content remains on the user's machine; this portfolio page does not distribute the image collection.</p></div>
+        </section>
+
     </main>
 </body>
 </html>

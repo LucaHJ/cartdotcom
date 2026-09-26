@@ -3,13 +3,13 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Automated Investment Research and Execution | Luca Jeannin</title>
-    <meta name="description" content="Scheduled research, durable decisions and monitored paper-trade execution, with reporting that distinguishes an idea from a confirmed fill.">
+    <title>IBKR | Luca Jeannin</title>
+    <meta name="description" content="A paper-trading research and execution system designed to keep working through broker outages without confusing a recommendation with a completed trade.">
     <script>
         try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
     </script>
     <link rel="stylesheet" href="home.css?v=sidebar-20260923">
-    <link rel="stylesheet" href="project-pages.css?v=case-studies-20260926">
+    <link rel="stylesheet" href="project-pages.css?v=sidebar-20260923">
     <script src="project-pages.js" defer></script>
 </head>
 <body class="project-page">
@@ -82,12 +82,12 @@
             </div>
             <div class="sidebar-projects">
                 <a class="sidebar-home" href="home.html#main-content"><svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg><span>Home</span></a>
-                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer">G-Force Simulating Centrifuge</a>
-                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer" aria-current="page">Automated Investment Research and Execution</a>
-                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">Media Library Reader</a>
-                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer">Screen State-Based Automation Execution</a>
-                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">Media Influence on Market Prices</a>
-                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Social Media Research to Database pipeline</a>
+                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer">GForceSimSim</a>
+                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer" aria-current="page">IBKR</a>
+                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">MangaSaver</a>
+                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer">FH6GrindScript</a>
+                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">NewsSignalDashboard</a>
+                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Design Instagram Research System</a>
                 <a class="sidebar-project" href="open-close-backtest.html" target="_blank" rel="noopener noreferrer">Open Close Backtest</a>
                 <a class="sidebar-project" href="imdb-top250.html" target="_blank" rel="noopener noreferrer">IMDb Top 250 Re-ranker</a>
                 <a class="sidebar-project" href="https://some-game-designer.itch.io/clocking-off-beta" target="_blank" rel="noopener noreferrer">Clocking Off Beta</a>
@@ -97,29 +97,40 @@
     </details>
     <main id="project-content" class="project-content">
         <header class="project-heading">
-            <p class="project-category">Research automation / Paper trading</p>
-            <h1>Automated Investment Research and Execution</h1>
-            <p class="project-lead">Scheduled research, durable decisions and monitored paper-trade execution, with reporting that distinguishes an idea from a confirmed fill.</p>
-            <p class="project-stack">Python / FastAPI / PostgreSQL / Broker API / Docker</p>
-
+            <p class="project-category">Automation / Paper trading</p>
+            <h1>IBKR</h1>
+            <p class="project-lead">A paper-trading research and execution system designed to keep working through broker outages without confusing a recommendation with a completed trade.</p>
+            <p class="project-stack">Python / FastAPI / PostgreSQL / IBKR API / Docker</p>
         </header>
-        <section class="public-entry"><h2>Live Production View</h2><p>Review recent research runs, target allocations and recorded paper executions from the production system. Research and execution remain separate, and the public view has no order controls.</p><a href="public-investment.html" target="_blank" rel="noopener noreferrer">Open the public research and execution view <span aria-hidden="true">&#8599;</span></a></section>
-        <ol class="project-flow" aria-label="Processing sequence"><li>Schedule portfolio research</li><li>Validate and persist target allocations</li><li>Refresh broker state and execution checks</li><li>Reconcile orders and archive outcomes</li></ol>
-        <nav class="article-contents" aria-label="On this page"><a href="#section-0">Research Without Execution</a><a href="#section-1">A Durable Decision Pipeline</a><a href="#section-2">Orders and Reconciliation</a><a href="#section-3">Reporting Has Different Rules</a><a href="#section-4">Failures That Shaped It</a><a href="#section-5">Public Scope and Limits</a><a href="#section-6">Engineering Lessons</a></nav>
-        <section class="project-section" id="section-0"><h2>Research Without Execution</h2><div><p>A dedicated research worker prepares portfolio research and records its outcome in PostgreSQL. The schedule follows the official exchange session, including shortened trading days, rather than assuming every weekday has the same hours. A decision to hold is a legitimate output; activity is not treated as evidence of a better decision.</p>
-<p>The research report and target allocations are persisted before the execution worker attempts to act. That separation allows research to continue through a broker-gateway outage. It also makes the history explainable: a completed research run does not imply an order was submitted, and a submitted order does not imply a fill.</p></div></section>
-        <section class="project-section" id="section-1"><h2>A Durable Decision Pipeline</h2><div><p>The execution queue stores work independently of the process handling it. Restarting the worker therefore does not erase a decision or require guessing what was underway. Decisions can expire or be superseded, and changes to portfolio state can require fresh research instead of replaying an outdated allocation.</p>
-<p>Before execution, the worker refreshes holdings, available cash, prices and foreign-exchange information. Target weights must be translated into feasible trades under position, turnover and cash-reserve constraints. The queue is a request to re-evaluate those conditions, not permission to place the same order indefinitely.</p></div></section>
-        <section class="project-section" id="section-2"><h2>Orders and Reconciliation</h2><div><p>The system submits monitored whole-share DAY limit orders in a paper account. It records order state and confirmed executions separately. If a connection fails around submission, the next step is reconciliation against broker records, not blindly submitting another order.</p>
-<p>That uncertainty is one of the central integration problems. A timeout only describes what the client observed; it does not prove the broker rejected the request. Explicit cancellation and reconciliation paths prevent a retry policy from becoming a duplicate-order policy. A kill switch can stop execution without stopping the research process.</p></div></section>
-        <section class="project-section" id="section-3"><h2>Reporting Has Different Rules</h2><div><p>The reporting path can use independent market prices when the gateway is unavailable. Those prices may be delayed, and FX fallbacks have their own freshness and cross-rate handling. They support continuity of reporting; they do not silently replace the quotes required by execution checks.</p>
-<p>Performance history is archived on wall-clock hours independently of the trading loop, with retries and restart backfill. Existing observations are preserved rather than overwritten by a later valuation. This keeps historical reporting from becoming an accidental side effect of whether a trade happened that day.</p></div></section>
-        <section class="project-section" id="section-4"><h2>Failures That Shaped It</h2><div><p>A broker callback changed the commission field it exposed, breaking an assumption in the order-handling path. Compatibility handling was needed for commissionAndFees as well as the older field. Another fault involved account-summary subscriptions: unsuccessful cancellation accumulated active subscriptions until repeated refreshes hit the broker's limit.</p>
-<p>A single successful connection could not reveal that second problem. Repeated read-only refresh checks were needed to demonstrate that the subscription lifecycle was actually being cleaned up. Session conflicts, missing permissions and uncertain submissions similarly required testing beyond the happy path.</p></div></section>
-        <section class="project-section" id="section-5"><h2>Public Scope and Limits</h2><div><p>The public dashboard is a read-only projection of the running system, not a simulated dataset and not an authenticated operator session. It exposes recent run states, decision symbols and target weights, plus a limited execution history. Account identifiers, balances, private report text, raw broker responses and execution controls are not published.</p>
-<p>Production refers to the deployed application. Trading remains paper-only. These records demonstrate scheduling, persistence and integration engineering; they do not establish profitable returns, live-trading readiness or an investment recommendation.</p></div></section>
-        <section class="project-section" id="section-6"><h2>Engineering Lessons</h2><div><p>Research, execution and reporting have different availability requirements. Keeping them separate lets one recover without pretending that another succeeded. Durable state provides the evidence needed to resume work safely.</p>
-<p>The external system remains the authority for what happened to an order. Local intent, network success and broker completion are three distinct states, and the application has to preserve that distinction in both its database and its user-facing reports.</p></div></section>
+
+        <ol class="project-flow" aria-label="Processing sequence">
+            <li>Schedule research</li>
+            <li>Persist decisions</li>
+            <li>Recheck broker and risk</li>
+            <li>Reconcile orders and fills</li>
+        </ol>
+        <section class="project-section">
+            <h2>What It Does</h2>
+            <div><p>IBKR combines scheduled portfolio research, a durable execution queue and a dashboard for reviewing decisions, holdings and performance. It operates on a paper account. Research can continue while the broker gateway is disconnected, and a decision to hold is a valid result.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>How It Works</h2>
+            <div><p>A research worker follows the official exchange calendar and saves its report and target allocations. A separate Python execution worker reads the PostgreSQL queue, refreshes holdings, verifies quotes and risk limits, then submits monitored limit orders. The system reconciles uncertain submissions against broker records before retrying.</p>
+                <p>Performance archives run on the wall-clock hour independently of execution. Reporting can use independent market prices when the gateway is unavailable; submitting orders still requires the broker's execution checks. Reports distinguish research, queued orders and confirmed fills.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>What Needed Solving</h2>
+            <div><p>Integration failures were more subtle than a disconnected gateway. A changed commission field broke an order callback, while account-summary subscriptions were not being cancelled correctly and eventually exhausted the broker's subscription limit. Compatibility handling and repeated read-only refresh checks addressed those failures. Session conflicts and missing FX permissions also required explicit recovery paths.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Lessons From Development</h2>
+            <div><p>An external API needs testing across repeated calls and partial failures, not just a successful first connection. Durable queues, expiring decisions and order reconciliation make restarts understandable. Separating reporting prices from execution prices also prevents a convenient fallback from silently changing trading behaviour.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Current Scope</h2>
+            <div><p>A paper-only system with recorded research and order outcomes. The project demonstrates integration and recovery engineering; it does not establish investment profitability or live-trading readiness.</p></div>
+        </section>
+
     </main>
 </body>
 </html>

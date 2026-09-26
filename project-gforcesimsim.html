@@ -3,13 +3,13 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>G-Force Simulating Centrifuge | Luca Jeannin</title>
-    <meta name="description" content="Exploring how a rotating arm, a moving carriage and an orientable seat could reproduce the direction and magnitude of a racing driver's apparent G-force.">
+    <title>GForceSimSim | Luca Jeannin</title>
+    <meta name="description" content="Exploring how a rotating arm and an adjustable seat could reproduce the direction and magnitude of a racing driver's apparent G-force.">
     <script>
         try { document.documentElement.dataset.theme = localStorage.getItem("cartdotcom-theme") || "light"; } catch { document.documentElement.dataset.theme = "light"; }
     </script>
     <link rel="stylesheet" href="home.css?v=sidebar-20260923">
-    <link rel="stylesheet" href="project-pages.css?v=case-studies-20260926">
+    <link rel="stylesheet" href="project-pages.css?v=sidebar-20260923">
     <script src="project-pages.js" defer></script>
 </head>
 <body class="project-page">
@@ -82,12 +82,12 @@
             </div>
             <div class="sidebar-projects">
                 <a class="sidebar-home" href="home.html#main-content"><svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg><span>Home</span></a>
-                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer" aria-current="page">G-Force Simulating Centrifuge</a>
-                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">Automated Investment Research and Execution</a>
-                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">Media Library Reader</a>
-                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer">Screen State-Based Automation Execution</a>
-                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">Media Influence on Market Prices</a>
-                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Social Media Research to Database pipeline</a>
+                <a class="sidebar-project" href="project-gforcesimsim.html" target="_blank" rel="noopener noreferrer" aria-current="page">GForceSimSim</a>
+                <a class="sidebar-project" href="project-ibkr.html" target="_blank" rel="noopener noreferrer">IBKR</a>
+                <a class="sidebar-project" href="project-mangasaver.html" target="_blank" rel="noopener noreferrer">MangaSaver</a>
+                <a class="sidebar-project" href="project-fh6grindscript.html" target="_blank" rel="noopener noreferrer">FH6GrindScript</a>
+                <a class="sidebar-project" href="project-news-signal-dashboard.html" target="_blank" rel="noopener noreferrer">NewsSignalDashboard</a>
+                <a class="sidebar-project" href="project-instagram-research-system.html" target="_blank" rel="noopener noreferrer">Design Instagram Research System</a>
                 <a class="sidebar-project" href="open-close-backtest.html" target="_blank" rel="noopener noreferrer">Open Close Backtest</a>
                 <a class="sidebar-project" href="imdb-top250.html" target="_blank" rel="noopener noreferrer">IMDb Top 250 Re-ranker</a>
                 <a class="sidebar-project" href="https://some-game-designer.itch.io/clocking-off-beta" target="_blank" rel="noopener noreferrer">Clocking Off Beta</a>
@@ -97,33 +97,45 @@
     </details>
     <main id="project-content" class="project-content">
         <header class="project-heading">
-            <p class="project-category">Simulation / Desktop draft</p>
-            <h1>G-Force Simulating Centrifuge</h1>
-            <p class="project-lead">Exploring how a rotating arm, a moving carriage and an orientable seat could reproduce the direction and magnitude of a racing driver's apparent G-force.</p>
-            <p class="project-stack">C# / .NET / WPF / 3D visualisation / Recorded telemetry</p>
-            <p class="draft-note">Draft case study / Screenshots and recordings pending.</p>
+            <p class="project-category">Simulation / Windows desktop</p>
+            <h1>GForceSimSim</h1>
+            <p class="project-lead">Exploring how a rotating arm and an adjustable seat could reproduce the direction and magnitude of a racing driver's apparent G-force.</p>
+            <p class="project-stack">C# / .NET / WPF / JSON telemetry</p>
         </header>
-                <figure class="project-figure capture-figure" id="capture-rig"><div class="capture-placeholder" role="img" aria-label="The centrifuge in motion: media pending"><span>Screenshot or GIF pending</span><strong>The centrifuge in motion</strong></div><figcaption>Overview of the rotating arm, moving carriage and three-axis seat.</figcaption></figure>
-        <ol class="project-flow" aria-label="Processing sequence"><li>Load a lap and its telemetry</li><li>Convert acceleration into a target vector</li><li>Solve carriage position and seat orientation</li><li>Play the rig, track and instruments together</li></ol>
-        <nav class="article-contents" aria-label="On this page"><a href="#section-0">The Question</a><a href="#section-1">From Files to a Lap</a><a href="#section-2">The Force Model</a><a href="#section-3">Solving the Rig</a><a href="#section-4">One Playback Clock</a><a href="#section-5">What Needed Solving</a><a href="#section-6">What This Taught</a></nav>
-        <section class="project-section" id="section-0"><h2>The Question</h2><div><p>A car produces changing longitudinal and lateral acceleration, while a centrifuge produces a load that depends on its radius and angular speed. This project investigates how those two descriptions can be connected. Rather than simply spinning a model faster whenever a racing car accelerates, it separates the magnitude of the required horizontal load from the orientation in which a seated rider would experience it.</p>
-<p>The desktop application makes that mapping inspectable. A three-dimensional rig shows the rotating arm, carriage and yaw/pitch/roll gimbal, while recorded racing data supplies the changing target. Orbit and zoom controls let the same run be examined as an overview or from close to the seat. The result is a visual concept study, not a design certified for construction or human use.</p></div></section>
-        <section class="project-section" id="section-1"><h2>From Files to a Lap</h2><div><p>Recorded telemetry is organised by race, session and driver, with lap-time information providing a way to choose a run. The browser can filter and rank laps using measures such as lap time, peak G and speed. Cached metadata avoids rediscovering the same information every time a folder is revisited.</p>
-<p>After selection, the telemetry becomes a common timeline for the rig and the instruments. Longitudinal and lateral acceleration are read from the supplied acc_x and acc_y estimates and converted from metres per second squared to G. The data is treated as recorded evidence, including its omissions: unavailable steering information is shown as missing rather than inferred and presented as a measured signal.</p></div></section>
-        <section class="project-section" id="section-2"><h2>The Force Model</h2><div><p>For the rotating arm, horizontal acceleration follows a = omega squared times r, with angular speed obtained from RPM. The model uses standard gravity, 9.80665 metres per second squared, to express that acceleration in G. Radius changes the horizontal load at a given spin speed; doubling angular speed has a squared effect on acceleration.</p>
-<p>Earth gravity remains part of the result. One horizontal G and one vertical G combine to approximately 1.414 G at 45 degrees, not two G. The target therefore includes a constant downward gravity component alongside the two racing acceleration components. The derived vertical acceleration field in the supplied lap data is excluded from this mapping.</p>
-<p>Physical acceleration and the apparent loading felt by a supported rider are not interchangeable arrows. Establishing a consistent sign convention was essential: a visually plausible animation can still point the rider in the wrong direction if the physical and apparent vectors are mixed.</p></div></section>
-        <figure class="project-figure capture-figure" id="capture-telemetry"><div class="capture-placeholder" role="img" aria-label="A lap, synchronised: media pending"><span>Screenshot or GIF pending</span><strong>A lap, synchronised</strong></div><figcaption>Playback with the track marker, racing instruments and force-history cursor visible.</figcaption></figure>
-        <section class="project-section" id="section-3"><h2>Solving the Rig</h2><div><p>The peak horizontal load in the selected lap establishes a constant spin speed at the five-metre end of the arm. Lower loads are then reproduced by moving the carriage inward in proportion to the required horizontal acceleration. This makes the main relationship visible: one lap establishes the rotational operating point, and the changing telemetry determines the carriage position.</p>
-<p>A minimum-angle orientation solution adjusts yaw, pitch and roll so the target vector and the simulated rider-relative vector agree. Separating that orientation calculation from load magnitude makes it possible to inspect whether a mismatch comes from the carriage radius, a coordinate transformation or the seat attitude.</p>
-<p>This is an idealised mapping. It does not establish that a physical carriage could follow every requested movement, or account for the complete Coriolis, Euler, inertia and structural loads of that movement. Those omissions matter when interpreting the animation.</p></div></section>
-        <section class="project-section" id="section-4"><h2>One Playback Clock</h2><div><p>The seat animation is only useful if it can be compared with the event that caused it. Speed, throttle, brake, gear, engine RPM and lap time accompany the rig. A marker follows the recorded XY track, and a cursor moves through the full-lap G history.</p>
-<p>Scrubbing moves all of these views to the same point. A braking zone can therefore be paused and examined against the target load, carriage location and seat orientation, then compared with a corner or straight. The complete lap history gives context that a single instantaneous gauge cannot: it shows whether a movement is a brief spike or part of a sustained section.</p></div></section>
-        <figure class="project-figure capture-figure" id="capture-vectors"><div class="capture-placeholder" role="img" aria-label="Comparing the force vectors: media pending"><span>Screenshot pending</span><strong>Comparing the force vectors</strong></div><figcaption>Close-up of the rider and the target and simulated force directions.</figcaption></figure>
-        <section class="project-section" id="section-5"><h2>What Needed Solving</h2><div><p>The most important debugging work involved coordinate frames and force direction. Left and right in the racing data, the world-space rig and the rider's local frame have to remain consistent. Fixing a visual reversal required checking those transformations rather than hiding the problem with a camera adjustment.</p>
-<p>The application also needed usable selection and inspection controls. A dropdown contrast problem made choices difficult to read; correcting the control styling was a functional fix, not merely decoration. The cached lap browser and synchronised instruments similarly help expose errors that would be hard to notice in the rig alone.</p></div></section>
-        <section class="project-section" id="section-6"><h2>What This Taught</h2><div><p>A simulation should explain its assumptions through inspectable state. Showing the target and reconstructed vectors together makes a sign error visible, while a shared timeline keeps separate displays from telling conflicting stories.</p>
-<p>The other lesson is to distinguish a useful geometric model from a complete physical machine. Matching an ideal load vector is a meaningful result, but does not prove mechanical feasibility, comfort or safety. The draft keeps those boundaries explicit while leaving room for deeper dynamics modelling later.</p></div></section>
+        <figure class="project-figure">
+            <a href="assets/gforce-showcase.gif" target="_blank" rel="noopener noreferrer" aria-label="Open full-size GForceSimSim animation">
+                <img src="assets/gforce-showcase.gif" width="2546" height="1376" alt="GForceSimSim with a 3D rotating rig, synchronized F1 telemetry, track position and G-force history.">
+            </a>
+            <figcaption>GForceSimSim in motion, recorded from the desktop application.</figcaption>
+        </figure>
+        <ol class="project-flow" aria-label="Processing sequence">
+            <li>Load a telemetry lap</li>
+            <li>Resolve the load vector</li>
+            <li>Align the carriage and gimbal</li>
+            <li>Compare synchronized views</li>
+        </ol>
+        <section class="project-section">
+            <h2>What It Does</h2>
+            <div><p>GForceSimSim is a desktop concept simulator for a horizontal centrifuge with a sliding carriage and a three-axis gimbal. An animated 3D rig makes the relationship between arm speed, rider position and seat orientation visible. A race browser filters telemetry by race, session and driver, then ranks laps by time, peak speed or G load.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>How It Works</h2>
+            <div><p>The physics model separates rotational acceleration from total apparent load, which also includes Earth's gravity. For telemetry playback, the peak horizontal load sets a constant arm speed; the carriage moves along a five-metre arm to reproduce smaller loads, while the gimbal aligns the rider with the target vector. Throttle, braking, gear, speed, a track-position marker and G-force traces share the same playback timeline.</p>
+                <p>The application uses C# and WPF, with physics in a separate project. Telemetry arrives as JSON; expensive lap comparisons are cached. Missing channels, such as steering in the supplied dataset, are shown as unavailable.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>What Needed Solving</h2>
+            <div><p>The difficult part was keeping the physical model and its visual explanation consistent. Early arrows showed only rotational load, and later left/right discrepancies exposed a mismatch between the rider's coordinates and the vector display. Correcting the arrows, reference frames and lateral mapping made the different views agree.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Lessons From Development</h2>
+            <div><p>A physically meaningful value still needs an unambiguous reference frame and label. Distinguishing vehicle acceleration, apparent rider load and Earth gravity was as important as drawing the rig. Shared playback timing and repeatable physics checks made visual changes easier to verify.</p></div>
+        </section>
+        <section class="project-section">
+            <h2>Current Scope</h2>
+            <div><p>A working ideal steady-state simulator, not a validated physical rig or machine-control system. Moving-carriage dynamics, structural loads and human tolerance are outside its model.</p></div>
+        </section>
+
     </main>
 </body>
 </html>
